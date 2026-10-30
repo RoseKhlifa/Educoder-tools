@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.8 — 2026-10-31
+
+- Clarify suffix-specific source and header semantics in AI prompts
+
 ## 0.1.7 — 2026-10-31
 
 - Expose exact filename and extension in AI programming prompts
