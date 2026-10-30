@@ -16,6 +16,8 @@
 !internal/avatar/**
 !internal/educoder/
 !internal/educoder/**
+!internal/problem/
+!internal/problem/**
 !web/
 !web/index.html
 !web/styles.css

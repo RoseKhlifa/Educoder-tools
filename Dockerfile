@@ -12,6 +12,7 @@ COPY cmd/web ./cmd/web
 COPY internal/web ./internal/web
 COPY internal/avatar ./internal/avatar
 COPY internal/educoder ./internal/educoder
+COPY internal/problem ./internal/problem
 ARG VCS_REF=unknown
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X educoder-cli.Commit=${VCS_REF}" -o /out/educoder-tools ./cmd/web
 

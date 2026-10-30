@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.12 — 2026-10-31
+
+- Include the objective protocol dependency in Docker builds and keep task action labels on one line
+
 ## 0.1.11 — 2026-10-31
 
 - Restore the handwritten workbench, keep Go as the sole protocol backend, and remove original compiled UI resources

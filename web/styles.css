@@ -104,7 +104,7 @@ button:disabled { cursor: default; }
 .progress-track { width: 160px; height: 3px; margin-top: 9px; overflow: hidden; border-radius: 2px; background: #edf0f5; }.progress-track span { display: block; height: 100%; background: #6e92e3; }
 .status-pill { min-width: 52px; padding: 5px 8px; border-radius: 3px; text-align: center; font-size: 11px; white-space: nowrap; }
 .status-progress { color: #4673d1; background: #edf3ff; }.status-done { color: #338269; background: #e9f7f1; }.status-closed { color: #9b8490; background: #f4eff2; }
-.homework-action { width: 92px; }
+.homework-action { width: 108px; white-space: nowrap; }
 .state-panel { min-height: 240px; display: grid; place-content: center; justify-items: center; gap: 9px; color: #9da7b7; text-align: center; }.state-panel p, .state-panel h3 { margin: 0; }.state-panel h3 { color: #58657a; font-size: 15px; }.state-icon, .empty-icon { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; color: #8fa2c9; background: #edf2fb; font-size: 18px; }
 .empty-mini { padding: 26px 0; color: #9da7b7; font-size: 12px; text-align: center; }
 .floating-alert { position: fixed; right: 25px; bottom: 25px; z-index: 20; box-shadow: 0 8px 25px #182e5b1f; }.floating-alert button { border: 0; margin-left: 8px; color: inherit; background: transparent; font-size: 17px; }
