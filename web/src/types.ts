@@ -21,6 +21,7 @@ export interface User {
   login: string;
   name: string;
   id?: number;
+  avatarUrl?: string;
 }
 
 export interface Course {
@@ -49,6 +50,7 @@ export interface EnteredTask {
   challenge: {
     id?: number;
     subject?: string;
+    description?: string;
     position?: number;
     path?: string;
   };

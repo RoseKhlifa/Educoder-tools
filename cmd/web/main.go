@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	buildinfo "educoder-cli"
 	"educoder-cli/internal/web"
 )
 
@@ -54,6 +55,7 @@ func run() error {
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
 	}()
+	fmt.Printf("educoder-workbench version=%s starting on %s\n", buildinfo.Current(), cfg.HTTPAddr)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

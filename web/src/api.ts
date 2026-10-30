@@ -1,5 +1,4 @@
 import type {
-  ApiEnvelope,
   ApiError,
   Course,
   EnteredTask,
@@ -21,6 +20,7 @@ export class ApiRequestError extends Error {
   }
 
   get isSessionExpired(): boolean {
+    if (this.code === 'AUTH_FAILED') return false;
     return this.status === 401 || this.status === 403 || this.code === 'UNAUTHENTICATED' || this.code === 'UPSTREAM_AUTH_EXPIRED';
   }
 }
@@ -69,10 +69,12 @@ function normalizeUser(value: unknown): User {
   const nested = asRecord(item.user);
   const source = Object.keys(nested).length ? nested : item;
   const login = text(source.login || source.username || source.user_login);
+  const avatarUrl = text(source.avatarUrl);
   return {
     login,
     name: text(source.name || source.real_name || source.username, login || '同学'),
     id: number(source.id || source.user_id),
+    avatarUrl: avatarUrl === '/api/avatar' ? avatarUrl : undefined,
   };
 }
 
@@ -81,7 +83,7 @@ function normalizeCourse(value: unknown): Course {
   const url = text(item.first_category_url || item.firstCategoryUrl);
   const urlIdentifier = url.match(/\/classrooms\/([^/]+)/)?.[1];
   return {
-    identifier: text(item.identifier || item.course_identifier || item.id || urlIdentifier),
+    identifier: text(item.identifier || item.course_identifier || urlIdentifier || item.id),
     name: text(item.name || item.course_name, '未命名课堂'),
     homeworkCount: number(item.homeworkCount || item.homework_count || item.homework_commons_count),
     membersCount: number(item.membersCount || item.members_count),
@@ -121,6 +123,7 @@ function normalizeEnteredTask(value: unknown): EnteredTask {
     challenge: {
       id: number(challenge.id),
       subject: text(challenge.subject || challenge.name) || undefined,
+      description: text(challenge.description) || undefined,
       position: number(challenge.position),
       path: text(challenge.path) || undefined,
     },
@@ -157,7 +160,9 @@ export class BrowserApi implements EducoderApi {
     });
     const requestId = response.headers.get('X-Request-Id') ?? undefined;
     let payload: unknown = null;
-    try { payload = await response.json(); } catch { /* handled below */ }
+    try { payload = await response.json(); } catch {
+      throw new ApiRequestError('服务返回了无效响应，请稍后重试', response.status, 'INVALID_RESPONSE', requestId);
+    }
     if (!response.ok) throw errorFromPayload(payload, response.status, requestId);
     return unwrap<T>(payload, response.status, requestId);
   }

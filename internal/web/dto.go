@@ -20,15 +20,16 @@ type EducoderClient interface {
 var _ EducoderClient = (*educoder.Client)(nil)
 
 type userDTO struct {
-	UserID   int64  `json:"id"`
-	Login    string `json:"login"`
-	Name     string `json:"name"`
-	RealName string `json:"realName,omitempty"`
-	Identity string `json:"identity"`
+	UserID    int64  `json:"id"`
+	Login     string `json:"login"`
+	Name      string `json:"name"`
+	RealName  string `json:"realName,omitempty"`
+	Identity  string `json:"identity"`
+	AvatarURL string `json:"avatarUrl"`
 }
 
 func toUserDTO(user educoder.User) userDTO {
-	return userDTO{UserID: user.UserID, Login: user.Login, Name: user.Name, RealName: user.RealName, Identity: user.Identity}
+	return userDTO{UserID: user.UserID, Login: user.Login, Name: user.Name, RealName: user.RealName, Identity: user.Identity, AvatarURL: "/api/avatar"}
 }
 
 type courseDTO struct {

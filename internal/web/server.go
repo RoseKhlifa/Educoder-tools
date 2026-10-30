@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -8,12 +9,15 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	buildinfo "educoder-cli"
+	"educoder-cli/internal/avatar"
 	"educoder-cli/internal/educoder"
 )
 
@@ -29,7 +33,7 @@ type Config struct {
 }
 
 func DefaultConfig() Config {
-	return Config{HTTPAddr: ":8080", WebOrigin: "http://localhost:5173", APIBaseURL: educoder.DefaultBaseURL, SessionTTL: 8 * time.Hour, StaticDir: filepath.FromSlash("web")}
+	return Config{HTTPAddr: "0.0.0.0:11454", APIBaseURL: educoder.DefaultBaseURL, SessionTTL: 8 * time.Hour, StaticDir: filepath.FromSlash("web")}
 }
 
 func LoadConfig() (Config, error) {
@@ -53,8 +57,15 @@ func LoadConfig() (Config, error) {
 	if value := strings.TrimSpace(os.Getenv("WEB_STATIC_DIR")); value != "" {
 		cfg.StaticDir = value
 	}
-	if strings.EqualFold(strings.TrimSpace(os.Getenv("WEB_COOKIE_SECURE")), "true") {
-		cfg.CookieSecure = true
+	if value := strings.TrimSpace(os.Getenv("WEB_COOKIE_SECURE")); value != "" {
+		secure, err := strconv.ParseBool(value)
+		if err != nil {
+			return Config{}, errors.New("invalid WEB_COOKIE_SECURE")
+		}
+		cfg.CookieSecure = secure
+	}
+	if cfg.WebOrigin != "" && !validOrigin(cfg.WebOrigin) {
+		return Config{}, errors.New("invalid WEB_ORIGIN: expected an exact http(s) origin")
 	}
 	return cfg, nil
 }
@@ -66,6 +77,7 @@ type Server struct {
 	store   *SessionStore
 	factory ClientFactory
 	static  http.Handler
+	avatars *avatar.Service
 }
 
 func NewServer(config Config) *Server {
@@ -74,10 +86,7 @@ func NewServer(config Config) *Server {
 
 func NewServerWithFactory(config Config, factory ClientFactory) *Server {
 	if config.HTTPAddr == "" {
-		config.HTTPAddr = ":8080"
-	}
-	if config.WebOrigin == "" {
-		config.WebOrigin = "http://localhost:5173"
+		config.HTTPAddr = "0.0.0.0:11454"
 	}
 	if strings.HasPrefix(strings.ToLower(config.WebOrigin), "https://") {
 		config.CookieSecure = true
@@ -94,10 +103,8 @@ func NewServerWithFactory(config Config, factory ClientFactory) *Server {
 	if factory == nil {
 		factory = func(baseURL string) EducoderClient { return educoder.New(baseURL) }
 	}
-	s := &Server{config: config, store: NewSessionStore(config.SessionTTL), factory: factory}
-	if info, err := os.Stat(config.StaticDir); err == nil && info.IsDir() {
-		s.static = http.FileServer(http.Dir(config.StaticDir))
-	}
+	s := &Server{config: config, store: NewSessionStore(config.SessionTTL), factory: factory, avatars: avatar.New()}
+	s.static = newStaticHandler(config.StaticDir)
 	return s
 }
 
@@ -108,69 +115,92 @@ func (s *Server) Handler() http.Handler { return s }
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requestID := newRequestID()
 	w.Header().Set("X-Request-Id", requestID)
-	if !s.cors(w, r) {
-		return
-	}
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	if r.URL.Path == "/healthz" {
-		if r.Method != http.MethodGet {
+	w.Header().Set("X-App-Version", buildinfo.Current())
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if r.URL.Path == "/healthz" || r.URL.Path == "/version" {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
 			s.writeError(w, requestID, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "请求方法不支持")
 			return
 		}
-		s.writeJSON(w, requestID, http.StatusOK, map[string]string{"status": "ok"})
+		var result any = buildinfo.Release()
+		if r.URL.Path == "/healthz" {
+			result = struct {
+				Status string `json:"status"`
+				buildinfo.Info
+			}{Status: "ok", Info: buildinfo.Release()}
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		if r.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(result)
+		}
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/") {
+		if !s.cors(w, r, requestID) {
+			return
+		}
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		s.handleAPI(w, r, requestID)
 		return
 	}
-	s.handleStatic(w, r)
+	s.static.ServeHTTP(w, r)
 }
 
-func (s *Server) cors(w http.ResponseWriter, r *http.Request) bool {
+// The deployed browser and API share one origin. WEB_ORIGIN is an optional exact
+// development origin; a wildcard never grants credentialed access. Matching
+// the request Host also works behind the user's TLS-terminating reverse proxy.
+func (s *Server) cors(w http.ResponseWriter, r *http.Request, requestID string) bool {
 	origin := r.Header.Get("Origin")
-	if s.config.WebOrigin == "*" {
-		if origin != "" {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
+	if origin == "" {
+		if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+			s.writeError(w, requestID, http.StatusForbidden, "ORIGIN_NOT_ALLOWED", "请求来源不匹配")
+			return false
 		}
-	} else if origin != "" && origin == s.config.WebOrigin {
-		w.Header().Set("Access-Control-Allow-Origin", origin)
+		return true
 	}
-	if origin != "" && (s.config.WebOrigin == "*" || origin == s.config.WebOrigin) {
-		w.Header().Set("Access-Control-Allow-Credentials", "true")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Request-Id")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Add("Vary", "Origin")
+	parsed, err := url.Parse(origin)
+	allowed := err == nil && validOrigin(origin) && (strings.EqualFold(parsed.Host, r.Host) || origin == s.config.WebOrigin)
+	if !allowed {
+		s.writeError(w, requestID, http.StatusForbidden, "ORIGIN_NOT_ALLOWED", "请求来源不匹配")
+		return false
 	}
+	w.Header().Set("Access-Control-Allow-Origin", origin)
+	w.Header().Set("Access-Control-Allow-Credentials", "true")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Request-Id")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Add("Vary", "Origin")
 	return true
 }
 
-func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
-	if s.static == nil {
-		http.NotFound(w, r)
-		return
-	}
-	path := strings.TrimPrefix(r.URL.Path, "/")
-	if path == "" {
-		path = "index.html"
-	}
-	if info, err := os.Stat(filepath.Join(s.config.StaticDir, filepath.FromSlash(path))); err == nil && !info.IsDir() {
-		s.static.ServeHTTP(w, r)
-		return
-	}
-	// SPA fallback lets browser-side routes render after a hard refresh.
-	index := filepath.Join(s.config.StaticDir, "index.html")
-	if _, err := os.Stat(index); err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	http.ServeFile(w, r, index)
+func validOrigin(origin string) bool {
+	parsed, err := url.Parse(origin)
+	return err == nil && (parsed.Scheme == "http" || parsed.Scheme == "https") && parsed.Host != "" && parsed.User == nil && parsed.Path == "" && parsed.RawQuery == "" && parsed.Fragment == ""
 }
 
 func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request, requestID string) {
+	if r.URL.Path == "/api/avatar" {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			s.methodError(w, requestID)
+			return
+		}
+		session, ok := s.sessionFromRequest(r)
+		if !ok {
+			s.authError(w, requestID)
+			return
+		}
+		if r.URL.RawQuery != "" {
+			s.writeError(w, requestID, http.StatusBadRequest, "INVALID_REQUEST", "头像接口不接受自定义地址")
+			return
+		}
+		s.avatars.Serve(w, r, session.AvatarKey)
+		return
+	}
 	parts := splitPath(r.URL.Path)
 	if len(parts) == 3 && parts[0] == "api" && parts[1] == "auth" && parts[2] == "login" {
 		if r.Method != http.MethodPost {
@@ -251,13 +281,43 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, requestID s
 		s.store.Delete(old.Value)
 	}
 	// Store only the public user fields returned by the upstream client.
-	sessionID, err := s.store.Create(client, *user)
+	sessionID, err := s.store.createWithAvatar(client, *user, resolveAvatarKey(r.Context(), client, *user))
 	if err != nil {
 		s.writeError(w, requestID, http.StatusInternalServerError, "SESSION_CREATE_FAILED", "创建会话失败")
 		return
 	}
 	s.setSessionCookie(w, sessionID)
 	s.writeJSON(w, requestID, http.StatusOK, map[string]any{"user": toUserDTO(*user)})
+}
+
+// Profile requests stay on the authenticated protocol client. Only a public
+// User resource key is retained; the browser never receives the upstream URL,
+// image query string, cookies or arbitrary external fetch capability.
+func resolveAvatarKey(ctx context.Context, client EducoderClient, user educoder.User) string {
+	if recorder, ok := client.(interface {
+		RecordedRequest(context.Context, string, string, url.Values, json.RawMessage) (*educoder.RecordedResponse, error)
+	}); ok {
+		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		response, err := recorder.RecordedRequest(ctx, http.MethodGet, "/api/users/get_user_info.json", url.Values{"school": {"1"}}, nil)
+		if err == nil && response != nil && response.StatusCode == http.StatusOK {
+			var profile map[string]json.RawMessage
+			if json.Unmarshal(response.Body, &profile) == nil {
+				for _, field := range []string{"image_url", "avatar_url", "avatar", "image"} {
+					var value string
+					if json.Unmarshal(profile[field], &value) == nil {
+						if key, ok := avatar.Key(value); ok {
+							return key
+						}
+					}
+				}
+			}
+		}
+	}
+	if user.UserID > 0 {
+		return strconv.FormatInt(user.UserID, 10)
+	}
+	return "b"
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, requestID string) {
@@ -399,10 +459,17 @@ func (s *Server) writeError(w http.ResponseWriter, requestID string, status int,
 
 func decodeJSON(r *http.Request, dst any) error {
 	defer r.Body.Close()
-	dec := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	dec := json.NewDecoder(io.LimitReader(r.Body, (1<<20)+1))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(dst); err != nil {
 		return err
+	}
+	if dec.InputOffset() > 1<<20 {
+		return errors.New("JSON body too large")
+	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		return errors.New("expected one JSON object")
 	}
 	return nil
 }

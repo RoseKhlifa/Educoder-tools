@@ -104,7 +104,7 @@ running_code_status=1 → 304 未更新 → running_code_status=2
 
 ## 验证与后续录制边界
 
-Go 和 TypeScript 都复用现有客户端的签名及内存 CookieJar。单元/集成测试使用虚构上下文和本地 HTTP/WebSocket 服务；真实 HAR 重放只在本地读取响应与帧，不请求上游、不再次提交录制中的任务。
+当前只维护 Go 协议客户端，复用其签名及内存 CookieJar。单元/集成测试使用虚构上下文和本地 HTTP/WebSocket 服务。早期曾用独立 TypeScript HAR 工具验证录制；该工具已按用户要求删除，本文保留字段结论和录制证据。当前回归命令为 go test ./internal/educoder。
 
 此次可以验证题型分类、两关题干/文件、代码解码、普通保存、两次自测输出、提交前保存参数传递、两次 build、304/运行状态/最终结果和详情通过状态。没有生成答案。
 

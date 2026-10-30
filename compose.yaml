@@ -10,10 +10,10 @@ services:
     ports:
       - "11454:11454"
     environment:
-      REUSE_ADDR: "0.0.0.0:11454"
-      REUSE_STATIC_DIR: "/app/resource-reuse/site"
-      REUSE_SESSION_TTL: "8h"
-      REUSE_COOKIE_SECURE: "${REUSE_COOKIE_SECURE:-true}"
+      HTTP_ADDR: "0.0.0.0:11454"
+      WEB_STATIC_DIR: "/app/web"
+      SESSION_TTL: "8h"
+      WEB_COOKIE_SECURE: "${WEB_COOKIE_SECURE:-true}"
     read_only: true
     tmpfs:
       - /tmp:size=16m,mode=1777

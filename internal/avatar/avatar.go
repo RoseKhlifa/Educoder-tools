@@ -1,0 +1,314 @@
+// Package avatar fetches public user avatars from fixed Educoder sources.
+// Avatar bytes are bounded, cached only in memory, and never carry a user session.
+package avatar
+
+import (
+	"bytes"
+	"context"
+	"encoding/binary"
+	"errors"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
+	"io"
+	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+)
+
+const (
+	avatarPath       = "/images/avatars/User/"
+	avatarMaxBytes   = 2 << 20
+	avatarCacheBytes = 32 << 20
+	avatarCacheCount = 256
+	avatarTTL        = 20 * time.Minute
+)
+
+var errAvatarUnavailable = errors.New("public avatar unavailable")
+
+type avatarImage struct {
+	body    []byte
+	kind    string
+	expires time.Time
+	used    time.Time
+}
+
+type avatarFlight struct {
+	done  chan struct{}
+	image avatarImage
+	err   error
+}
+
+// Service reads just the public User avatar resource family from two
+// fixed official sources. It has no upstream session, accepts no destination
+// URL from the browser and never persists user images to disk.
+type Service struct {
+	client   *http.Client
+	mu       sync.Mutex
+	cache    map[string]avatarImage
+	flights  map[string]*avatarFlight
+	bytes    int
+	maxBytes int
+	maxCount int
+	ttl      time.Duration
+	now      func() time.Time
+	requests chan struct{}
+}
+
+// New creates a service with its own credential-free HTTP client.
+func New() *Service {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = 6 * time.Second
+	transport.MaxResponseHeaderBytes = 32 << 10
+	return &Service{
+		client: &http.Client{
+			Transport: transport, Timeout: 6 * time.Second,
+			// Official avatar URLs do not need redirects. In particular, never
+			// follow a redirect to another host or a different resource family.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
+		cache: map[string]avatarImage{}, flights: map[string]*avatarFlight{},
+		maxBytes: avatarCacheBytes, maxCount: avatarCacheCount,
+		ttl: avatarTTL, now: time.Now, requests: make(chan struct{}, 8),
+	}
+}
+
+func validAvatarKey(key string) bool {
+	if len(key) == 0 || len(key) > 128 {
+		return false
+	}
+	for _, char := range key {
+		if !(char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '-' || char == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+func validAvatarQuery(raw string) bool {
+	query, err := url.ParseQuery(raw)
+	if err != nil {
+		return false
+	}
+	for key, values := range query {
+		if key != "t" || len(values) != 1 || len(values[0]) > 32 {
+			return false
+		}
+		for _, char := range values[0] {
+			if char < '0' || char > '9' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// Key extracts an avatar identifier from a key or official User image URL.
+// Browser-provided destination URLs and other Educoder resource families do not qualify.
+func Key(value string) (string, bool) {
+	if validAvatarKey(value) {
+		return value, true
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.User != nil || parsed.Fragment != "" || !validAvatarQuery(parsed.RawQuery) {
+		return "", false
+	}
+	if parsed.Host != "" {
+		if parsed.Scheme != "https" || parsed.Port() != "" {
+			return "", false
+		}
+		switch parsed.Host {
+		case "data.educoder.net", "ali-cdn.educoder.net", "public.educoder.net":
+		default:
+			return "", false
+		}
+	} else if parsed.Scheme != "" || parsed.Opaque != "" {
+		return "", false
+	}
+	path := parsed.Path
+	if !strings.HasPrefix(path, "/") {
+		path = "/" + path
+	}
+	if !strings.HasPrefix(path, avatarPath) {
+		return "", false
+	}
+	key := strings.TrimPrefix(path, avatarPath)
+	return key, validAvatarKey(key)
+}
+
+// Serve writes the requested user's avatar or the official default User/b.
+// The caller must obtain key from its authenticated session, not a request URL.
+func (a *Service) Serve(w http.ResponseWriter, r *http.Request, key string) {
+	w.Header().Set("Cache-Control", "private, no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if !validAvatarKey(key) {
+		http.NotFound(w, r)
+		return
+	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+	defer cancel()
+	result, err := a.get(ctx, key)
+	if err != nil && key != "b" && ctx.Err() == nil {
+		result, err = a.get(ctx, "b")
+	}
+	if err != nil {
+		http.Error(w, "avatar temporarily unavailable", http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", result.kind)
+	w.Header().Set("Content-Length", strconv.Itoa(len(result.body)))
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodGet {
+		_, _ = w.Write(result.body)
+	}
+}
+
+func (a *Service) get(ctx context.Context, key string) (avatarImage, error) {
+	a.mu.Lock()
+	now := a.now()
+	if result, ok := a.cache[key]; ok {
+		if now.Before(result.expires) {
+			result.used = now
+			a.cache[key] = result
+			a.mu.Unlock()
+			return result, nil
+		}
+		a.bytes -= len(result.body)
+		delete(a.cache, key)
+	}
+	if flight, ok := a.flights[key]; ok {
+		a.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return avatarImage{}, ctx.Err()
+		case <-flight.done:
+			return flight.image, flight.err
+		}
+	}
+	flight := &avatarFlight{done: make(chan struct{})}
+	a.flights[key] = flight
+	a.mu.Unlock()
+
+	result, err := a.load(ctx, key)
+	a.mu.Lock()
+	if err == nil {
+		result.expires, result.used = a.now().Add(a.ttl), a.now()
+		a.putLocked(key, result)
+	}
+	flight.image, flight.err = result, err
+	delete(a.flights, key)
+	close(flight.done)
+	a.mu.Unlock()
+	return result, err
+}
+
+func (a *Service) putLocked(key string, result avatarImage) {
+	if len(result.body) > a.maxBytes || a.maxCount <= 0 {
+		return
+	}
+	now := a.now()
+	for name, cached := range a.cache {
+		if !now.Before(cached.expires) {
+			a.bytes -= len(cached.body)
+			delete(a.cache, name)
+		}
+	}
+	for len(a.cache) >= a.maxCount || a.bytes+len(result.body) > a.maxBytes {
+		oldest := ""
+		var used time.Time
+		for name, cached := range a.cache {
+			if oldest == "" || cached.used.Before(used) {
+				oldest, used = name, cached.used
+			}
+		}
+		a.bytes -= len(a.cache[oldest].body)
+		delete(a.cache, oldest)
+	}
+	a.cache[key] = result
+	a.bytes += len(result.body)
+}
+
+func (a *Service) load(ctx context.Context, key string) (avatarImage, error) {
+	for _, host := range []string{"data.educoder.net", "ali-cdn.educoder.net"} {
+		if ctx.Err() != nil {
+			return avatarImage{}, ctx.Err()
+		}
+		result, err := a.fetch(ctx, host, key)
+		if err == nil {
+			return result, nil
+		}
+	}
+	return avatarImage{}, errAvatarUnavailable
+}
+
+func (a *Service) fetch(ctx context.Context, host, key string) (avatarImage, error) {
+	select {
+	case a.requests <- struct{}{}:
+		defer func() { <-a.requests }()
+	case <-ctx.Done():
+		return avatarImage{}, ctx.Err()
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://"+host+avatarPath+key, nil)
+	if err != nil {
+		return avatarImage{}, errAvatarUnavailable
+	}
+	request.Header.Set("Referer", "https://www.educoder.net/")
+	request.Header.Set("Accept", "image/avif,image/webp,image/png,image/jpeg,image/gif")
+	request.Header.Set("User-Agent", "Educoder-tools/avatars")
+	response, err := a.client.Do(request)
+	if err != nil {
+		return avatarImage{}, errAvatarUnavailable
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK || response.ContentLength > avatarMaxBytes {
+		return avatarImage{}, errAvatarUnavailable
+	}
+	return readAvatar(response.Body)
+}
+
+func readAvatar(reader io.Reader) (avatarImage, error) {
+	body, err := io.ReadAll(io.LimitReader(reader, avatarMaxBytes+1))
+	if err != nil || len(body) == 0 || len(body) > avatarMaxBytes {
+		return avatarImage{}, errAvatarUnavailable
+	}
+	kind := http.DetectContentType(body)
+	switch kind {
+	case "image/jpeg", "image/png", "image/gif":
+		config, _, err := image.DecodeConfig(bytes.NewReader(body))
+		if err != nil || config.Width <= 0 || config.Height <= 0 || config.Width > 16384 || config.Height > 16384 {
+			return avatarImage{}, errAvatarUnavailable
+		}
+	case "image/webp":
+		if len(body) < 20 || string(body[:4]) != "RIFF" || string(body[8:12]) != "WEBP" || int(binary.LittleEndian.Uint32(body[4:8]))+8 != len(body) {
+			return avatarImage{}, errAvatarUnavailable
+		}
+	default:
+		// AVIF stores its format in the ISO BMFF ftyp box. Unlike SVG, it
+		// contains no executable markup and is a valid original avatar format.
+		if len(body) < 24 || string(body[4:8]) != "ftyp" {
+			return avatarImage{}, errAvatarUnavailable
+		}
+		boxSize := int(binary.BigEndian.Uint32(body[:4]))
+		if boxSize < 24 || boxSize > len(body) || boxSize > 256 {
+			return avatarImage{}, errAvatarUnavailable
+		}
+		avif := string(body[8:12]) == "avif" || string(body[8:12]) == "avis"
+		for offset := 16; offset+4 <= boxSize; offset += 4 {
+			avif = avif || string(body[offset:offset+4]) == "avif" || string(body[offset:offset+4]) == "avis"
+		}
+		if !avif {
+			return avatarImage{}, errAvatarUnavailable
+		}
+		kind = "image/avif"
+	}
+	return avatarImage{body: body, kind: kind}, nil
+}

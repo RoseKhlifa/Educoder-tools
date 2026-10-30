@@ -17,6 +17,7 @@ type Session struct {
 	Client    EducoderClient
 	User      educoder.User
 	ExpiresAt time.Time
+	AvatarKey string
 }
 
 // SessionStore keeps sessions in memory. A mutex protects both reads and
@@ -36,6 +37,10 @@ func NewSessionStore(ttl time.Duration) *SessionStore {
 }
 
 func (s *SessionStore) Create(client EducoderClient, user educoder.User) (string, error) {
+	return s.createWithAvatar(client, user, "b")
+}
+
+func (s *SessionStore) createWithAvatar(client EducoderClient, user educoder.User, avatarKey string) (string, error) {
 	if client == nil {
 		return "", errors.New("nil client")
 	}
@@ -46,7 +51,7 @@ func (s *SessionStore) Create(client EducoderClient, user educoder.User) (string
 	}
 	id := base64.RawURLEncoding.EncodeToString(b)
 	s.mu.Lock()
-	s.sessions[id] = Session{Client: client, User: user, ExpiresAt: s.now().Add(s.ttl)}
+	s.sessions[id] = Session{Client: client, User: user, ExpiresAt: s.now().Add(s.ttl), AvatarKey: avatarKey}
 	s.mu.Unlock()
 	return id, nil
 }

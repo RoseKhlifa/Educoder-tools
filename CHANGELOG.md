@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.11 — 2026-10-31
+
+- Restore the handwritten workbench, keep Go as the sole protocol backend, and remove original compiled UI resources
+
 ## 0.1.10 — 2026-10-31
 
 - Add isolated objective-question generation, choice submission and type routing

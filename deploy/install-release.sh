@@ -15,7 +15,7 @@ docker compose version >/dev/null
 cd -- "$release_root"
 
 # Build before replacing the live container. A failed build leaves it untouched.
-export APP_VERSION="$version" VCS_REF="$commit" REUSE_COOKIE_SECURE=true
+export APP_VERSION="$version" VCS_REF="$commit" WEB_COOKIE_SECURE=true
 docker compose --project-name educoder-tools build
 docker compose --project-name educoder-tools up -d --no-build
 for attempt in $(seq 1 30); do

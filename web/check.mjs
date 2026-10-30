@@ -14,4 +14,7 @@ assert.equal(/localStorage|sessionStorage|console\.(log|debug|info)\s*\(/.test(`
 for (const marker of ['renderLogin', 'renderCourseRail', 'renderHomeworkRow', 'renderTaskDrawer', 'loading', 'drawerOpen']) assert.ok(source.includes(marker), `missing UI state ${marker}`);
 assert.match(css, /@media \(max-width: 620px\)/);
 assert.match(css, /\.topbar/);
+assert.equal(/https?:\/\/|@import|url\(/.test(`${html}\n${css}`), false, 'workbench shell should not download external fonts or media');
 console.log('web static checks: PASS');
+await import('./api.check.mjs');
+await import('./app.check.mjs');

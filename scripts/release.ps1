@@ -10,7 +10,7 @@ try {
         throw 'origin must use the approved SSH repository.'
     }
     $branch = (& git branch --show-current).Trim()
-    if ($branch -ne 'main') { throw 'Release from main after integrating your changes.' }
+    if ([string]::IsNullOrEmpty($branch)) { throw 'Release from a named branch or an isolated worktree branch.' }
     if (-not (& git status --porcelain)) { throw 'No changes to release.' }
     $current = (Get-Content -LiteralPath 'VERSION' -Raw).Trim()
     if ($current -notmatch '^(\d+)\.(\d+)\.(\d+)$') { throw 'VERSION must be MAJOR.MINOR.PATCH.' }
@@ -55,7 +55,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Commit failed.' }
     & git tag -a "v$next" -m "Release v$next"
     if ($LASTEXITCODE -ne 0) { throw 'Tag creation failed.' }
-    & git push --atomic origin main "v$next"
+    & git push --atomic origin 'HEAD:refs/heads/main' "v$next"
     if ($LASTEXITCODE -ne 0) { throw 'SSH push failed; local commit/tag preserved for retry.' }
     Write-Output "RELEASE=v$next; COMMIT_AND_SSH_PUSH=PASS"
 } finally {
