@@ -4,6 +4,8 @@
 
 停止新增或改写前端 UI。直接复用 EduCoder 的 HTML、编译 JS、CSS、字体、图片、worker 和异步 chunk。
 
+从 v0.1.4 起，按用户要求将首页轮播、宣传视频、开屏公告图片、站点横幅及其他确认的装饰位图替换为本地 SVG 和趣味文案。保留原页面结构；原有宣传视频位置显示静态图片，不再请求视频或自动播放。个人和教师头像、表情图集、作业帮助截图、任务编辑器功能资源继续保留。
+
 以用户最新要求为准：**只运行自己的 Go 服务，不使用 Nginx、Caddy、网关或浏览器请求劫持。采用 B，仅修改部署地址常量。**
 
 ```text
@@ -137,6 +139,19 @@ node .\resource-reuse\tools\verify_banner.cjs .\resource-reuse\site\www.educoder
 ```
 
 图片修复记录见 `reports/banner-images-fix/`；原始静态文件保持原样。
+
+### 装饰媒体轻量化
+
+九张 SVG 位于 `internal/compat/media/`，通过 Go 内嵌提供，合计不足 9 KB。`aliases.json` 列出已删除装饰文件的精确旧地址；这些地址仍返回对应 SVG，避免旧组件中的图片引用变成破图。首页、设置和公告 API 在响应中使用轻量媒体；课堂、作业、用户及任务正文接口不参与此转换。上游没有公告时不会新增弹窗。
+
+首页编译模块还含有内嵌 base64 宣传图片。`tools/media_lite.py` 仅处理原首页及全局展示模块，替换大图与两处宣传视频、保留图片懒加载，并为修改过的 JS/CSS 生成新内容指纹，同步原运行时映射与 HTML 引用。共享任务播放器及编辑器模块不参与修改。重新生成部署副本时，先执行原地址替换，再用明确的旧地址到 SVG URL 清单执行媒体补丁；不要在已发布目录中混用旧入口和新 chunk。
+
+```powershell
+# 当前部署树和运行中的本地服务验收，不需要账号或私有录制。
+python .\resource-reuse\tools\verify_media.py modified --base http://127.0.0.1:11454
+# 原始静态树或回滚副本：
+python .\resource-reuse\tools\verify_media.py baseline --site <原始静态目录>
+```
 
 ### 页面切换性能
 

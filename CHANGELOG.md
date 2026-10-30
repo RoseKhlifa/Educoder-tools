@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.4 — 2026-10-30
+
+- Replace decorative media with lightweight SVGs, remove promotional video loading, and refresh compiled asset fingerprints
+
 ## 0.1.3 — 2026-10-30
 
 - Speed up page navigation with session read caching, request coalescing and compressed static assets

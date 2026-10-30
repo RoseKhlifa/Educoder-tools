@@ -16,17 +16,21 @@ if urlsplit(args.base).hostname not in {"127.0.0.1", "localhost"}:
     parser.error("Verification target must be local")
 manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
 images = [entry for entry in manifest["images"] if entry.get("status") in {"downloaded", "existing"}]
+media_dir = Path(__file__).resolve().parents[2] / "internal/compat/media"
+aliases = json.loads((media_dir / "aliases.json").read_text(encoding="utf-8"))
 
 
 def verify(entry):
     path = "/_assets/" + quote(entry["path"].replace("\\", "/"), safe="/")
     result = {"path": path}
+    replacement = aliases.get(path)
+    expected = hashlib.sha256((media_dir / (replacement + ".svg")).read_bytes()).hexdigest() if replacement else entry["sha256"]
     try:
         with urlopen(args.base.rstrip("/") + path + "?t=verification", timeout=15) as response:
             data, mime, status = response.read(), response.headers.get("Content-Type", ""), response.status
         digest = hashlib.sha256(data).hexdigest()
-        if status != 200 or not mime.startswith("image/") or digest != entry["sha256"]:
-            raise ValueError(f"HTTP={status}; MIME={mime}; SHA_MATCH={digest == entry['sha256']}")
+        if status != 200 or not mime.startswith("image/") or digest != expected:
+            raise ValueError(f"HTTP={status}; MIME={mime}; SHA_MATCH={digest == expected}")
         result.update({"result": "PASS", "http": status, "contentType": mime, "bytes": len(data), "sha256": digest})
     except Exception as exc:
         result.update({"result": "FAIL", "error": str(exc)})

@@ -8,7 +8,10 @@ parser.add_argument("mode", choices=("baseline", "modified"))
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 original = root / "original/www-cdn.educoder.net/umi.c7ec315c.js"
-modified = root / "site/www-cdn.educoder.net/umi.c7ec315c.js"
+entries = list((root / "site/www-cdn.educoder.net").glob("umi.*.js"))
+if len(entries) != 1:
+    raise ValueError("Expected exactly one deployed runtime")
+modified = entries[0]
 before, after = original.read_bytes(), modified.read_bytes()
 if args.mode == "baseline":
     assert b'https://data.educoder.net' in before

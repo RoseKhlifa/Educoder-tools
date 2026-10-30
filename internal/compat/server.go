@@ -102,6 +102,9 @@ func (s *Server) Sweep() {
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-App-Version", buildinfo.Current())
+	if s.serveLiteMedia(w, r) {
+		return
+	}
 	if s.serveAvatar(w, r) {
 		return
 	}
@@ -193,6 +196,10 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 		body, err := cleanJSON(response.Body, item.marker, client.RecordedSecrets())
 		if err != nil {
 			return apiResponse{}, errors.New("上游响应格式错误")
+		}
+		body, err = lightweightPublicMedia(path, body)
+		if err != nil {
+			return apiResponse{}, errors.New("展示资源处理失败")
 		}
 		body, err = s.localizeImageURLs(body)
 		if err != nil {
