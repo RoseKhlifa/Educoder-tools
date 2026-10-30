@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([ValidateRange(1, 65535)][int]$Port = 8081)
+param([ValidateRange(1, 65535)][int]$Port = 11454)
 
 $ErrorActionPreference = 'Stop'
 $workspacePath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))

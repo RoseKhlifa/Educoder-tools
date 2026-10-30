@@ -1,0 +1,28 @@
+services:
+  app:
+    image: educoder-tools:${APP_VERSION:?Set APP_VERSION from VERSION}
+    build:
+      context: .
+      args:
+        VCS_REF: ${VCS_REF:-unknown}
+    restart: unless-stopped
+    init: true
+    ports:
+      - "11454:11454"
+    environment:
+      REUSE_ADDR: "0.0.0.0:11454"
+      REUSE_STATIC_DIR: "/app/resource-reuse/site"
+      REUSE_SESSION_TTL: "8h"
+      REUSE_COOKIE_SECURE: "${REUSE_COOKIE_SECURE:-true}"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

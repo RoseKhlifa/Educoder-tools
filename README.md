@@ -1,6 +1,14 @@
 # Educoder HAR protocol reproduction
 
-Current Web entry: `go run ./cmd/reuse`, then open [http://127.0.0.1:8081/](http://127.0.0.1:8081/). This single Go service hosts the downloaded original compiled UI and serves compatible `/api/*.json` application routes. It does not use Nginx, a gateway, or browser request interception. See [resource-reuse/README.md](resource-reuse/README.md) for the active architecture, original resource tree, deployment URL replacement, and verification reports. The earlier hand-written `web/` UI is historical and is not used by `cmd/reuse`.
+Current Web entry: `go run ./cmd/reuse`, then open [http://127.0.0.1:11454/](http://127.0.0.1:11454/). This single Go service hosts the downloaded original compiled UI and serves compatible `/api/*.json` application routes. It does not use Nginx, a gateway, or browser request interception. See [resource-reuse/README.md](resource-reuse/README.md) for the active architecture and [deploy/README.md](deploy/README.md) for Docker deployment. The earlier hand-written `web/` UI is historical and is not used by `cmd/reuse`.
+
+The service version comes from `VERSION`; `/healthz` and `/version` report the running version and commit. Each completed small change gets a new patch version, changelog entry, validated commit, annotated tag and SSH push:
+
+```powershell
+.\scripts\release.ps1 -Message 'Describe the completed change'
+```
+
+Before publishing, the script checks the staged files for local HAR account/session values, private-key material and forbidden private/generated paths. HAR recordings, credentials, cookies, reports and logs remain local and are not included in Docker build contexts or Git deployment archives.
 
 This workspace contains a terminal-first Go and TypeScript implementation of the minimum authenticated chain observed in `educoder_from_login_to_get_homework.har`.
 

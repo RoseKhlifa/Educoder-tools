@@ -113,7 +113,7 @@ rg -n -o 'https://data\.educoder\.net|https://www-cdn\.educoder\.net|wss://[^" ]
 
 ```powershell
 go run ./cmd/reuse
-# 默认 http://127.0.0.1:8081
+# 默认 http://127.0.0.1:11454，监听 0.0.0.0:11454
 ```
 
 Windows 推荐独立后台进程启动，避免交互终端结束后服务一起退出：
@@ -136,7 +136,7 @@ node .\resource-reuse\tools\verify_banner.cjs .\resource-reuse\site\www.educoder
 
 图片修复记录见 `reports/banner-images-fix/`；原始静态文件保持原样。
 
-配置：`REUSE_ADDR` 设置监听地址，`REUSE_STATIC_DIR` 设置部署目录，`EDUCODER_API_BASE_URL` 设置协议模块使用的上游 API 地址。
+配置：`REUSE_ADDR` 设置监听地址，`REUSE_STATIC_DIR` 设置部署目录，`EDUCODER_API_BASE_URL` 设置协议模块使用的上游 API 地址。Docker 部署见 `deploy/README.md`；服务直接监听 `11454`，`touge.mom` 的反向代理由用户在 1Panel 配置。版本来自根 `VERSION`，`/version` 和 `/healthz` 提供版本与 commit。
 
 Go 服务本身完成下面三类路由：
 

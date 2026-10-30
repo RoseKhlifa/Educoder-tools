@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1 — 2026-10-30
+
+- Default service port is now 11454, with application version/commit information available from health and version endpoints.
+- Added a non-root Docker image, Compose deployment and a release archive installer for the `main` SSH host.
+- Added a patch release workflow with version updates, privacy checks, validation, commits, annotated tags and SSH pushes.
+- Deployment uses only the application listener. Domain routing for `touge.mom` remains managed by 1Panel.
+
 ## 0.1.0 — 2026-10-30
 
 - Initial import of the Go protocol client and original compiled-resource service.

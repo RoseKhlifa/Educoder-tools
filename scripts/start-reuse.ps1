@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [string]$Address = '127.0.0.1:8081',
+    [string]$Address = '0.0.0.0:11454',
     [ValidateRange(1, 60)][int]$HealthTimeoutSeconds = 25
 )
 
@@ -14,6 +14,11 @@ $statePath = Join-Path $runtimeDirectory 'reuse-process.json'
 $endpoint = [Uri]('http://' + $Address + '/healthz')
 if ($endpoint.Port -lt 1 -or $endpoint.Port -gt 65535) {
     throw 'Address must include a valid TCP port.'
+}
+if ($endpoint.Host -eq '0.0.0.0' -or $endpoint.Host -eq '[::]') {
+    $healthUri = [UriBuilder]::new($endpoint)
+    $healthUri.Host = '127.0.0.1'
+    $endpoint = $healthUri.Uri
 }
 
 New-Item -ItemType Directory -Path $binaryDirectory -Force | Out-Null
@@ -45,7 +50,11 @@ foreach ($listenerId in $listenerIds) {
 
 Push-Location -LiteralPath $workspacePath
 try {
-    & go build -o $binaryPath ./cmd/reuse
+    $gitCommit = (& git rev-parse HEAD 2>$null)
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrEmpty($gitCommit)) {
+        $gitCommit = 'unknown'
+    }
+    & go build -trimpath -ldflags "-s -w -X educoder-cli.Commit=$gitCommit" -o $binaryPath ./cmd/reuse
     if ($LASTEXITCODE -ne 0) {
         throw "Go build failed (exit $LASTEXITCODE)."
     }
@@ -100,7 +109,7 @@ if (-not $healthy) {
     throw "Service health check timed out; PID $($serviceProcess.Id), log $stderrPath"
 }
 Write-Output "SERVICE=RUNNING; PID=$($serviceProcess.Id); URL=http://$Address/"
-Write-Output 'HEALTH=200; STATUS=ok'
+Write-Output "HEALTH=200; STATUS=ok; VERSION=$($result.version); COMMIT=$($result.commit)"
 Write-Output "STDOUT=$stdoutPath"
 Write-Output "STDERR=$stderrPath"
 

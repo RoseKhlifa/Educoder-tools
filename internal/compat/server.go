@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	buildinfo "educoder-cli"
 	"educoder-cli/internal/educoder"
 )
 
@@ -30,7 +31,7 @@ type Config struct {
 }
 
 func DefaultConfig() Config {
-	return Config{Addr: "127.0.0.1:8081", StaticDir: filepath.FromSlash("resource-reuse/site"), APIBaseURL: educoder.DefaultBaseURL, SessionTTL: 8 * time.Hour}
+	return Config{Addr: "0.0.0.0:11454", StaticDir: filepath.FromSlash("resource-reuse/site"), APIBaseURL: educoder.DefaultBaseURL, SessionTTL: 8 * time.Hour}
 }
 
 func LoadConfig() (Config, error) {
@@ -89,12 +90,22 @@ func (s *Server) Handler() http.Handler { return s }
 func (s *Server) Sweep()                { s.store.sweep() }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path == "/healthz" {
+	w.Header().Set("X-App-Version", buildinfo.Current())
+	if r.URL.Path == "/healthz" || r.URL.Path == "/version" {
 		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
-		writeJSON(w, http.StatusOK, []byte(`{"status":"ok"}`))
+		var result any = buildinfo.Release()
+		if r.URL.Path == "/healthz" {
+			result = struct {
+				Status string `json:"status"`
+				buildinfo.Info
+			}{Status: "ok", Info: buildinfo.Release()}
+		}
+		body, _ := json.Marshal(result)
+		writeJSON(w, http.StatusOK, body)
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/") {

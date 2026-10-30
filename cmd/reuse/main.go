@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	buildinfo "educoder-cli"
 	"educoder-cli/internal/compat"
 )
 
@@ -44,7 +45,7 @@ func run() error {
 			}
 		}
 	}()
-	fmt.Printf("Educoder compiled build: http://%s\n", cfg.Addr)
+	fmt.Printf("Educoder compiled build v%s (commit %s): http://%s\n", buildinfo.Current(), buildinfo.Commit, cfg.Addr)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
