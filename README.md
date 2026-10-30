@@ -75,6 +75,23 @@ go run ./cmd/educoder progress --course COURSE --homework HOMEWORK_ID --json
 
 The TypeScript module `typescript/programming.ts` exposes `ProgrammingClient` over the existing `EducoderClient` and transport. Its `task`, `readFile`, `save`, `selfTest`, `startEvaluation`, `pollEvaluation` and `progress` methods provide the same protocol stages. Save and self-test are explicit separate calls in TypeScript; the Go `SelfTest` convenience method saves first.
 
+## AI answers and the question bank
+
+The Go answer pipeline is now available through `cmd/educoder solve`. It builds an account-independent problem snapshot from the observed code-question fields, looks up a formally verified candidate in a local SQLite bank, and only then calls DeepSeek for a new candidate. The generated source is kept as an immutable candidate; self-test output and formal evaluation evidence are appended separately. A candidate enters the reusable verified set only when the exact saved/submitted source hash has a complete passing evaluation.
+
+The bank path is supplied with `--bank` or `EDUCODER_BANK_PATH`. The model key is supplied only through `DEEPSEEK_API_KEY`; it is never accepted in a positional argument, written to the database, or returned in a result. The first implementation supports the single-file programming chain already verified by the protocol recorder. Failed candidates, self-test mismatches, formal errors and uncertain upstream states remain in the bank for diagnostics and bounded repair.
+
+```powershell
+$env:EDUCODER_LOGIN = 'your-login'
+$env:EDUCODER_PASSWORD = 'read-from-password-stdin-or-secret-store'
+$env:DEEPSEEK_API_KEY = 'set-in-process-only'
+go run ./cmd/educoder solve --course COURSE --homework HOMEWORK_ID --game GAME --bank .\data\questionbank.sqlite --mode submit --idempotency-key run-1 --json
+```
+
+`--mode generate_only` stops after creating and structurally validating a candidate. `--mode selftest` saves and runs the public cases but does not formally submit. `--mode submit` reuses a verified candidate without another model request, re-runs it in the current account context, then saves, submits and reads the current evaluation. The solver limits model calls, model cost, evaluation attempts and total time; an unknown upstream result is retained as uncertain instead of being reported as a pass.
+
+The database stores public snapshots, exact source hashes, candidate files, validation summaries, run checkpoints and integer token-cost usage. Session cookies, account credentials, `sec_key`, runtime URLs, ports and other execution materials stay in memory. For container deployment, mount the database under a dedicated writable `/data` volume; the compiled application filesystem remains read-only.
+
 Replay the supplied recording locally without credentials or network requests:
 
 ```powershell

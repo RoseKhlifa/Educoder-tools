@@ -13,7 +13,10 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"educoder-cli/internal/answer"
 	"educoder-cli/internal/educoder"
+	"educoder-cli/internal/questionbank"
+	"educoder-cli/internal/solver"
 )
 
 func main() {
@@ -50,8 +53,12 @@ func run() error {
 	timeout := flags.Duration("timeout", 2*time.Minute, "代码题读取/运行/提交的总时限")
 	pollInterval := flags.Duration("poll-interval", time.Second, "评测轮询间隔")
 	maxOutput := flags.Int64("max-output-bytes", 1<<20, "自测输出字节上限")
+	bankPath := flags.String("bank", os.Getenv("EDUCODER_BANK_PATH"), "题库 SQLite 路径（solve 使用）")
+	mode := flags.String("mode", "submit", "solve 模式：generate_only、selftest 或 submit")
+	idempotencyKey := flags.String("idempotency-key", "", "solve 本地幂等键")
+	modelBaseURL := flags.String("model-base-url", os.Getenv("DEEPSEEK_BASE_URL"), "模型 API 根地址（默认 DeepSeek 官方地址）")
 	flags.Usage = func() {
-		fmt.Fprint(flags.Output(), "Educoder 协议终端客户端\n\n用法: go run ./cmd/educoder <login|courses|tasks|enter|flow|read|save|self-test|submit|progress> [参数]\n\nflow 默认列课堂和实训任务；提供 --course 与 --homework 后进入指定任务。\nread 读取题干与现存编辑器代码；save 保存；self-test 保存后自测；submit 保存后提交并轮询；progress 读取作业关卡状态。\n代码操作使用 --course --homework --game，保存/自测/提交另需 --path --source，自测另需 --stdin-file。\n账号密码只在本次进程内存中使用。\n")
+		fmt.Fprint(flags.Output(), "Educoder 协议终端客户端\n\n用法: go run ./cmd/educoder <login|courses|tasks|enter|flow|read|save|self-test|submit|progress|solve> [参数]\n\nflow 默认列课堂和实训任务；提供 --course 与 --homework 后进入指定任务。\nread 读取题干与现存编辑器代码；save 保存；self-test 保存后自测；submit 保存后提交并轮询；progress 读取作业关卡状态。\nsolve 执行题库优先的 AI 代码题流程，--mode 可选 generate_only、selftest、submit。\n代码操作使用 --course --homework --game；save/自测/提交另需 --path --source，自测另需 --stdin-file。\n账号密码和模型密钥只在本次进程内存中使用。\n")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -63,7 +70,7 @@ func run() error {
 	if flags.NArg() != 0 {
 		return fmt.Errorf("未识别的位置参数: %s", flags.Arg(0))
 	}
-	programmingCommand := command == "read" || command == "save" || command == "self-test" || command == "submit" || command == "progress"
+	programmingCommand := command == "read" || command == "save" || command == "self-test" || command == "submit" || command == "progress" || command == "solve"
 	if command != "login" && command != "courses" && command != "tasks" && command != "enter" && command != "flow" && !programmingCommand {
 		return fmt.Errorf("未知命令: %s", command)
 	}
@@ -90,6 +97,17 @@ func run() error {
 		}
 		if command == "self-test" && *stdinFile == "" {
 			return fmt.Errorf("self-test 需要 --stdin-file")
+		}
+		if command == "solve" {
+			if *mode != string(solver.ModeGenerateOnly) && *mode != string(solver.ModeSelfTest) && *mode != string(solver.ModeSubmit) {
+				return fmt.Errorf("solve 的 --mode 必须为 generate_only、selftest 或 submit")
+			}
+			if *bankPath == "" {
+				return fmt.Errorf("solve 需要 --bank 或 EDUCODER_BANK_PATH")
+			}
+			if strings.TrimSpace(os.Getenv("DEEPSEEK_API_KEY")) == "" {
+				return fmt.Errorf("solve 需要 DEEPSEEK_API_KEY")
+			}
 		}
 		if *timeout <= 0 || *pollInterval <= 0 || *maxOutput <= 0 {
 			return fmt.Errorf("timeout、poll-interval、max-output-bytes 必须大于 0")
@@ -150,6 +168,36 @@ func run() error {
 				fmt.Printf("%d\t%s\tpassed_status=%d\n", item.ChallengeID, item.Name, item.PassedStatus)
 			}
 			return nil
+		}
+		if command == "solve" {
+			store, err := questionbank.Open(*bankPath)
+			if err != nil {
+				return fmt.Errorf("打开题库: %w", err)
+			}
+			defer store.Close()
+			provider, err := answer.NewDeepSeek(answer.Config{APIKey: os.Getenv("DEEPSEEK_API_KEY"), BaseURL: *modelBaseURL, Timeout: *timeout})
+			if err != nil {
+				return err
+			}
+			adapter, err := solver.NewEducoderAdapter(client)
+			if err != nil {
+				return err
+			}
+			service := solver.New(store, provider, solver.Config{Timeout: *timeout})
+			result, runErr := service.Run(ctx, adapter, solver.Request{Owner: user.Login, IdempotencyKey: *idempotencyKey, Course: *course, HomeworkID: *homework, Game: *game, Mode: solver.Mode(*mode), Timeout: *timeout})
+			if result != nil {
+				if *jsonOutput {
+					if err := outputJSON(result); err != nil {
+						return err
+					}
+				} else {
+					fmt.Printf("AI 答题运行 %s：状态=%s，模型调用=%d，候选=%d\n", result.RunID, result.Status, result.ModelCalls, result.CandidateID)
+					for _, diagnostic := range result.Diagnostics {
+						fmt.Printf("诊断：%s\n", diagnostic)
+					}
+				}
+			}
+			return runErr
 		}
 		task, err := client.LoadTask(ctx, *course, *homework, *game)
 		if err != nil {

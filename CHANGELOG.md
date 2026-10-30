@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.6 — 2026-10-31
+
+- Add AI code-answer generation, bounded repair state and SQLite verified question bank
+
 ## 0.1.5 — 2026-10-31
 
 - Reproduce recorded programming-question files, self-tests and evaluations in Go and TypeScript

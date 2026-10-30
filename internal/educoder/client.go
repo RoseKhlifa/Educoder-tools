@@ -130,7 +130,7 @@ type Task struct {
 		ID         int64  `json:"id"`
 		Identifier string `json:"identifier"`
 	} `json:"myshixun"`
-	User       User `json:"user"`
+	User       TaskUser `json:"user"`
 	CodeEditor struct {
 		EnvironmentID int64  `json:"shixun_environment_id"`
 		Name          string `json:"name"`
@@ -141,6 +141,12 @@ type Task struct {
 	HomeworkID       int64                    `json:"homework_common_id"`
 	NextGame         *string                  `json:"next_game"`
 	URL              string                   `json:"url"`
+}
+
+// TaskUser keeps the stable numeric identity needed by code-save extras while
+// allowing the task endpoint's other user fields to vary in JSON type.
+type TaskUser struct {
+	UserID int64 `json:"user_id"`
 }
 
 type Client struct {
