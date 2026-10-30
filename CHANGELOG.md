@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.10 — 2026-10-31
+
+- Add isolated objective-question generation, choice submission and type routing
+
 ## 0.1.9 — 2026-10-31
 
 - Mark the programming-only AI prompt boundary explicitly

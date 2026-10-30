@@ -109,3 +109,20 @@ Go 和 TypeScript 都复用现有客户端的签名及内存 CookieJar。单元/
 此次可以验证题型分类、两关题干/文件、代码解码、普通保存、两次自测输出、提交前保存参数传递、两次 build、304/运行状态/最终结果和详情通过状态。没有生成答案。
 
 尚未观察的分支包括其他题型、完整目录树/`.h`/多文件、多环境、失败/编译错误/排队、实际非空 resubmit 的重新 build。客户端保留原始状态并有超时/失败测试；这些保护性测试不等于已观察上游的相应分支。
+
+## 选择题链路（独立题型）
+
+随后对同一课程中的 `客观题测试-第5章树和二叉树` 实测确认：选择题不属于代码题的文件编辑协议。任务详情响应使用 `st=1`、`challenge.st=1`，并提供非空 `chooses` 数组；本次一关含 10 道题。每项包含 1-based `position`、`subject`、`question_type`、`category` 和 `challenge_question` 选项数组；选项保存 0-based `position` 与 `option_name`。`category=1` 表示单选，前端提交一个字母；其他已观察 category 使用排序去重后的多字母字符串。
+
+选择题提交请求为：
+
+```text
+POST /api/tasks/:game/choose_build.json
+query: homework_common_id（以及页面存在时的题目上下文参数）
+body: {answer:["A", "BC", ...], challenge_id, subject_id, exercise_id,
+       competition_entry_id, smart_plan_page_item_bank_id, ip}
+```
+
+响应包含 `choose_correct_num`、`challenge_chooses_count`、`test_sets`、`next_game` 和游戏状态字段。部分作业关闭公开正确数时，`choose_correct_num` 可能为空；此时客户端只在观察到完成状态（本次 `game_original_status=2`，随后作业进度对应 `passed_status=2`）后报告通过，否则保留为未知结果。它不调用 `update_file`、`log_output`、`game_build` 或代码 WebSocket。
+
+模型使用单独的 objective prompt 和 `{kind:"objective",answers:[...]}` JSON 契约，选项题干与选项文本进入白名单快照。选择题题库候选和正式验证记录仍需单独扩展，不能把源码 `solution_files` 当作选择题答案。

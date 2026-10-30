@@ -121,7 +121,9 @@ type Task struct {
 		ST           *int   `json:"st"`
 		WithCodeFile *bool  `json:"with_code_file"`
 	} `json:"challenge"`
-	Shixun struct {
+	Chooses         []ChoiceQuestion `json:"chooses"`
+	ChooseTestCases ChoiceTestCases  `json:"choose_test_cases"`
+	Shixun          struct {
 		ID         int64  `json:"id"`
 		Identifier string `json:"identifier"`
 		Name       string `json:"name"`
@@ -283,7 +285,7 @@ func isProgrammingExecutionPath(path string) bool {
 		return true
 	}
 	if strings.HasPrefix(path, "/api/tasks/") {
-		return strings.HasSuffix(path, "/game_build.json") || strings.HasSuffix(path, "/game_status.json") || strings.HasSuffix(path, "/log_output")
+		return strings.HasSuffix(path, "/game_build.json") || strings.HasSuffix(path, "/choose_build.json") || strings.HasSuffix(path, "/game_status.json") || strings.HasSuffix(path, "/log_output")
 	}
 	return false
 }

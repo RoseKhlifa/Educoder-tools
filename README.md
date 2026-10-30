@@ -94,6 +94,8 @@ The database stores public snapshots, exact source hashes, candidate files, vali
 
 The model prompt receives an explicit file contract for every allowed file: exact server path, filename, extension and language. The suffix is authoritative, so a task whose editor file is `1.h` is presented as a header file even when the platform labels its environment `C/C++`; the answer validator still requires the exact path set.
 
+Choice questions use a separate protocol and prompt. The observed task discriminator is `st=1`, `challenge.st=1`, and a non-empty `chooses` array. Each question preserves its 1-based position, category, question text, option text and option positions. A single choice uses one letter; a multiple choice uses a sorted, de-duplicated letter string. Submission uses `POST /api/tasks/:game/choose_build.json` with an ordered `answer` array, and never calls code-file save, self-test WebSocket or `game_build.json`. The `objective` CLI command currently supports `generate_only` and `submit`; the model output is strict JSON `{kind:"objective",answers:[...]}`. A response with hidden correctness counters is reported as passed only when the observed completed status confirms it; otherwise the result remains diagnosable rather than being treated as a code evaluation.
+
 Replay the supplied recording locally without credentials or network requests:
 
 ```powershell

@@ -7,10 +7,11 @@ GET  /api/tasks/:game/game_status.json
 POST /api/myshixuns/:identifier/update_file.json
 POST /api/tasks/:game/log_output
 POST /api/tasks/:game/game_build.json
+POST /api/tasks/:game/choose_build.json
 POST /api/tasks/:game/cost_time.json
 ```
 
-这些请求要求有效的本地 HttpOnly 会话，使用服务端已登录客户端生成签名和认证头；不使用浏览器传来的上游 Cookie/Authorization。代码 POST 只接受不超过 2 MiB 的 JSON 对象，保留代码字节和字段；已观察的 `cost_time` 可为空请求体。所有代码/评测动作和进度读取保持缓存 BYPASS。轮询 304 和离开页面时保存的空响应体按原状态返回。`log_output` 返回的 WebSocket 地址由原编译前端连接；协议客户端自测使用同一 `/log` 订阅和 Base64 帧解码。完整证据见 `docs/programming-protocol.md`。
+这些请求要求有效的本地 HttpOnly 会话，使用服务端已登录客户端生成签名和认证头；不使用浏览器传来的上游 Cookie/Authorization。代码 POST 只接受不超过 2 MiB 的 JSON 对象，保留代码字节和字段；已观察的 `cost_time` 可为空请求体。`choose_build` 是选择题专用提交接口，body 的 `answer` 是按题目顺序排列的字母字符串数组；它不进入文件保存、WebSocket 或编译评测链路。所有代码/选择题评测动作和进度读取保持缓存 BYPASS。轮询 304 和离开页面时保存的空响应体按原状态返回。`log_output` 返回的 WebSocket 地址由原编译前端连接；协议客户端自测使用同一 `/log` 订阅和 Base64 帧解码。完整证据见 `docs/programming-protocol.md`。
 
 作业详情页 `/classrooms/:course/shixun_homework/:id/detail?tabs=1` 已观察到以下辅助读取：
 

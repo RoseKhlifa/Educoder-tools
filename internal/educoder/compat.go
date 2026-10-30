@@ -29,7 +29,7 @@ func RecordedRoute(method, path string) bool {
 			return false
 		}
 		return parts[1] == "myshixuns" && parts[3] == "update_file.json" ||
-			parts[1] == "tasks" && (parts[3] == "log_output" || parts[3] == "game_build.json" || parts[3] == "cost_time.json")
+			parts[1] == "tasks" && (parts[3] == "log_output" || parts[3] == "game_build.json" || parts[3] == "choose_build.json" || parts[3] == "cost_time.json")
 	}
 	if method != http.MethodGet {
 		return false

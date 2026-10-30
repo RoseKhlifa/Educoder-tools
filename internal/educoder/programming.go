@@ -21,7 +21,11 @@ type TaskKind string
 
 const (
 	TaskKindProgramming TaskKind = "programming"
-	TaskKindUnknown     TaskKind = "unknown"
+	TaskKindChoice      TaskKind = "choice"
+	// TaskKindObjective is an explicit alias for callers that use the
+	// objective-question terminology. Both values serialize as "choice".
+	TaskKindObjective TaskKind = TaskKindChoice
+	TaskKindUnknown   TaskKind = "unknown"
 )
 
 var errResponseNotModified = errors.New("upstream response not modified")
@@ -37,6 +41,9 @@ type ProgrammingEnvironment struct {
 func (t *Task) Kind() TaskKind {
 	if t != nil && t.ST != nil && *t.ST == 0 && t.Challenge.ST != nil && *t.Challenge.ST == 0 && t.Challenge.WithCodeFile != nil && *t.Challenge.WithCodeFile {
 		return TaskKindProgramming
+	}
+	if t != nil && t.ST != nil && *t.ST == 1 && t.Challenge.ST != nil && *t.Challenge.ST == 1 && len(t.Chooses) > 0 {
+		return TaskKindChoice
 	}
 	return TaskKindUnknown
 }

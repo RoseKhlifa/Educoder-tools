@@ -71,7 +71,8 @@ func run() error {
 		return fmt.Errorf("未识别的位置参数: %s", flags.Arg(0))
 	}
 	programmingCommand := command == "read" || command == "save" || command == "self-test" || command == "submit" || command == "progress" || command == "solve"
-	if command != "login" && command != "courses" && command != "tasks" && command != "enter" && command != "flow" && !programmingCommand {
+	objectiveCommand := command == "objective"
+	if command != "login" && command != "courses" && command != "tasks" && command != "enter" && command != "flow" && !programmingCommand && !objectiveCommand {
 		return fmt.Errorf("未知命令: %s", command)
 	}
 	if (command == "tasks" || command == "enter") && *course == "" {
@@ -113,6 +114,17 @@ func run() error {
 			return fmt.Errorf("timeout、poll-interval、max-output-bytes 必须大于 0")
 		}
 	}
+	if objectiveCommand {
+		if *course == "" || *homework <= 0 || *game == "" {
+			return fmt.Errorf("objective 需要 --course、--homework 与 --game")
+		}
+		if *mode != "generate_only" && *mode != "submit" {
+			return fmt.Errorf("objective 的 --mode 只能为 generate_only 或 submit")
+		}
+		if strings.TrimSpace(os.Getenv("DEEPSEEK_API_KEY")) == "" {
+			return fmt.Errorf("objective 需要 DEEPSEEK_API_KEY")
+		}
+	}
 	password := os.Getenv("EDUCODER_PASSWORD")
 	if *passwordStdin {
 		value, err := bufio.NewReader(os.Stdin).ReadString('\n')
@@ -151,6 +163,46 @@ func run() error {
 	}
 	if !*jsonOutput {
 		fmt.Printf("登录成功：%s (%s)\n", user.Name, user.Login)
+	}
+	if objectiveCommand {
+		ctx, stop := context.WithTimeout(ctx, *timeout)
+		defer stop()
+		choice, err := client.LoadChoiceTask(ctx, *course, *homework, *game)
+		if err != nil {
+			return err
+		}
+		questions := make([]answer.ObjectiveQuestion, 0, len(choice.Questions))
+		for _, q := range choice.Questions {
+			options := make([]answer.ObjectiveOption, 0, len(q.Options))
+			for _, option := range q.Options {
+				options = append(options, answer.ObjectiveOption{Label: string(rune('A' + option.Position)), Text: option.OptionName, Position: option.Position})
+			}
+			questions = append(questions, answer.ObjectiveQuestion{Position: q.Position, Question: q.Subject, QuestionType: q.QuestionType, Category: q.Category, Options: options})
+		}
+		provider, err := answer.NewDeepSeek(answer.Config{APIKey: os.Getenv("DEEPSEEK_API_KEY"), BaseURL: *modelBaseURL, Timeout: *timeout})
+		if err != nil {
+			return err
+		}
+		result, err := provider.GenerateObjective(ctx, answer.ObjectiveRequest{Problem: answer.ObjectiveSnapshot{Kind: "objective", Title: choice.Task.Challenge.Subject, Statement: choice.Task.Challenge.Description, Questions: questions}, Profile: answer.DefaultProfile()})
+		if err != nil {
+			return err
+		}
+		if *mode == "submit" {
+			submitted, submitErr := client.ObjectiveSubmit(ctx, choice, result.Candidate.Answers)
+			if submitErr != nil {
+				return submitErr
+			}
+			if *jsonOutput {
+				return outputJSON(map[string]any{"candidate": result.Candidate, "evaluation": submitted})
+			}
+			fmt.Printf("客观题提交：%d/%d\n", valueOrZero(submitted.Correct), submitted.Count)
+			return nil
+		}
+		if *jsonOutput {
+			return outputJSON(result.Candidate)
+		}
+		fmt.Printf("客观题候选答案：%s\n", strings.Join(result.Candidate.Answers, ","))
+		return nil
 	}
 	if programmingCommand {
 		ctx, stop := context.WithTimeout(ctx, *timeout)
@@ -357,6 +409,13 @@ func outputJSON(value any) error {
 	enc.SetIndent("", "  ")
 	enc.SetEscapeHTML(false)
 	return enc.Encode(value)
+}
+
+func valueOrZero(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
 }
 
 func printCourses(courses []educoder.Course) {
