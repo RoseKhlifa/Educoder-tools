@@ -1,0 +1,36 @@
+{
+  "source": "https://www-cdn.educoder.net/umi.000c4f23.js",
+  "signature": {
+    "algorithm": "MD5(Base64(UTF8(method=METHOD&ak=AK&sk=SK&time=TIMESTAMP_MS)))",
+    "access_key": "e9dd5b4322f9f7d83d009de9bfa100c3",
+    "secret_key": "2e3da06ae26ba9f76a5d8d355746f2fe",
+    "request_header_names": [
+      "X-EDU-Type",
+      "X-EDU-Timestamp",
+      "X-EDU-Signature",
+      "Pc-Authorization",
+      "X-Original-Protocol",
+      "X-Original-Host",
+      "X-Original-Origin",
+      "X-Request-Id"
+    ],
+    "edu_type": "pc",
+    "key_decode": "base64 decode twice"
+  },
+  "attachment": {
+    "aes_key_iv_utf8": "97a1f8f4a0fa8ded",
+    "algorithm": "AES-128-CBC with PKCS7, then Base64 twice",
+    "note": "getImageUrl helper only; unrelated to login password. Password uses fixed key above."
+  },
+  "password": {
+    "source": "https://www-cdn.educoder.net/layouts__index.22887387.async.js",
+    "status": "verified",
+    "algorithm": "AES-128-CBC",
+    "key_utf8": "5183666c72eec9e4",
+    "iv_utf8": "5183666c72eec9e4",
+    "padding": "PKCS7",
+    "plaintext_processing": "JavaScript String.trim() then UTF-8",
+    "output_encoding": "Base64 once (raw ciphertext; no OpenSSL Salted__ envelope)",
+    "har_validation": "Decrypt -> PKCS7 unpad -> UTF8 -> PKCS7 pad -> encrypt produces captured password ciphertext exactly; plaintext not persisted."
+  }
+}

@@ -1,0 +1,48 @@
+# Local credentials, recordings, sessions and runtime evidence
+*.har
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pid
+*.log
+/resource-reuse/reports/
+/resource-reuse/verification/
+/resource-reuse/original/
+/artifacts/
+/node_modules/
+/har_assets/
+/design-demos/
+
+# Abandoned design and local protocol-test fixtures
+/home*.html
+/umi*.js
+/public_educoder_download.js
+/layouts*.js
+/p__User__Login__index.js
+/HAR_ANALYSIS_AGENT.md
+/brand-spec.md
+/direction-approved.md
+/product-facts.md
+/WEB_ARCHITECTURE.md
+/MODIFIED_FILE
+/DIFF_FILE
+/VERIFICATION.txt
+/ROLLBACK.sh
+/ROLLBACK_TEST_COPY
+/reqable_mcp_fixture.original.txt
+
+# Generated application outputs and tool caches
+/web/dist/
+*.exe
+*.test
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+
+# Deployment-generated values and archives
+/deploy/.env
+/deploy/releases/
+/release-*.tar*

@@ -1,0 +1,12 @@
+* text=auto eol=lf
+# Preserve downloaded compiled files and images byte-for-byte, including
+# extensionless images and minified bundles with existing line endings.
+resource-reuse/site/** -text
+*.png -text
+*.jpg -text
+*.jpeg -text
+*.gif -text
+*.webp -text
+*.woff -text
+*.woff2 -text
+*.ttf -text

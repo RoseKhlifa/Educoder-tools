@@ -1,0 +1,19 @@
+{
+  "name": "educoder-protocol-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Terminal client for the Educoder login, courses, homework and task protocol",
+  "engines": { "node": ">=25" },
+  "scripts": {
+    "cli": "node typescript/cli.ts",
+    "test": "node --test typescript/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "web:build": "tsc -p tsconfig.web.json",
+    "web:check": "npm run web:build && node web/check.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.0",
+    "typescript": "^6.0.0"
+  }
+}

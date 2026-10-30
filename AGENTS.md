@@ -1,0 +1,9 @@
+# Repository working rules
+
+- The active application is `cmd/reuse`: one Go HTTP service hosting original compiled resources and compatible API handlers. Do not generate replacement React/Vue/HTML/CSS UI components.
+- Keep account credentials, HAR recordings, upstream cookies, signed resource queries, session stores and runtime logs out of Git, images and deployment archives.
+- Use the SSH Git remote `git@github.com:RoseKhlifa/Educoder-tools.git`.
+- Every completed small change must increment the patch version in `VERSION`, update `CHANGELOG.md`, pass the relevant checks, receive its own commit and annotated `vVERSION` tag, and be pushed with its tag. User instructions in the active chat take precedence.
+- Never amend or force-push published releases. Fixes receive another patch release.
+- Deployment listens on port `11454`. The user manages the `touge.mom` reverse proxy in 1Panel; do not create or edit Nginx/OpenResty configuration.
+- Deployment host is reached using the local SSH alias `main`. Do not overwrite unrelated services, containers or directories.
