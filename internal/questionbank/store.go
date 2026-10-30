@@ -23,6 +23,9 @@ import (
 //go:embed migrations/001_initial.sql
 var initialMigration string
 
+//go:embed migrations/002_objective.sql
+var objectiveMigration string
+
 type Store struct {
 	db *sql.DB
 	mu sync.Mutex
@@ -75,10 +78,23 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate question bank: %w", err)
 	}
+	// Early batch banks used the published whole-task verification table name
+	// for individual-answer evidence. Move that layout before creating either
+	// schema, within the same transaction so no evidence can be lost on failure.
+	if err = migrateObjectiveVerificationLayout(tx); err != nil {
+		tx.Rollback()
+		db.Close()
+		return nil, fmt.Errorf("migrate objective verification layout: %w", err)
+	}
 	if _, err = tx.Exec(objectiveSchema); err != nil {
 		tx.Rollback()
 		db.Close()
 		return nil, fmt.Errorf("migrate objective bank: %w", err)
+	}
+	if _, err = tx.Exec(objectiveMigration); err != nil {
+		tx.Rollback()
+		db.Close()
+		return nil, fmt.Errorf("migrate objective question bank: %w", err)
 	}
 	if err = tx.Commit(); err != nil {
 		db.Close()

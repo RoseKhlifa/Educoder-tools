@@ -16,6 +16,7 @@ type fakeStore struct {
 	candidates  []questionbank.Candidate
 	runs        map[string]questionbank.RunRecord
 	validations []questionbank.Validation
+	usages      []questionbank.Usage
 }
 
 func (f *fakeStore) UpsertSnapshot(context.Context, problem.Snapshot) (questionbank.Ref, error) {
@@ -43,6 +44,17 @@ func (f *fakeStore) AddCandidate(_ context.Context, ref questionbank.Ref, in que
 }
 func (f *fakeStore) RecordValidation(_ context.Context, v questionbank.Validation) error {
 	f.validations = append(f.validations, v)
+	for i := range f.candidates {
+		if f.candidates[i].ID == v.CandidateID {
+			f.candidates[i].Validations = append(f.candidates[i].Validations, v)
+			if v.Result == "failed" {
+				f.candidates[i].Status = "rejected"
+			}
+			if v.Result == "passed" && v.Kind == "formal" {
+				f.candidates[i].Status = "upstream_verified"
+			}
+		}
+	}
 	return nil
 }
 func (f *fakeStore) PutRun(_ context.Context, r questionbank.RunRecord) error {
@@ -67,7 +79,13 @@ func (f *fakeStore) FindRunByIdempotency(_ context.Context, owner, key string) (
 	}
 	return questionbank.RunRecord{}, questionbank.ErrNotFound
 }
-func (f *fakeStore) RecordUsage(context.Context, questionbank.Usage) error { return nil }
+func (f *fakeStore) RecordUsage(ctx context.Context, u questionbank.Usage) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	f.usages = append(f.usages, u)
+	return nil
+}
 
 type fakeProvider struct {
 	calls      int

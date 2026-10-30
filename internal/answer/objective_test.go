@@ -37,11 +37,11 @@ func TestObjectiveProviderUsesSeparatePromptAndStrictAnswers(t *testing.T) {
 	if result.Candidate.Kind != "objective" || strings.Join(result.Candidate.Answers, ",") != "A,AB" {
 		t.Fatalf("candidate=%+v", result.Candidate)
 	}
-	if !strings.Contains(wire.Messages[0].Content, "objective/choice") || strings.Contains(wire.Messages[0].Content, "source code") == false {
-		t.Fatalf("objective prompt not isolated: %s", wire.Messages[0].Content)
+	if !strings.Contains(wire.Messages[0].Content.textOnly(), "objective/choice") || strings.Contains(wire.Messages[0].Content.textOnly(), "source code") == false {
+		t.Fatalf("objective prompt not isolated: %s", wire.Messages[0].Content.textOnly())
 	}
-	if !strings.Contains(wire.Messages[1].Content, `"questions"`) || strings.Contains(wire.Messages[1].Content, "files") {
-		t.Fatalf("objective payload mixed with programming files: %s", wire.Messages[1].Content)
+	if !strings.Contains(wire.Messages[1].Content.textOnly(), `"questions"`) || strings.Contains(wire.Messages[1].Content.textOnly(), "files") {
+		t.Fatalf("objective payload mixed with programming files: %s", wire.Messages[1].Content.textOnly())
 	}
 }
 

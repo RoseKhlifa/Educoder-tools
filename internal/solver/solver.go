@@ -89,23 +89,29 @@ type Target struct {
 type LoadedProblem struct {
 	Snapshot problem.Snapshot
 	// Key is a per-runtime lock key such as myshixun ID. It is not persisted.
-	Key string
+	Key    string
+	target Target
 }
 
+type snapshotBinder interface{ bindSnapshot(LoadedProblem) }
+
 type SelfTest struct {
-	Completed bool
-	Output    string
-	Matches   bool
-	CompileOK *bool
+	Completed      bool
+	Output         string
+	Matches        bool
+	CompileOK      *bool
+	SavedFilesHash string
 }
 
 type Evaluation struct {
-	Completed   bool
-	Passed      bool
-	Status      string
-	Feedback    string
-	TestCount   int
-	PassedCount int
+	Completed          bool
+	Passed             bool
+	Status             string
+	Feedback           string
+	TestCount          int
+	PassedCount        int
+	SavedFilesHash     string
+	SubmittedFilesHash string
 }
 
 type Progress struct {
@@ -115,19 +121,20 @@ type Progress struct {
 
 // Result is safe for API responses: it contains no upstream credentials.
 type Result struct {
-	RunID          string      `json:"run_id"`
-	Status         string      `json:"status"`
-	CandidateID    int64       `json:"candidate_id,omitempty"`
-	Source         string      `json:"source,omitempty"`
-	CodeHash       string      `json:"code_hash,omitempty"`
-	ModelCalls     int         `json:"model_calls"`
-	CostMicroUSD   int64       `json:"cost_micro_usd"`
-	SelfTestStatus string      `json:"self_test_status,omitempty"`
-	ProgressError  string      `json:"progress_error,omitempty"`
-	Diagnostics    []string    `json:"diagnostics,omitempty"`
-	SelfTests      []SelfTest  `json:"self_tests,omitempty"`
-	Evaluation     *Evaluation `json:"evaluation,omitempty"`
-	Progress       *Progress   `json:"progress,omitempty"`
+	RunID            string      `json:"run_id"`
+	Status           string      `json:"status"`
+	CandidateID      int64       `json:"candidate_id,omitempty"`
+	Source           string      `json:"source,omitempty"`
+	CodeHash         string      `json:"code_hash,omitempty"`
+	ModelCalls       int         `json:"model_calls"`
+	CostMicroUSD     int64       `json:"cost_micro_usd"`
+	ReservedMicroUSD int64       `json:"reserved_micro_usd"`
+	SelfTestStatus   string      `json:"self_test_status,omitempty"`
+	ProgressError    string      `json:"progress_error,omitempty"`
+	Diagnostics      []string    `json:"diagnostics,omitempty"`
+	SelfTests        []SelfTest  `json:"self_tests,omitempty"`
+	Evaluation       *Evaluation `json:"evaluation,omitempty"`
+	Progress         *Progress   `json:"progress,omitempty"`
 }
 
 // Store is implemented by questionbank.DB. It is kept as an interface to
@@ -188,26 +195,32 @@ func New(store Store, provider answer.Provider, cfg Config) *Service {
 // generateOnce coalesces concurrent model requests for the same problem,
 // candidate and feedback. The caller still records its own attempt, while the
 // provider sees one billable generation.
-func (s *Service) generateOnce(ctx context.Context, key string, req answer.Request) (answer.Result, error) {
+func (s *Service) generateOnce(ctx context.Context, key string, req answer.Request, before func() error) (answer.Result, error, bool) {
+	if err := ctx.Err(); err != nil {
+		return answer.Result{}, err, false
+	}
 	s.generateMu.Lock()
 	if call := s.generations[key]; call != nil {
 		s.generateMu.Unlock()
 		select {
 		case <-call.done:
-			return call.result, call.err
+			return call.result, call.err, false
 		case <-ctx.Done():
-			return answer.Result{}, ctx.Err()
+			return answer.Result{}, ctx.Err(), false
 		}
 	}
 	call := &generationCall{done: make(chan struct{})}
 	s.generations[key] = call
 	s.generateMu.Unlock()
-	call.result, call.err = s.provider.Generate(ctx, req)
+	call.err = before()
+	if call.err == nil {
+		call.result, call.err = s.provider.Generate(ctx, req)
+	}
 	s.generateMu.Lock()
 	delete(s.generations, key)
 	close(call.done)
 	s.generateMu.Unlock()
-	return call.result, call.err
+	return call.result, call.err, true
 }
 
 type runtimeLock struct {
@@ -261,7 +274,23 @@ type runState struct {
 	CandidateIDs   []int64           `json:"candidate_ids,omitempty"`
 	Feedback       []answer.Feedback `json:"feedback,omitempty"`
 	Attempts       int               `json:"attempts"`
+	Limits         runLimits         `json:"limits"`
+	LastCandidate  *answer.Candidate `json:"last_candidate,omitempty"`
 	UpdatedAt      time.Time         `json:"updated_at"`
+}
+
+type runLimits struct {
+	MaxModelCalls  int   `json:"max_model_calls"`
+	MaxEvaluations int   `json:"max_evaluations"`
+	BudgetMicroUSD int64 `json:"budget_micro_usd"`
+}
+
+// Continuation explicitly grants additional capacity while preserving all
+// previous attempts, charged usage and unresolved reservations.
+type Continuation struct {
+	AdditionalModelCalls     int
+	AdditionalEvaluations    int
+	AdditionalBudgetMicroUSD int64
 }
 
 func ownerKey(owner string) string {
@@ -285,6 +314,19 @@ func (s *Service) persist(ctx context.Context, id string, state runState, status
 }
 
 func sanitizeRunState(state runState) runState {
+	for i := range state.Feedback {
+		f := &state.Feedback[i]
+		f.Kind = publicText(f.Kind)
+		f.Message = publicText(f.Message)
+		f.Stdin = publicText(f.Stdin)
+		f.ExpectedStdout = publicText(f.ExpectedStdout)
+		f.ActualStdout = publicText(f.ActualStdout)
+	}
+	if state.LastCandidate != nil {
+		if _, err := problem.HashFiles(state.LastCandidate.Files); err != nil {
+			state.LastCandidate = nil
+		}
+	}
 	for i, d := range state.Result.Diagnostics {
 		if problem.ValidatePublicText(d) != nil {
 			state.Result.Diagnostics[i] = "diagnostic withheld by public-data validator"
@@ -362,7 +404,7 @@ func (s *Service) Run(ctx context.Context, adapter Adapter, req Request) (*Resul
 	}
 	runID := newRunID()
 	result := &Result{RunID: runID, Status: "running"}
-	state := runState{Result: *result, Mode: req.Mode, Target: Target{req.Course, req.HomeworkID, req.Game}, Owner: ownerKey(req.Owner), IdempotencyKey: req.IdempotencyKey, SnapshotRef: ref}
+	state := runState{Result: *result, Mode: req.Mode, Target: Target{req.Course, req.HomeworkID, req.Game}, Owner: ownerKey(req.Owner), IdempotencyKey: req.IdempotencyKey, SnapshotRef: ref, Limits: runLimits{req.MaxModelCalls, req.MaxEvaluations, req.BudgetMicroUSD}}
 	created := time.Now().UTC()
 	if err := s.store.PutRun(ctx, questionbank.RunRecord{ID: runID, Owner: ownerKey(req.Owner), IdempotencyKey: req.IdempotencyKey, Status: "running", Data: mustJSON(state), CreatedAt: created, UpdatedAt: created}); err != nil {
 		return nil, err
@@ -375,13 +417,31 @@ func (s *Service) Run(ctx context.Context, adapter Adapter, req Request) (*Resul
 		return result, err
 	}
 	defer unlock()
-	defer func() {
-		if ctx.Err() != nil && result.Status != "uncertain" && result.Status != "passed" {
+	// The initial load discovers the runtime key. Reload after acquiring its
+	// lock so a waiting run never generates from a stale editor snapshot.
+	locked, err := adapter.Load(ctx, state.Target)
+	if err == nil && locked.Key != loaded.Key {
+		err = errors.New("task runtime changed while acquiring execution lock")
+	}
+	if err == nil {
+		snap, err = problem.Prepare(locked.Snapshot)
+	}
+	if err == nil {
+		ref, err = s.store.UpsertSnapshot(ctx, snap)
+	}
+	if err != nil {
+		result.Status = "load_failed"
+		if ctx.Err() != nil {
 			result.Status = "canceled"
-			state.Result = *result
-			_ = s.persist(ctx, runID, state, result.Status, created)
 		}
-	}()
+		state.Result = *result
+		_ = s.persist(ctx, runID, state, result.Status, created)
+		return result, err
+	}
+	state.SnapshotRef = ref
+	if binder, ok := adapter.(snapshotBinder); ok {
+		binder.bindSnapshot(locked)
+	}
 	return s.execute(ctx, adapter, req, snap, ref, state, result, created)
 }
 
@@ -409,39 +469,69 @@ func decodeRun(record questionbank.RunRecord) (*Result, error) {
 	return &st.Result, nil
 }
 
-func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, snap problem.Snapshot, ref questionbank.Ref, state runState, result *Result, created time.Time) (*Result, error) {
+func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, snap problem.Snapshot, ref questionbank.Ref, state runState, result *Result, created time.Time) (out *Result, runErr error) {
+	defer func() {
+		// A provider or runtime timeout must not also erase its usage and failure
+		// checkpoint. Persistence receives its own bounded cleanup context.
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		// Explicit cancellation terminates a web job while retaining the latest
+		// usage, candidate and repair feedback. A submission with an uncertain
+		// outcome must remain uncertain, and a confirmed pass remains passed.
+		if errors.Is(ctx.Err(), context.Canceled) && result.Status != "uncertain" && result.Status != "passed" {
+			result.Status = "canceled"
+		}
+		state.Result = *result
+		if err := s.persist(cleanup, result.RunID, state, result.Status, created); err != nil {
+			result.Status = "checkpoint_persistence_failed"
+			runErr = errors.Join(runErr, fmt.Errorf("persist solver checkpoint: %w", err))
+		}
+		if out == nil {
+			out = result
+		}
+	}()
 	target := state.Target
 	stage(req, "bank_lookup", "正在查询题库候选")
-	var candidates, err = s.store.Lookup(ctx, ref)
+	allCandidates, err := s.store.Lookup(ctx, ref)
 	if err != nil {
 		return nil, err
 	}
 	// Reuse only candidates with formal upstream evidence.
-	verified := candidates[:0]
-	for _, c := range candidates {
+	var candidates []questionbank.Candidate
+	for _, c := range allCandidates {
 		if c.Status == "upstream_verified" {
-			verified = append(verified, c)
+			candidates = append(candidates, c)
 		}
 	}
-	candidates = verified
 	// Revalidate only the best reusable candidate first. If it fails, feed its
 	// concrete output back to the model instead of spending all attempts on
 	// stale candidates; every other candidate remains queryable in the bank.
-	if len(candidates) > 1 {
-		candidates = candidates[:1]
-	}
-	var previous *answer.Candidate
+	var previous = state.LastCandidate
 	feedback := append([]answer.Feedback(nil), state.Feedback...)
-	if len(feedback) > 0 && len(candidates) > 0 {
+	if len(candidates) == 0 && previous == nil && len(feedback) == 0 {
+		for _, rejected := range allCandidates {
+			if rejected.Status == "rejected" {
+				seed := answer.Candidate{Kind: "programming", Language: languageOf(snap), Files: rejected.Files}
+				previous = &seed
+				feedback = candidateFeedback(rejected)
+				break
+			}
+		}
+	}
+	if len(feedback) > 0 && previous == nil && len(candidates) > 0 {
 		seed := answer.Candidate{Kind: "programming", Language: languageOf(snap), Files: candidates[0].Files}
 		previous = &seed
 	}
-	for attempt := 0; attempt < req.MaxEvaluations; attempt++ {
+	for attempt := state.Attempts; attempt < req.MaxEvaluations; attempt++ {
+		if err := ctx.Err(); err != nil {
+			result.Status = "interrupted"
+			return result, err
+		}
 		state.Attempts = attempt + 1
 		var candidate answer.Candidate
 		var bankID int64
-		if attempt < len(candidates) && len(feedback) == 0 {
-			bc := candidates[attempt]
+		if len(candidates) > 0 && len(feedback) == 0 {
+			bc := candidates[0]
 			bankID = bc.ID
 			candidate = answer.Candidate{Kind: "programming", Language: languageOf(snap), Files: bc.Files}
 			result.Source = bc.Source
@@ -468,6 +558,12 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			if result.ModelCalls >= 2 {
 				profile = s.cfg.ProProfile
 			}
+			if previous != nil {
+				if err := validateCandidate(snap, *previous); err != nil {
+					feedback = append(feedback, answer.Feedback{Kind: "schema", Message: err.Error()})
+					previous = nil
+				}
+			}
 			providerReq := answer.Request{Problem: snap, Previous: previous, Feedback: feedback, Profile: profile}
 			estimate, ee := s.provider.Estimate(providerReq)
 			if ee != nil {
@@ -477,7 +573,11 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				_ = s.persist(ctx, result.RunID, state, result.Status, created)
 				return result, ee
 			}
-			if estimate.CostMicroUSD <= 0 || result.CostMicroUSD+estimate.CostMicroUSD > req.BudgetMicroUSD {
+			if estimate.CostMicroUSD <= 0 || estimate.Model == "" {
+				result.Status = "budget_unavailable"
+				return result, errors.New("positive model cost estimate and model identity are required before dispatch")
+			}
+			if result.CostMicroUSD+result.ReservedMicroUSD+estimate.CostMicroUSD > req.BudgetMicroUSD {
 				result.Status = "budget_exhausted"
 				result.Diagnostics = append(result.Diagnostics, "model cost budget exhausted before request")
 				state.Result = *result
@@ -485,27 +585,47 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				return result, nil
 			}
 			stage(req, "generating", "正在生成或修复候选答案")
-			gen, ge := s.generateOnce(ctx, generationKey(providerReq), providerReq)
-			if gen.Model == "" {
-				gen.Model = profile.Model
+			dispatched := false
+			gen, ge, billed := s.generateOnce(ctx, generationKey(providerReq), providerReq, func() error {
+				result.ModelCalls++
+				result.ReservedMicroUSD += estimate.CostMicroUSD
+				state.Result = *result
+				if err := s.persist(ctx, result.RunID, state, "running", created); err != nil {
+					result.ModelCalls--
+					result.ReservedMicroUSD -= estimate.CostMicroUSD
+					return err
+				}
+				dispatched = true
+				return nil
+			})
+			if billed && !dispatched {
+				result.Status = "reservation_persistence_failed"
+				return result, ge
 			}
-			if !gen.CostKnown && gen.CostMicroUSD < estimate.CostMicroUSD {
-				gen.CostMicroUSD = estimate.CostMicroUSD
+			if billed && gen.CostKnown {
+				result.ReservedMicroUSD -= estimate.CostMicroUSD
+				result.CostMicroUSD += gen.CostMicroUSD
 			}
-			result.ModelCalls++
-			result.CostMicroUSD += gen.CostMicroUSD
 			usageStatus := "unknown"
 			if gen.CostKnown {
 				usageStatus = "settled"
 			}
-			usageCtx := ctx
-			usageCancel := func() {}
-			if ctx.Err() != nil {
-				usageCtx, usageCancel = context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+			var usageErr error
+			if billed {
+				model := gen.Model
+				if model == "" {
+					model = estimate.Model
+				}
+				priceVersion := estimate.PriceVersion
+				if priceVersion == "" {
+					priceVersion = "provider-estimate"
+				}
+				cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				usageErr = s.store.RecordUsage(cleanup, questionbank.Usage{RunID: result.RunID, CandidateID: 0, Provider: "deepseek", Model: model, PricingVersion: priceVersion, InputTokens: gen.Usage.PromptTokens, CachedInputTokens: gen.Usage.CacheHitTokens, OutputTokens: gen.Usage.CompletionTokens, ReservedMicroUSD: estimate.CostMicroUSD, CostMicroUSD: gen.CostMicroUSD, Status: usageStatus, FinishReason: gen.FinishReason, LatencyMillis: gen.Duration.Milliseconds()})
+				cancel()
 			}
-			usageErr := s.store.RecordUsage(usageCtx, questionbank.Usage{RunID: result.RunID, CandidateID: 0, Provider: "deepseek", Model: gen.Model, PricingVersion: "provider-reported", InputTokens: gen.Usage.PromptTokens, CachedInputTokens: gen.Usage.CacheHitTokens, OutputTokens: gen.Usage.CompletionTokens, ReservedMicroUSD: estimate.CostMicroUSD, CostMicroUSD: gen.CostMicroUSD, Status: usageStatus, FinishReason: gen.FinishReason, LatencyMillis: gen.Duration.Milliseconds()})
-			usageCancel()
 			if usageErr != nil {
+				state.LastCandidate = &gen.Candidate
 				result.Status = "usage_persistence_failed"
 				result.Diagnostics = append(result.Diagnostics, "模型用量记录失败")
 				state.Result = *result
@@ -517,11 +637,17 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				// truncation/usage error. Preserve it as a bank candidate so a later
 				// resume can inspect or repair it; never silently discard output.
 				if len(gen.Candidate.Files) > 0 {
+					state.LastCandidate = &gen.Candidate
 					result.CodeHash, _ = problem.HashFiles(gen.Candidate.Files)
-					if bc, ae := s.store.AddCandidate(ctx, ref, questionbank.CandidateInput{Files: gen.Candidate.Files, Source: "model_error", Provider: "deepseek", Model: gen.Model, PromptVersion: "v1"}); ae == nil {
+					cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+					if bc, ae := s.store.AddCandidate(cleanup, ref, questionbank.CandidateInput{Files: gen.Candidate.Files, Source: "model_error", Provider: "deepseek", Model: gen.Model, PromptVersion: "v1"}); ae == nil {
 						result.CandidateID = bc.ID
+					} else {
+						result.Diagnostics = append(result.Diagnostics, "partial output retained in run checkpoint: "+ae.Error())
 					}
+					cancel()
 				}
+				state.Feedback = []answer.Feedback{{Kind: "model", Message: ge.Error()}}
 				result.Diagnostics = append(result.Diagnostics, ge.Error())
 				result.Status = "model_error"
 				state.Result = *result
@@ -529,8 +655,16 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				return result, ge
 			}
 			candidate = gen.Candidate
+			state.LastCandidate = &candidate
 			result.Source = "model"
 			result.CodeHash, _ = problem.HashFiles(candidate.Files)
+			if err := validateCandidate(snap, candidate); err != nil {
+				feedback = []answer.Feedback{{Kind: "schema", Message: err.Error()}}
+				state.Feedback = append([]answer.Feedback(nil), feedback...)
+				result.Diagnostics = append(result.Diagnostics, err.Error())
+				previous = &candidate
+				continue
+			}
 			bc, ae := s.store.AddCandidate(ctx, ref, questionbank.CandidateInput{Files: candidate.Files, Source: "model", Provider: "deepseek", Model: gen.Model, PromptVersion: "v1"})
 			if ae != nil {
 				return nil, ae
@@ -538,7 +672,7 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			bankID = bc.ID
 			result.CandidateID = bankID
 			previous = &candidate
-			if result.CostMicroUSD > req.BudgetMicroUSD {
+			if result.CostMicroUSD+result.ReservedMicroUSD > req.BudgetMicroUSD {
 				result.Status = "budget_exhausted"
 				result.Diagnostics = append(result.Diagnostics, "model cost exceeded configured budget")
 				state.Result = *result
@@ -550,10 +684,25 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 		if err := validateCandidate(snap, candidate); err != nil {
 			result.Diagnostics = append(result.Diagnostics, err.Error())
 			feedback = []answer.Feedback{{Kind: "schema", Message: err.Error()}}
+			state.Feedback = append([]answer.Feedback(nil), feedback...)
+			state.LastCandidate = &candidate
 			previous = &candidate
 			continue
 		}
 		result.CodeHash, _ = problem.HashFiles(candidate.Files)
+		state.LastCandidate = &candidate
+		for _, rejected := range allCandidates {
+			if rejected.Status == "rejected" && rejected.FilesHash == result.CodeHash {
+				feedback = candidateFeedback(rejected)
+				feedback = append(feedback, answer.Feedback{Kind: "repeated_candidate", Message: "This exact candidate already failed. Produce a corrected candidate; do not repeat unchanged source."})
+				state.Feedback = append([]answer.Feedback(nil), feedback...)
+				previous = &candidate
+				break
+			}
+		}
+		if len(feedback) > 0 && feedback[len(feedback)-1].Kind == "repeated_candidate" {
+			continue
+		}
 		if req.Mode == ModeGenerateOnly {
 			result.Status = "generated"
 			state.Result = *result
@@ -580,7 +729,10 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 		for _, test := range snap.PublicTests {
 			st, se := adapter.SelfTest(ctx, target, candidate.Files[0], test.Stdin, test.ExpectedStdout)
 			result.SelfTests = append(result.SelfTests, st)
-			ok := se == nil && st.Completed && st.Matches
+			ok := se == nil && st.Completed && st.Matches && (st.SavedFilesHash == "" || st.SavedFilesHash == result.CodeHash)
+			if se == nil && st.SavedFilesHash != "" && st.SavedFilesHash != result.CodeHash {
+				se = errors.New("selftest editor content does not match candidate")
+			}
 			if !ok {
 				allPass = false
 				msg := st.Output
@@ -589,8 +741,25 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				}
 				feedback = append(feedback, answer.Feedback{Kind: "selftest", Message: msg, Stdin: test.Stdin, ExpectedStdout: test.ExpectedStdout, ActualStdout: st.Output})
 			}
-			if ve := s.store.RecordValidation(ctx, questionbank.Validation{CandidateID: bankID, Kind: "selftest", Result: map[bool]string{true: "passed", false: "failed"}[ok], FilesHash: result.CodeHash, RevisionHash: snap.RevisionHash, ContractHash: snap.ContractHash, Feedback: feedbackString(feedback), RunID: result.RunID, Terminal: true, Complete: st.Completed, TestCount: 1, PassedCount: boolInt(ok)}); ve != nil {
-				result.Diagnostics = append(result.Diagnostics, "selftest evidence persistence failed")
+			validationResult := map[bool]string{true: "passed", false: "failed"}[ok]
+			if se != nil {
+				validationResult = "unknown"
+			}
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			ve := s.store.RecordValidation(cleanup, questionbank.Validation{CandidateID: bankID, Kind: "selftest", Result: validationResult, FilesHash: result.CodeHash, SavedFilesHash: st.SavedFilesHash, RevisionHash: snap.RevisionHash, ContractHash: snap.ContractHash, Feedback: feedbackString(feedback), RunID: result.RunID, Terminal: st.Completed && se == nil, Complete: st.Completed, TestCount: 1, PassedCount: boolInt(ok)})
+			cancel()
+			if ve != nil {
+				result.Status = "verification_persistence_failed"
+				return result, errors.Join(se, ve)
+			}
+			if se != nil {
+				result.SelfTestStatus = "unknown"
+				result.Status = "uncertain"
+				result.Diagnostics = append(result.Diagnostics, se.Error())
+				// A failed host/network/save is not evidence of wrong code. Keep
+				// the candidate and avoid spending model calls on that failure.
+				state.Feedback = nil
+				return result, se
 			}
 			if !ok {
 				break
@@ -599,7 +768,10 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 		state.CandidateIDs = append(state.CandidateIDs, bankID)
 		state.Feedback = append([]answer.Feedback(nil), feedback...)
 		state.Result = *result
-		_ = s.persist(ctx, result.RunID, state, "running", created)
+		if err := s.persist(ctx, result.RunID, state, "running", created); err != nil {
+			result.Status = "checkpoint_persistence_failed"
+			return result, err
+		}
 		if !allPass {
 			result.SelfTestStatus = "failed"
 			if ctx.Err() != nil {
@@ -643,7 +815,17 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 		stage(req, "evaluating", "等待正式评测结果")
 		eval, ee := adapter.Submit(ctx, target, candidate.Files[0])
 		result.Evaluation = &eval
+		if ee == nil && !eval.Completed {
+			ee = errors.New("evaluation is not terminal; candidate remains unverified")
+		}
+		if ee == nil && eval.Passed && (eval.TestCount <= 0 || eval.PassedCount != eval.TestCount) {
+			ee = errors.New("evaluation pass evidence does not account for every test")
+		}
 		passed := ee == nil && eval.Completed && eval.Passed
+		if ee == nil && ((eval.SavedFilesHash != "" && eval.SavedFilesHash != result.CodeHash) || (eval.SubmittedFilesHash != "" && eval.SubmittedFilesHash != result.CodeHash)) {
+			ee = errors.New("evaluation editor content does not match candidate")
+			passed = false
+		}
 		kind := "formal"
 		vr := "failed"
 		if passed {
@@ -653,9 +835,18 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			vr = "unknown"
 			result.Diagnostics = append(result.Diagnostics, ee.Error())
 		}
-		evidenceCtx, evidenceCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-		ve := s.store.RecordValidation(evidenceCtx, questionbank.Validation{CandidateID: bankID, Kind: kind, Result: vr, FilesHash: result.CodeHash, SavedFilesHash: result.CodeHash, SubmittedFilesHash: result.CodeHash, RevisionHash: snap.RevisionHash, ContractHash: snap.ContractHash, Feedback: publicText(eval.Feedback), RunID: result.RunID, Terminal: eval.Completed, Complete: eval.Completed, TestCount: eval.TestCount, PassedCount: eval.PassedCount})
-		evidenceCancel()
+		savedHash, submittedHash := eval.SavedFilesHash, eval.SubmittedFilesHash
+		// Legacy adapters return no explicit hash. Their contract is to save the
+		// exact supplied file. Production returns hashes from read-back checks.
+		if savedHash == "" {
+			savedHash = result.CodeHash
+		}
+		if submittedHash == "" {
+			submittedHash = result.CodeHash
+		}
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		ve := s.store.RecordValidation(cleanup, questionbank.Validation{CandidateID: bankID, Kind: kind, Result: vr, FilesHash: result.CodeHash, SavedFilesHash: savedHash, SubmittedFilesHash: submittedHash, RevisionHash: snap.RevisionHash, ContractHash: snap.ContractHash, Feedback: publicText(eval.Feedback), RunID: result.RunID, Terminal: eval.Completed && ee == nil, Complete: eval.Completed, TestCount: eval.TestCount, PassedCount: eval.PassedCount})
+		cancel()
 		if ve != nil {
 			result.Status = "verification_persistence_failed"
 			if ee != nil {
@@ -671,6 +862,7 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			stage(req, "verifying", "正在复核课堂状态")
 			result.Status = "passed"
 			result.ProgressPtr(adapter, ctx, target)
+			state.Feedback = nil
 			state.Result = *result
 			_ = s.persist(ctx, result.RunID, state, result.Status, created)
 			return result, nil
@@ -745,6 +937,25 @@ func publicText(s string) string {
 	}
 	return s
 }
+
+func candidateFeedback(c questionbank.Candidate) []answer.Feedback {
+	for i := len(c.Validations) - 1; i >= 0; i-- {
+		v := c.Validations[i]
+		if v.Result != "failed" {
+			continue
+		}
+		var parsed []answer.Feedback
+		if json.Unmarshal([]byte(v.Feedback), &parsed) == nil && len(parsed) > 0 {
+			return parsed
+		}
+		message := v.Feedback
+		if message == "" {
+			message = "The previous candidate failed this validation; correct it before another evaluation."
+		}
+		return []answer.Feedback{{Kind: v.Kind, Message: publicText(message)}}
+	}
+	return []answer.Feedback{{Kind: "previous_failure", Message: "This candidate was previously rejected. Correct it before another evaluation."}}
+}
 func boolInt(b bool) int {
 	if b {
 		return 1
@@ -768,6 +979,20 @@ func (s *Service) Resume(ctx context.Context, runID string) (*Result, error) {
 // is fed into the next model request. The caller must provide the target mode
 // and a live session; no upstream execution key is reconstructed from disk.
 func (s *Service) ResumeRun(ctx context.Context, adapter Adapter, req Request, runID string) (*Result, error) {
+	return s.resumeRun(ctx, adapter, req, runID, nil)
+}
+
+// ContinueRun is an explicit continuation, unlike idempotent Run replay. The
+// grants are added to the saved lifetime limits; prior cost and unknown billing
+// reservations remain charged against the extended budget.
+func (s *Service) ContinueRun(ctx context.Context, adapter Adapter, req Request, runID string, grant Continuation) (*Result, error) {
+	if grant.AdditionalModelCalls < 0 || grant.AdditionalEvaluations < 0 || grant.AdditionalBudgetMicroUSD < 0 {
+		return nil, errors.New("continuation grants cannot be negative")
+	}
+	return s.resumeRun(ctx, adapter, req, runID, &grant)
+}
+
+func (s *Service) resumeRun(ctx context.Context, adapter Adapter, req Request, runID string, grant *Continuation) (*Result, error) {
 	if adapter == nil {
 		return nil, errors.New("solver adapter is required")
 	}
@@ -778,8 +1003,15 @@ func (s *Service) ResumeRun(ctx context.Context, adapter Adapter, req Request, r
 	if req.Owner == "" || record.Owner != ownerKey(req.Owner) {
 		return nil, errors.New("run owner does not match")
 	}
-	if record.Status != "running" && record.Status != "generated" && record.Status != "selftest_passed" && record.Status != "selftest_skipped" {
-		return nil, errors.New("terminal or uncertain run cannot be resumed")
+	resumable := record.Status == "running" || record.Status == "generated" || record.Status == "selftest_passed" || record.Status == "selftest_skipped" || record.Status == "selftest_unavailable"
+	if grant != nil {
+		switch record.Status {
+		case "model_error", "budget_exhausted", "budget_unavailable", "selftest_failed", "attempts_exhausted", "canceled", "interrupted":
+			resumable = true
+		}
+	}
+	if !resumable {
+		return nil, errors.New("terminal or uncertain run cannot be resumed without a recoverable checkpoint")
 	}
 	if !validMode(req.Mode) {
 		return nil, errors.New("explicit resume mode is required")
@@ -788,22 +1020,12 @@ func (s *Service) ResumeRun(ctx context.Context, adapter Adapter, req Request, r
 	if err := json.Unmarshal(record.Data, &state); err != nil {
 		return nil, err
 	}
-	if (req.Course != "" && req.Course != state.Target.Course) || (req.HomeworkID != 0 && req.HomeworkID != state.Target.HomeworkID) || (req.Game != "" && req.Game != state.Target.Game) {
-		return nil, errors.New("resume target does not match")
+	if req.Owner == "" || ownerKey(req.Owner) != state.Owner {
+		return nil, errors.New("resume owner does not match saved run")
 	}
-	loaded, err := adapter.Load(ctx, state.Target)
-	if err != nil {
-		return nil, err
+	if (req.Course != "" && req.Course != state.Target.Course) || (req.Game != "" && req.Game != state.Target.Game) || (req.HomeworkID != 0 && req.HomeworkID != state.Target.HomeworkID) {
+		return nil, errors.New("resume target does not match saved run")
 	}
-	snap, err := problem.Prepare(loaded.Snapshot)
-	if err != nil {
-		return nil, err
-	}
-	ref, err := s.store.UpsertSnapshot(ctx, snap)
-	if err != nil {
-		return nil, err
-	}
-	state.SnapshotRef = ref
 	if req.Course == "" {
 		req.Course = state.Target.Course
 	}
@@ -813,28 +1035,74 @@ func (s *Service) ResumeRun(ctx context.Context, adapter Adapter, req Request, r
 	if req.Game == "" {
 		req.Game = state.Target.Game
 	}
-	if req.Mode == "" {
-		req.Mode = ModeSubmit
+	limits := state.Limits
+	if limits.MaxModelCalls <= 0 {
+		limits.MaxModelCalls = s.cfg.MaxModelCalls
+	}
+	if limits.MaxEvaluations <= 0 {
+		limits.MaxEvaluations = s.cfg.MaxEvaluations
+	}
+	if limits.BudgetMicroUSD <= 0 {
+		limits.BudgetMicroUSD = s.cfg.BudgetMicroUSD
+	}
+	if grant != nil {
+		limits.MaxModelCalls += grant.AdditionalModelCalls
+		limits.MaxEvaluations += grant.AdditionalEvaluations
+		limits.BudgetMicroUSD += grant.AdditionalBudgetMicroUSD
+		if limits.MaxModelCalls <= 0 || limits.MaxEvaluations <= 0 || limits.BudgetMicroUSD <= 0 {
+			return nil, errors.New("continuation limits overflow")
+		}
+		req.MaxModelCalls, req.MaxEvaluations, req.BudgetMicroUSD = limits.MaxModelCalls, limits.MaxEvaluations, limits.BudgetMicroUSD
+	} else if req.MaxModelCalls > limits.MaxModelCalls || req.MaxEvaluations > limits.MaxEvaluations || req.BudgetMicroUSD > limits.BudgetMicroUSD {
+		return nil, errors.New("expanding saved limits requires an explicit continuation grant")
 	}
 	if req.MaxModelCalls <= 0 {
-		req.MaxModelCalls = s.cfg.MaxModelCalls
+		req.MaxModelCalls = limits.MaxModelCalls
 	}
 	if req.MaxEvaluations <= 0 {
-		req.MaxEvaluations = s.cfg.MaxEvaluations
+		req.MaxEvaluations = limits.MaxEvaluations
 	}
 	if req.BudgetMicroUSD <= 0 {
-		req.BudgetMicroUSD = s.cfg.BudgetMicroUSD
+		req.BudgetMicroUSD = limits.BudgetMicroUSD
 	}
 	if req.Timeout <= 0 {
 		req.Timeout = s.cfg.Timeout
 	}
 	runCtx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
-	result := &state.Result
+	loaded, err := adapter.Load(runCtx, state.Target)
+	if err != nil {
+		return nil, err
+	}
 	unlock, err := s.lock(runCtx, loaded.Key)
 	if err != nil {
 		return nil, err
 	}
 	defer unlock()
+	locked, err := adapter.Load(runCtx, state.Target)
+	if err != nil {
+		return nil, err
+	}
+	if loaded.Key != locked.Key {
+		return nil, errors.New("task runtime changed while acquiring execution lock")
+	}
+	if binder, ok := adapter.(snapshotBinder); ok {
+		binder.bindSnapshot(locked)
+	}
+	snap, err := problem.Prepare(locked.Snapshot)
+	if err != nil {
+		return nil, err
+	}
+	ref, err := s.store.UpsertSnapshot(runCtx, snap)
+	if err != nil {
+		return nil, err
+	}
+	if ref != state.SnapshotRef {
+		return nil, errors.New("problem revision or execution contract changed; start a new run")
+	}
+	state.Limits = runLimits{req.MaxModelCalls, req.MaxEvaluations, req.BudgetMicroUSD}
+	state.Mode = req.Mode
+	result := &state.Result
+	result.Status = "running"
 	return s.execute(runCtx, adapter, req, snap, ref, state, result, record.CreatedAt)
 }

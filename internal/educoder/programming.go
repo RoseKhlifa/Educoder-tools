@@ -327,12 +327,17 @@ func (c *Client) SelfTest(ctx context.Context, t *Task, filePath, content, input
 		if decodeErr != nil {
 			decoded, decodeErr = base64.RawStdEncoding.DecodeString(string(message))
 		}
-		if decodeErr != nil || !utf8.Valid(decoded) {
-			return result, errors.New("自测帧不是有效的 Base64 UTF-8 数据")
+		if decodeErr != nil {
+			return result, errors.New("自测帧不是有效的 Base64 数据")
 		}
 		if string(decoded) == "ProcessFinished" {
-			result.Completed = true
 			result.Output = output.String()
+			// A stream message may end in the middle of a multi-byte character.
+			// Validate the accumulated UTF-8 only after the completion marker.
+			if !utf8.ValidString(result.Output) {
+				return result, errors.New("完整自测输出不是有效的 UTF-8 数据")
+			}
+			result.Completed = true
 			if options.ExpectedOutput != nil {
 				matches := strings.ReplaceAll(result.Output, "\r\n", "\n") == strings.ReplaceAll(*options.ExpectedOutput, "\r\n", "\n")
 				result.Matches = &matches

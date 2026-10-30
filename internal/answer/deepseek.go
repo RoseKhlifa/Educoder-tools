@@ -16,16 +16,17 @@ import (
 const defaultBaseURL = "https://api.deepseek.com"
 
 type DeepSeek struct {
-	apiKey  string
-	baseURL string
-	client  *http.Client
-	timeout time.Duration
-	prices  map[string]Pricing
+	apiKey            string
+	baseURL           string
+	client            *http.Client
+	timeout           time.Duration
+	prices            map[string]Pricing
+	imageTokenReserve int64
 }
 
 type chatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role    string         `json:"role"`
+	Content messageContent `json:"content"`
 }
 
 type wireRequest struct {
@@ -81,7 +82,14 @@ func NewDeepSeek(cfg Config) (*DeepSeek, error) {
 	for k, v := range prices {
 		cp[k] = v
 	}
-	return &DeepSeek{apiKey: cfg.APIKey, baseURL: base, client: client, timeout: cfg.Timeout, prices: cp}, nil
+	imageReserve := cfg.ImageTokenReserve
+	if imageReserve == 0 {
+		imageReserve = 8192
+	}
+	if imageReserve < 0 || imageReserve > 1000000 {
+		return nil, &Error{Kind: "invalid_image_token_reserve"}
+	}
+	return &DeepSeek{apiKey: cfg.APIKey, baseURL: base, client: client, timeout: cfg.Timeout, prices: cp, imageTokenReserve: imageReserve}, nil
 }
 
 func buildRequest(req Request) (wireRequest, error) {
@@ -135,7 +143,7 @@ func buildRequest(req Request) (wireRequest, error) {
 	if err != nil {
 		return wireRequest{}, &Error{Kind: "prompt_build_failed"}
 	}
-	w := wireRequest{Model: p.Model, MaxTokens: p.MaxTokens, Stream: false, Messages: []chatMessage{{Role: "system", Content: system}, {Role: "user", Content: string(pb)}}, Thinking: map[string]string{"type": p.Thinking}, ReasoningEffort: p.ReasoningEffort}
+	w := wireRequest{Model: p.Model, MaxTokens: p.MaxTokens, Stream: false, Messages: []chatMessage{{Role: "system", Content: textContent(system)}, {Role: "user", Content: textContent(string(pb))}}, Thinking: map[string]string{"type": p.Thinking}, ReasoningEffort: p.ReasoningEffort}
 	w.ResponseFormat.Type = "json_object"
 	return w, nil
 }

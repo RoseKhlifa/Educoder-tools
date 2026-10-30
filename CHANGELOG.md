@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.18 — 2026-10-31
+
+- Complete course batches with verified objective caching, image inputs, recoverable solver state and API accounting
+
 ## 0.1.17 — 2026-10-31
 
 - Treat an unavailable optional model secret as browse-only mode

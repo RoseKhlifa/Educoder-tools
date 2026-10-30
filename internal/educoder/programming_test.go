@@ -289,12 +289,14 @@ func TestSelfTestStreamBoundaries(t *testing.T) {
 		expected string
 		wantErr  bool
 		matches  bool
+		fragment bool
 	}{
 		{name: "spaces-remain-significant", payload: "YES \r\n", finish: true, expected: "YES\n", matches: false},
 		{name: "finish-must-be-exact", payload: "ProcessFinished\n", finish: true, expected: "ProcessFinished\n", matches: true},
 		{name: "closed-before-finish", payload: "YES\n", wantErr: true},
 		{name: "output-limit", payload: "12345", finish: true, limit: 4, wantErr: true},
 		{name: "bounded-wait", wait: true, wantErr: true},
+		{name: "utf8-character-spans-frames", payload: "图书\r\n", finish: true, expected: "图书\n", matches: true, fragment: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var server *httptest.Server
@@ -322,8 +324,14 @@ func TestSelfTestStreamBoundaries(t *testing.T) {
 						conn.Read(ctx)
 						return
 					}
-					if err := conn.Write(ctx, websocket.MessageBinary, []byte(base64.StdEncoding.EncodeToString([]byte(test.payload)))); err != nil {
-						return
+					chunks := [][]byte{[]byte(test.payload)}
+					if test.fragment {
+						chunks = [][]byte{[]byte(test.payload)[:2], []byte(test.payload)[2:]}
+					}
+					for _, chunk := range chunks {
+						if err := conn.Write(ctx, websocket.MessageBinary, []byte(base64.StdEncoding.EncodeToString(chunk))); err != nil {
+							return
+						}
 					}
 					if test.finish {
 						conn.Write(ctx, websocket.MessageText, []byte(base64.RawStdEncoding.EncodeToString([]byte("ProcessFinished"))))

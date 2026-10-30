@@ -103,6 +103,9 @@ type Config struct {
 	HTTPClient *http.Client
 	Timeout    time.Duration
 	Prices     map[string]Pricing
+	// ImageTokenReserve is the conservative input-token reservation per image.
+	// Zero selects 8192. Charged usage always comes from the provider response.
+	ImageTokenReserve int64
 }
 
 // Error deliberately contains no provider body, prompt, key, or request URL.

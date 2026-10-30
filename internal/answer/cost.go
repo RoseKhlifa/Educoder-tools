@@ -14,7 +14,7 @@ func DefaultPrices() map[string]Pricing {
 			OutputMicroUSDPerMillion: 1200000, Version: "deepseek-flash-peak-2026-10-31",
 		},
 		"deepseek-v4-pro": {
-			InputMicroUSDPerMillion: 1320000, CacheHitMicroUSDPerMillion: 22000,
+			InputMicroUSDPerMillion: 1320000, CacheHitMicroUSDPerMillion: 44000,
 			OutputMicroUSDPerMillion: 3960000, Version: "deepseek-v4-pro-peak-2026-10-31",
 		},
 	}
@@ -55,7 +55,7 @@ func (d *DeepSeek) Estimate(req Request) (Estimate, error) {
 	// The additional framing allowance covers role and message delimiters.
 	input := int64(256)
 	for _, m := range wire.Messages {
-		input += int64(len(m.Content) + len(m.Role) + 64)
+		input += int64(len(m.Content.textOnly()) + len(m.Role) + 64)
 	}
 	peakInputPrice := p.InputMicroUSDPerMillion
 	if p.CacheHitMicroUSDPerMillion > peakInputPrice {

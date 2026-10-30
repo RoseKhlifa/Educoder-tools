@@ -14,6 +14,51 @@ func bankSnapshot() problem.Snapshot {
 	return problem.Snapshot{Kind: "programming", Title: "Queue", StatementMarkdown: "Write queue", Files: []problem.File{{Path: "src/main.cpp", Language: "cpp", CurrentContent: "template", StarterProvenance: "unknown"}}, PublicTests: []problem.PublicTest{{Stdin: "1\n", ExpectedStdout: "1\n"}}}
 }
 
+func TestUpsertSnapshotPreservesCurrentEditorBytesAndHash(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(filepath.Join(t.TempDir(), "editor.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	p := bankSnapshot()
+	contents := []string{"// 初始代码\r\nint main() { return 0; }\r\n", "// 修改后的代码\r\nint main() { return 1; }\r\n"}
+	var original Ref
+	for i, content := range contents {
+		p.Files[0].CurrentContent = content
+		ref, err := s.UpsertSnapshot(ctx, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			original = ref
+		} else if ref != original {
+			t.Fatal("changing current editor code changed the semantic or execution contract")
+		}
+		got, err := s.Snapshot(ctx, ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got.Files) != 1 || got.Files[0].CurrentContent != content || got.Files[0].CurrentContentHash != problem.HashContent(content) {
+			t.Fatalf("editor snapshot bytes or hash were lost: %+v", got.Files)
+		}
+		if p.Files[0].CurrentContent != content {
+			t.Fatal("upsert mutated caller's editor code")
+		}
+		var raw string
+		if err = s.db.QueryRowContext(ctx, "SELECT contract_json FROM execution_contracts WHERE contract_hash=?", ref.ContractHash).Scan(&raw); err != nil {
+			t.Fatal(err)
+		}
+		var contract problem.Snapshot
+		if err = json.Unmarshal([]byte(raw), &contract); err != nil {
+			t.Fatal(err)
+		}
+		if len(contract.Files) != 1 || contract.Files[0].CurrentContent != "" || contract.Files[0].CurrentContentHash != "" {
+			t.Fatal("execution contract retained changing editor code")
+		}
+	}
+}
+
 func TestStorePersistenceCandidatesPromotionAndFailures(t *testing.T) {
 	dir := t.TempDir()
 	dbpath := filepath.Join(dir, "bank.sqlite")

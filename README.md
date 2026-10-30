@@ -128,3 +128,15 @@ deploy/              Docker 部署
 ~~~
 
 [架构与迁移决定](docs/architecture.md) 说明当前模块边界。CHANGELOG 中旧入口名称属于历史版本记录。
+
+## 批量运行与费用记录
+
+`cmd/coursebatch` 接收显式关卡清单，逐关先核对满分，区分编程题与选择题执行，生成本地结果文件。选择题有独立的单题指纹、候选与验证表；图片题向模型传实际图片字节，并以图片内容 SHA256 绑定题库，不能仅用图片 URL 复用答案。代码保存和正式评测前后读取实际源码，绑定候选 hash。失败、未知状态和费用预留保留在运行记录中，原轮询未确认的评测可用 `--reconcile` 进行只读核验。
+
+```powershell
+go run ./cmd/coursebatch --config artifacts/course-run/local-settings.json --targets artifacts/course-run/targets.json --bank artifacts/answer-module/private/live.sqlite --out artifacts/course-run --course COURSE
+```
+
+配置文件仅在本地提供 login、password、api_key；关卡清单提供 homework_id、game、challenge_id、kind 和名称。不把这些本地文件加入 Git 或镜像。`--kind programming` / `--kind choice` 可分批运行；`--challenge ID` 限定单关。`--source FILE` 与 `--candidate FILE` 仅用于显式选择的一关，分别提交经过复核的源码或选择题候选；复核源码的自测观察与正式评测证据分别保存，只有正式结果和目标关卡满分都确认才标记通过。
+
+模型 HTTP 账本保留 usage 与 finish_reason，截断调用也计入；不保存完整模型响应、推理文本、密钥或认证头。`--import-usage` 可将该批次完整账本及余额报告写入题库，重复导入同一账本不会重复计费。账本的 USD 金额是配置峰时单价估算，实际额度扣减以同币种运行前后余额为准；同一批次的 HTTP 账本与单关 solver 账本是不同视图，不能重复相加。
