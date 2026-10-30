@@ -48,6 +48,21 @@ func TestDeepSeekWireAndStrictCandidate(t *testing.T) {
 	if got.Model != "deepseek-flash" || result.ProviderRequestID != "req-test" || result.Usage.CacheHitTokens != 3 || result.Usage.ReasoningTokens != 2 {
 		t.Fatalf("metadata not preserved: %#v", result)
 	}
+	var userPayload map[string]any
+	if err := json.Unmarshal([]byte(got.Messages[1].Content), &userPayload); err != nil {
+		t.Fatal(err)
+	}
+	contracts, ok := userPayload["file_contract"].([]any)
+	if !ok || len(contracts) != 1 {
+		t.Fatalf("file contract missing from model payload: %#v", userPayload["file_contract"])
+	}
+	contract := contracts[0].(map[string]any)
+	if contract["filename"] != "main.cpp" && contract["filename"] != "src/main.cpp" {
+		t.Fatalf("filename not forwarded: %#v", contract)
+	}
+	if contract["extension"] != ".cpp" || contract["language"] != "cpp" {
+		t.Fatalf("file type not forwarded: %#v", contract)
+	}
 	if result.Candidate.Files[0].Content == "" {
 		t.Fatal("candidate missing")
 	}

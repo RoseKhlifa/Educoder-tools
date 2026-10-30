@@ -92,6 +92,8 @@ go run ./cmd/educoder solve --course COURSE --homework HOMEWORK_ID --game GAME -
 
 The database stores public snapshots, exact source hashes, candidate files, validation summaries, run checkpoints and integer token-cost usage. Session cookies, account credentials, `sec_key`, runtime URLs, ports and other execution materials stay in memory. For container deployment, mount the database under a dedicated writable `/data` volume; the compiled application filesystem remains read-only.
 
+The model prompt receives an explicit file contract for every allowed file: exact server path, filename, extension and language. The suffix is authoritative, so a task whose editor file is `1.h` is presented as a header file even when the platform labels its environment `C/C++`; the answer validator still requires the exact path set.
+
 Replay the supplied recording locally without credentials or network requests:
 
 ```powershell
