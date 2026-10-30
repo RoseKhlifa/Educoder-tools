@@ -1,6 +1,6 @@
 FROM golang:1.25.5-alpine AS build
 WORKDIR /src
-COPY go.mod VERSION version.go ./
+COPY go.mod go.sum VERSION version.go ./
 COPY cmd/reuse ./cmd/reuse
 COPY internal/compat ./internal/compat
 COPY internal/educoder ./internal/educoder

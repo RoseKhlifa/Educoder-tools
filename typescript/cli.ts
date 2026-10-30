@@ -3,6 +3,7 @@ import { createInterface } from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { loadProtocolConstants, HttpTransport } from './protocol.ts';
 import { EducoderClient, HarTransport, type Course, type Homework } from './client.ts';
+import { replayCodingHar } from './programming.ts';
 
 type Args = { command: string; course?: string; homework?: number; shixun?: string; har?: string; json: boolean; trace: boolean; status?: string; pageSize?: number; passwordStdin: boolean; constants?: string };
 
@@ -53,12 +54,16 @@ function printRows(rows: Record<string, unknown>[]): void {
 async function main(): Promise<void> {
   const args = parse(process.argv.slice(2));
   const constants = await loadProtocolConstants(args.constants);
+  if (args.command === 'coding-replay' || args.command === 'coding-analyze') {
+    if (!args.har) throw new Error(`${args.command} 需要 --har <本地录制路径>`);
+    print(await replayCodingHar(args.har, constants), true); return;
+  }
   const transport = args.har ? await HarTransport.load(args.har) : new HttpTransport(constants, {
     trace: args.trace ? event => console.error(`[trace] ${event.method} ${event.path} -> ${event.status}`) : undefined,
   });
   const client = new EducoderClient(transport, constants, { pageSize: args.pageSize });
   const offline = Boolean(args.har);
-  if (offline) await client.currentUser();
+  if (offline && transport instanceof HarTransport) client.user = transport.restoreRecordedUser();
   else {
     const login = process.env.EDUCODER_LOGIN;
     const password = args.passwordStdin ? await passwordFromStdin() : process.env.EDUCODER_PASSWORD;

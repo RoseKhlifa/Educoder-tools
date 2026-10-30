@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"educoder-cli/internal/educoder"
 )
@@ -40,8 +41,17 @@ func run() error {
 	baseURL := flags.String("base-url", educoder.DefaultBaseURL, "API 根地址")
 	jsonOutput := flags.Bool("json", false, "输出 JSON")
 	trace := flags.Bool("trace", false, "向 stderr 输出请求方法/路径/状态码")
+	game := flags.String("game", "", "已进入关卡的 game.identifier")
+	filePath := flags.String("path", "", "challenge.path 中的精确文件路径")
+	source := flags.String("source", "", "待保存的本地 UTF-8 代码文件")
+	stdinFile := flags.String("stdin-file", "", "自测标准输入文件（保留空格和换行）")
+	expectedFile := flags.String("expected-file", "", "自测预期输出文件（仅归一 CRLF）")
+	forSubmit := flags.Bool("for-submit", false, "save 使用 evaluate=1，默认 evaluate=0")
+	timeout := flags.Duration("timeout", 2*time.Minute, "代码题读取/运行/提交的总时限")
+	pollInterval := flags.Duration("poll-interval", time.Second, "评测轮询间隔")
+	maxOutput := flags.Int64("max-output-bytes", 1<<20, "自测输出字节上限")
 	flags.Usage = func() {
-		fmt.Fprint(flags.Output(), "Educoder 协议终端客户端\n\n用法: go run ./cmd/educoder <login|courses|tasks|enter|flow> [参数]\n\nflow 默认列课堂和实训任务；提供 --course 与 --homework 后进入指定任务。\n账号密码只在本次进程内存中使用。\n")
+		fmt.Fprint(flags.Output(), "Educoder 协议终端客户端\n\n用法: go run ./cmd/educoder <login|courses|tasks|enter|flow|read|save|self-test|submit|progress> [参数]\n\nflow 默认列课堂和实训任务；提供 --course 与 --homework 后进入指定任务。\nread 读取题干与现存编辑器代码；save 保存；self-test 保存后自测；submit 保存后提交并轮询；progress 读取作业关卡状态。\n代码操作使用 --course --homework --game，保存/自测/提交另需 --path --source，自测另需 --stdin-file。\n账号密码只在本次进程内存中使用。\n")
 		flags.PrintDefaults()
 	}
 	if err := flags.Parse(args); err != nil {
@@ -53,7 +63,8 @@ func run() error {
 	if flags.NArg() != 0 {
 		return fmt.Errorf("未识别的位置参数: %s", flags.Arg(0))
 	}
-	if command != "login" && command != "courses" && command != "tasks" && command != "enter" && command != "flow" {
+	programmingCommand := command == "read" || command == "save" || command == "self-test" || command == "submit" || command == "progress"
+	if command != "login" && command != "courses" && command != "tasks" && command != "enter" && command != "flow" && !programmingCommand {
 		return fmt.Errorf("未知命令: %s", command)
 	}
 	if (command == "tasks" || command == "enter") && *course == "" {
@@ -64,6 +75,25 @@ func run() error {
 	}
 	if *homework != 0 && *course == "" {
 		return fmt.Errorf("--homework 需要 --course")
+	}
+	if programmingCommand {
+		if *course == "" || *homework <= 0 {
+			return fmt.Errorf("%s 需要 --course 与 --homework", command)
+		}
+		if command != "progress" && *game == "" {
+			return fmt.Errorf("%s 需要 --game", command)
+		}
+		if command == "save" || command == "self-test" || command == "submit" {
+			if *filePath == "" || *source == "" {
+				return fmt.Errorf("%s 需要 --path 与 --source", command)
+			}
+		}
+		if command == "self-test" && *stdinFile == "" {
+			return fmt.Errorf("self-test 需要 --stdin-file")
+		}
+		if *timeout <= 0 || *pollInterval <= 0 || *maxOutput <= 0 {
+			return fmt.Errorf("timeout、poll-interval、max-output-bytes 必须大于 0")
+		}
 	}
 	password := os.Getenv("EDUCODER_PASSWORD")
 	if *passwordStdin {
@@ -103,6 +133,110 @@ func run() error {
 	}
 	if !*jsonOutput {
 		fmt.Printf("登录成功：%s (%s)\n", user.Name, user.Login)
+	}
+	if programmingCommand {
+		ctx, stop := context.WithTimeout(ctx, *timeout)
+		defer stop()
+		if command == "progress" {
+			progress, err := client.HomeworkProgress(ctx, *course, *homework)
+			if err != nil {
+				return err
+			}
+			if *jsonOutput {
+				return outputJSON(progress)
+			}
+			fmt.Printf("作业关卡：%d，已通过：%d\n", len(progress.Challenges), progress.PassedCount)
+			for _, item := range progress.Challenges {
+				fmt.Printf("%d\t%s\tpassed_status=%d\n", item.ChallengeID, item.Name, item.PassedStatus)
+			}
+			return nil
+		}
+		task, err := client.LoadTask(ctx, *course, *homework, *game)
+		if err != nil {
+			return err
+		}
+		if command == "read" {
+			if task.Kind() != educoder.TaskKindProgramming {
+				return outputJSON(map[string]any{"kind": task.Kind(), "task": task})
+			}
+			question, err := client.ReadProgramming(ctx, task)
+			if err != nil {
+				return err
+			}
+			if *jsonOutput {
+				return outputJSON(question)
+			}
+			fmt.Printf("题型：%s\n关卡：%s\n作业关卡数：%d\n\n%s\n", question.Kind, task.Challenge.Subject, task.GameCount, question.Markdown)
+			for _, file := range question.Files {
+				fmt.Printf("\n现存编辑器文件：%s\n文件名：%s\n语言：%s，后缀：%s\n%s\n", file.Path, file.Filename, file.Language, file.Extension, file.Content)
+			}
+			return nil
+		}
+		content, err := os.ReadFile(*source)
+		if err != nil {
+			return fmt.Errorf("读取代码文件: %w", err)
+		}
+		switch command {
+		case "save":
+			saved, err := client.SaveCode(ctx, task, *filePath, string(content), *forSubmit)
+			if err != nil {
+				return err
+			}
+			if *jsonOutput {
+				return outputJSON(saved)
+			}
+			fmt.Printf("已保存：%s，evaluate=%d，commitID=%s\n", *filePath, saved.Evaluate, saved.CommitID)
+			return nil
+		case "self-test":
+			input, err := os.ReadFile(*stdinFile)
+			if err != nil {
+				return fmt.Errorf("读取标准输入: %w", err)
+			}
+			options := educoder.SelfTestOptions{Timeout: *timeout, MaxOutputBytes: *maxOutput}
+			if *expectedFile != "" {
+				expected, err := os.ReadFile(*expectedFile)
+				if err != nil {
+					return fmt.Errorf("读取预期输出: %w", err)
+				}
+				value := string(expected)
+				options.ExpectedOutput = &value
+			}
+			result, err := client.SelfTest(ctx, task, *filePath, string(content), string(input), options)
+			if result != nil {
+				if *jsonOutput {
+					if outputErr := outputJSON(result); outputErr != nil {
+						return outputErr
+					}
+				} else {
+					fmt.Print(result.Output)
+					fmt.Printf("\n自测结束：%t", result.Completed)
+					if result.Matches != nil {
+						fmt.Printf("，输出匹配：%t", *result.Matches)
+					}
+					fmt.Println()
+				}
+			}
+			return err
+		case "submit":
+			result, err := client.SubmitCode(ctx, task, *filePath, string(content), educoder.PollOptions{Timeout: *timeout, Interval: *pollInterval})
+			if err != nil {
+				return err
+			}
+			if *jsonOutput {
+				if err := outputJSON(result); err != nil {
+					return err
+				}
+			} else {
+				fmt.Printf("评测结束：%t，通过：%t\n%s\n", result.Completed, result.Passed, result.LastCompileOutput)
+				if result.NextGame != nil {
+					fmt.Printf("下一关标识：%s\n", *result.NextGame)
+				}
+			}
+			if !result.Passed {
+				return fmt.Errorf("评测已完成，当前关卡未通过")
+			}
+			return nil
+		}
 	}
 	if command == "enter" || command == "flow" && *homework > 0 {
 		task, err := client.Enter(ctx, *course, *homework, *shixun)

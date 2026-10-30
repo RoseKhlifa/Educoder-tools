@@ -10,7 +10,7 @@ The service version comes from `VERSION`; `/healthz` and `/version` report the r
 
 Before publishing, the script checks the staged files for local HAR account/session values, private-key material and forbidden private/generated paths. HAR recordings, credentials, cookies, reports and logs remain local and are not included in Docker build contexts or Git deployment archives.
 
-This workspace contains a terminal-first Go and TypeScript implementation of the minimum authenticated chain observed in `educoder_from_login_to_get_homework.har`.
+This workspace contains modular Go and TypeScript clients for the authenticated classroom/task flow and the code-question chain observed in the supplied local recordings.
 
 ## Protocol extracted from the HAR
 
@@ -47,40 +47,47 @@ go run ./cmd/educoder flow --course NTHPZ75R --homework 3985881 --trace
 
 The client keeps credentials, cookies, and tokens in memory only. It never prints password, cookies, or authorization headers. `--trace` prints only method, path, and status.
 
-## Go Web application
+## Original compiled web application
 
-The browser application uses the same EduCoder protocol client through a server-side session adapter. Build the TypeScript bundle and start the Go server from the repository root:
+The active browser application is `cmd/reuse`, listening on port `11454`. It hosts the existing compiled resources and uses the same signed protocol client with a server-side session. Its exact compatibility routes now include code saving, self-test startup, evaluation startup and evaluation polling. Code and evaluation responses bypass caches. No replacement frontend is generated.
 
 ```powershell
-npm run web:check
-go run ./cmd/web
+go run ./cmd/reuse
 ```
 
-Open [http://localhost:8080/](http://localhost:8080/). The web flow is:
+Deployment instructions remain in `deploy/README.md`; the user manages the external reverse proxy separately.
 
-```text
-登录 -> 我的课堂 -> 选择课堂 -> 任务列表 -> 任务详情 -> 打开官方实训页面
+## Programming questions
+
+The new coding protocol is documented with request order, field dependencies and zero-based HAR entry references in [docs/programming-protocol.md](docs/programming-protocol.md). It classifies the observed code-question discriminators explicitly and keeps other question types unsupported. Question Markdown, exact editor filenames/extensions, UTF-8 code, self-test output, final test results and homework passage states are separate values.
+
+Go adds these explicit operations to the existing client: `LoadTask`, `ReadProgramming`, `ReadCodeFile`, `SaveCode`, `SelfTest`, `BuildCode`, `WaitEvaluation`, `SubmitCode` and `HomeworkProgress`. Each submission uses its own save response, including commit ID and evaluation key. Self-test uses the observed WebSocket subscription and Base64 stream; a matching self-test never triggers submission. A returned `next_game` requires an explicit subsequent load.
+
+After setting the existing login environment variables, use values returned by the selected task; `--path` is the exact server path and `--source` is a local UTF-8 code file:
+
+```powershell
+go run ./cmd/educoder read --course COURSE --homework HOMEWORK_ID --game GAME --json
+go run ./cmd/educoder save --course COURSE --homework HOMEWORK_ID --game GAME --path 'SERVER_FILE.cpp' --source 'LOCAL_FILE.cpp'
+go run ./cmd/educoder self-test --course COURSE --homework HOMEWORK_ID --game GAME --path 'SERVER_FILE.cpp' --source 'LOCAL_FILE.cpp' --stdin-file 'INPUT.txt' --expected-file 'EXPECTED.txt' --json
+go run ./cmd/educoder submit --course COURSE --homework HOMEWORK_ID --game GAME --path 'SERVER_FILE.cpp' --source 'LOCAL_FILE.cpp' --timeout 2m --json
+go run ./cmd/educoder progress --course COURSE --homework HOMEWORK_ID --json
 ```
 
-The Go server keeps the upstream EduCoder client and cookies in an in-memory session keyed by an HttpOnly `educoder_web_session` cookie. Browser responses contain reduced DTOs only. The UI follows the current EduCoder information architecture: blue top navigation, classroom rail, classroom cards, homework list, status pills, search, and a task detail drawer. The official task page opens in a new tab so the student completes the exercise there.
+The TypeScript module `typescript/programming.ts` exposes `ProgrammingClient` over the existing `EducoderClient` and transport. Its `task`, `readFile`, `save`, `selfTest`, `startEvaluation`, `pollEvaluation` and `progress` methods provide the same protocol stages. Save and self-test are explicit separate calls in TypeScript; the Go `SelfTest` convenience method saves first.
 
-Web API routes:
+Replay the supplied recording locally without credentials or network requests:
 
-```text
-POST /api/auth/login
-GET  /api/auth/me
-POST /api/auth/logout
-GET  /api/courses
-GET  /api/courses/:identifier/homeworks
-GET  /api/courses/:identifier/homeworks/:homeworkId/enter
-GET  /healthz
+```powershell
+node typescript/cli.ts coding-replay --har openwork_to_finishwork.har
 ```
 
-Configuration is available through `HTTP_ADDR`, `WEB_ORIGIN`, `EDUCODER_API_BASE_URL`, `SESSION_TTL`, `WEB_STATIC_DIR`, and `WEB_COOKIE_SECURE`. The server does not implement automatic answer entry, automatic submission, or score manipulation.
+The command sorts by request timestamp, matches method/path/query/body, consumes repeated responses and 304 entries in order, and replays the recorded WebSocket messages. It reports two self-test matches, two successful evaluations and refreshed `passed_count` from 0 to 2. It reuses recorded submitted code as evidence and does not generate answers. The first level has no captured save before self-test, and the last exit autosave has no captured response body; the report preserves those gaps. The captured `shixun_exec` 304 also has no response body, so replay starts with the actual task responses.
+
+Editor content is the current workspace code, not a guaranteed pristine template. The first level already contains filled code at entry; the second contains a blank function template. This recording contains one `.cpp` per level, with no observed directory tree or `.h` requests. Other question types, multiple-file evaluation and upstream failure/queue/retry branches need further recordings.
 
 ## TypeScript CLI
 
-The TypeScript CLI has the same commands and environment variables:
+The TypeScript CLI retains `login`, `courses`, `tasks`, `enter` and `flow` with the same credential environment variables, and adds the offline `coding-replay` command described above:
 
 ```powershell
 npm test

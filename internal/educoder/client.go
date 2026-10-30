@@ -105,6 +105,8 @@ type Homework struct {
 
 type Task struct {
 	RequiredStatus string `json:"status"`
+	ST             *int   `json:"st"`
+	GameCount      int    `json:"game_count"`
 	Game           struct {
 		ID         int64  `json:"id"`
 		Identifier string `json:"identifier"`
@@ -112,20 +114,33 @@ type Task struct {
 		Status     int    `json:"status"`
 	} `json:"game"`
 	Challenge struct {
-		ID          int64  `json:"id"`
-		Subject     string `json:"subject"`
-		Description string `json:"task_pass"`
-		Path        string `json:"path"`
+		ID           int64  `json:"id"`
+		Subject      string `json:"subject"`
+		Description  string `json:"task_pass"`
+		Path         string `json:"path"`
+		ST           *int   `json:"st"`
+		WithCodeFile *bool  `json:"with_code_file"`
 	} `json:"challenge"`
 	Shixun struct {
 		ID         int64  `json:"id"`
 		Identifier string `json:"identifier"`
 		Name       string `json:"name"`
 	} `json:"shixun"`
-	CourseIdentifier string  `json:"course_identifier"`
-	HomeworkID       int64   `json:"homework_common_id"`
-	NextGame         *string `json:"next_game"`
-	URL              string  `json:"url"`
+	MyShixun struct {
+		ID         int64  `json:"id"`
+		Identifier string `json:"identifier"`
+	} `json:"myshixun"`
+	User       User `json:"user"`
+	CodeEditor struct {
+		EnvironmentID int64  `json:"shixun_environment_id"`
+		Name          string `json:"name"`
+	} `json:"code_editor"`
+	Environments     []ProgrammingEnvironment `json:"shixun_environments"`
+	TestSets         []TestSet                `json:"test_sets"`
+	CourseIdentifier string                   `json:"course_identifier"`
+	HomeworkID       int64                    `json:"homework_common_id"`
+	NextGame         *string                  `json:"next_game"`
+	URL              string                   `json:"url"`
 }
 
 type Client struct {
@@ -146,6 +161,12 @@ func New(baseURL string) *Client {
 }
 
 func (c *Client) request(ctx context.Context, method, path string, query url.Values, body any, ref string, out any) error {
+	return c.requestWithStatuses(ctx, method, path, query, body, ref, out, 0)
+}
+
+// Some task endpoints use positive status values as lifecycle states. Callers
+// select only the statuses observed for that endpoint; other APIs keep status 0.
+func (c *Client) requestWithStatuses(ctx context.Context, method, path string, query url.Values, body any, ref string, out any, statuses ...int) error {
 	if query == nil {
 		query = url.Values{}
 	}
@@ -194,28 +215,54 @@ func (c *Client) request(ctx context.Context, method, path string, query url.Val
 	req.Header.Set("Pc-Authorization", session)
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return fmt.Errorf("%s %s: %w", method, path, err)
+		// Transport errors can include the full signed URL. Preserve context
+		// cancellation for errors.Is, and keep other transport details private.
+		if ctx.Err() != nil {
+			return fmt.Errorf("%s %s: %w", method, path, ctx.Err())
+		}
+		return fmt.Errorf("%s %s: request failed", method, path)
 	}
 	defer resp.Body.Close()
 	if c.Trace != nil {
 		c.Trace(fmt.Sprintf("%s %s -> %d", method, path, resp.StatusCode))
 	}
 	// Keep the response bounded; the task descriptions can be fairly large.
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, (16<<20)+1))
 	if err != nil {
 		return err
+	}
+	if len(data) > 16<<20 {
+		return errors.New("upstream response exceeded limit")
+	}
+	if resp.StatusCode == http.StatusNotModified {
+		return errResponseNotModified
 	}
 	var envelope struct {
 		Status  json.RawMessage `json:"status"`
 		Message string          `json:"message"`
 	}
 	_ = json.Unmarshal(data, &envelope)
+	message := envelope.Message
+	// Runtime APIs may echo execution credentials in an error message. Keep
+	// their public errors to endpoint/status metadata, while preserving login's
+	// existing actionable messages (captcha, password validation, and so on).
+	if isProgrammingExecutionPath(path) {
+		message = ""
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("%s %s: HTTP %d%s", method, path, resp.StatusCode, messageSuffix(envelope.Message))
+		return fmt.Errorf("%s %s: HTTP %d%s", method, path, resp.StatusCode, messageSuffix(message))
 	}
 	var code float64
-	if len(envelope.Status) > 0 && json.Unmarshal(envelope.Status, &code) == nil && code != 0 {
-		return fmt.Errorf("%s %s: API status %v%s", method, path, code, messageSuffix(envelope.Message))
+	if len(envelope.Status) > 0 && json.Unmarshal(envelope.Status, &code) == nil {
+		accepted := false
+		for _, allowed := range statuses {
+			if code == float64(allowed) {
+				accepted = true
+			}
+		}
+		if !accepted {
+			return fmt.Errorf("%s %s: API status %v%s", method, path, code, messageSuffix(message))
+		}
 	}
 	if out != nil {
 		if err := json.Unmarshal(data, out); err != nil {
@@ -223,6 +270,16 @@ func (c *Client) request(ctx context.Context, method, path string, query url.Val
 		}
 	}
 	return nil
+}
+
+func isProgrammingExecutionPath(path string) bool {
+	if strings.HasPrefix(path, "/api/myshixuns/") && strings.HasSuffix(path, "/update_file.json") {
+		return true
+	}
+	if strings.HasPrefix(path, "/api/tasks/") {
+		return strings.HasSuffix(path, "/game_build.json") || strings.HasSuffix(path, "/game_status.json") || strings.HasSuffix(path, "/log_output")
+	}
+	return false
 }
 
 func messageSuffix(s string) string {
@@ -406,16 +463,7 @@ func (c *Client) Enter(ctx context.Context, course string, homeworkID int64, shi
 	if err := validIdentifier(execution.GameIdentifier); err != nil {
 		return nil, err
 	}
-	var task Task
-	taskURL := "/tasks/" + course + "/" + strconv.FormatInt(homeworkID, 10) + "/" + execution.GameIdentifier
-	if err := c.request(ctx, http.MethodGet, "/api/tasks/"+execution.GameIdentifier+".json", url.Values{"homework_common_id": {strconv.FormatInt(homeworkID, 10)}}, nil, taskURL, &task); err != nil {
-		return nil, err
-	}
-	if task.Game.Identifier == "" {
-		return nil, errors.New("任务详情缺少 game.identifier")
-	}
-	task.URL = c.Origin + taskURL
-	return &task, nil
+	return c.LoadTask(ctx, course, homeworkID, execution.GameIdentifier)
 }
 
 func validIdentifier(s string) error {

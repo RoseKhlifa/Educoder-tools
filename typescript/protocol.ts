@@ -131,6 +131,23 @@ export interface Transport {
   request(method: string, path: string, query?: Record<string, unknown>, body?: unknown): Promise<unknown>;
 }
 
+/** A real 304 carries no representation. Callers must keep polling, not invent a response. */
+export const NOT_MODIFIED = Object.freeze({ notModified: true as const });
+export function isNotModified(value: unknown): value is typeof NOT_MODIFIED {
+  return Boolean(value && typeof value === 'object' && (value as any).notModified === true);
+}
+
+/** These two routes use status as a build/evaluation state, unlike ordinary API envelopes. */
+export function validateApiResponse(method: string, path: string, value: unknown): unknown {
+  if (!value || typeof value !== 'object') return value;
+  const data = value as Record<string, unknown>;
+  if (typeof data.status !== 'number' || data.status === 0) return value;
+  if (method.toUpperCase() === 'POST' && /^\/api\/tasks\/[^/]+\/game_build\.json$/.test(path) && data.status === 1) return value;
+  if (method.toUpperCase() === 'GET' && /^\/api\/tasks\/[^/]+\/game_status\.json$/.test(path) && data.status === 2) return value;
+  // Upstream text may contain account or session data. Keep errors to route and status.
+  throw new Error(`${path}: status=${data.status}`);
+}
+
 export class HttpTransport implements Transport {
   readonly constants: ProtocolConstants;
   readonly jar = new CookieJar();
@@ -174,17 +191,11 @@ export class HttpTransport implements Transport {
     });
     this.trace?.({ method: method.toUpperCase(), path: url.pathname, status: response.status });
     this.jar.setFromHeaders(url, response.headers.getSetCookie());
+    if (response.status === 304) return NOT_MODIFIED;
     const text = await response.text();
     if (!response.ok) throw new Error(`HTTP ${response.status}：${url.pathname}`);
     let data: unknown;
     try { data = JSON.parse(text); } catch { throw new Error(`接口未返回 JSON：${url.pathname}`); }
-    if (data && typeof data === 'object') {
-      const obj = data as Record<string, unknown>;
-      if (typeof obj.status === 'number' && obj.status !== 0) {
-        const reason = typeof obj.message === 'string' ? obj.message : '请求未成功';
-        throw new Error(`${url.pathname}：${reason} (status=${obj.status})`);
-      }
-    }
-    return data;
+    return validateApiResponse(method, url.pathname, data);
   }
 }

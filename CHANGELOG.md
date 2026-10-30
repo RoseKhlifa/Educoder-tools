@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.5 — 2026-10-31
+
+- Reproduce recorded programming-question files, self-tests and evaluations in Go and TypeScript
+
 ## 0.1.4 — 2026-10-30
 
 - Replace decorative media with lightweight SVGs, remove promotional video loading, and refresh compiled asset fingerprints

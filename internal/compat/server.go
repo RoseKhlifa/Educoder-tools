@@ -1,5 +1,5 @@
 // Package compat serves the published Educoder build and an explicit list of
-// observed read-only page compatibility routes plus login. It does not
+// observed page compatibility routes, login and programming actions. It does not
 // implement a general HTTP reverse proxy.
 package compat
 
@@ -185,12 +185,35 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 	if strings.HasSuffix(path, "/courses.json") {
 		query.Set("username", item.login)
 	}
+	var requestBody json.RawMessage
+	if r.Method == http.MethodPost {
+		defer r.Body.Close()
+		const maxCodeRequest = 2 << 20
+		body, err := io.ReadAll(io.LimitReader(r.Body, maxCodeRequest+1))
+		if err != nil || len(body) > maxCodeRequest {
+			apiError(w, http.StatusRequestEntityTooLarge, "代码请求超过大小限制")
+			return
+		}
+		// The observed timer POST has no body; other programming actions send
+		// a JSON object. Preserve those bytes, including code whitespace.
+		if len(body) > 0 || !strings.HasSuffix(path, "/cost_time.json") {
+			var object map[string]json.RawMessage
+			if json.Unmarshal(body, &object) != nil || object == nil {
+				apiError(w, http.StatusBadRequest, "请求需要 JSON 对象")
+				return
+			}
+		}
+		requestBody = body
+	}
 	fetch := func(ctx context.Context) (apiResponse, error) {
 		started := time.Now()
-		response, err := client.RecordedRequest(ctx, r.Method, path, query, nil)
+		response, err := client.RecordedRequest(ctx, r.Method, path, query, requestBody)
 		upstreamTime := time.Since(started)
 		if err != nil {
 			return apiResponse{}, errors.New("上游请求失败")
+		}
+		if len(response.Body) == 0 {
+			return apiResponse{status: response.StatusCode, upstream: upstreamTime}, nil
 		}
 		started = time.Now()
 		body, err := cleanJSON(response.Body, item.marker, client.RecordedSecrets())

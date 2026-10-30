@@ -14,15 +14,22 @@ import (
 	"time"
 )
 
-// RecordedRoute identifies the observed read-only page compatibility routes
-// for the login, classroom, homework and task flow, together with the login
-// POST. Evidence comes from HAR entries, the published frontend and live page
+// RecordedRoute identifies the observed page and programming compatibility
+// routes. Evidence comes from HAR entries, the published frontend and live page
 // requests. This is not a general forwarding API: unlisted methods and paths
 // never reach a server.
 func RecordedRoute(method, path string) bool {
 	path = NormalizeObservedPath(path)
 	if method == http.MethodPost && path == "/api/accounts/login.json" {
 		return true
+	}
+	if method == http.MethodPost {
+		parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+		if len(parts) != 4 || parts[0] != "api" || validIdentifier(parts[2]) != nil {
+			return false
+		}
+		return parts[1] == "myshixuns" && parts[3] == "update_file.json" ||
+			parts[1] == "tasks" && (parts[3] == "log_output" || parts[3] == "game_build.json" || parts[3] == "cost_time.json")
 	}
 	if method != http.MethodGet {
 		return false
@@ -58,7 +65,7 @@ func RecordedRoute(method, path string) bool {
 	case "shixuns":
 		return parts[3] == "shixun_exec.json"
 	case "tasks":
-		return parts[3] == "rep_content.json"
+		return parts[3] == "rep_content.json" || parts[3] == "game_status.json"
 	case "homework_commons":
 		return positiveObservedID(parts[2]) && (parts[3] == "show_comment.json" || parts[3] == "shixun_challenge_data.json")
 	case "shixun_homeworks":
@@ -160,6 +167,9 @@ func (c *Client) RecordedRequest(ctx context.Context, method, path string, query
 	data, err := io.ReadAll(io.LimitReader(resp.Body, (16<<20)+1))
 	if err != nil || len(data) > 16<<20 {
 		return nil, errors.New("upstream response exceeded limit")
+	}
+	if len(data) == 0 && (resp.StatusCode == http.StatusNotModified || method == http.MethodPost && path != "/api/accounts/login.json") {
+		return &RecordedResponse{StatusCode: resp.StatusCode, Body: data}, nil
 	}
 	if !json.Valid(data) {
 		return nil, errors.New("upstream did not return JSON")
