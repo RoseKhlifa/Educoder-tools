@@ -1,6 +1,6 @@
 {
   "name": "educoder-protocol-cli",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "Terminal client for the Educoder login, courses, homework and task protocol",

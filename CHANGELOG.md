@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.2 — 2026-10-30
+
+- Fix user and teacher avatars with verified image responses and memory-only caching
+
 ## 0.1.1 — 2026-10-30
 
 - Default service port is now 11454, with application version/commit information available from health and version endpoints.

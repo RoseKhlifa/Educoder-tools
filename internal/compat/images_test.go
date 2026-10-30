@@ -57,7 +57,7 @@ func TestLocalImagesUseRealContentTypeAndCanonicalRoutes(t *testing.T) {
 		{"/_assets/public.educoder.net/other/banner", 404, ""},
 		{"/_assets/prod-attachments.oss-accelerate.aliyuncs.com/2024/06/3e612f197b3294f809afa34c748d83a8_1719380870470.png", 200, "image/jpeg"},
 		{"/_assets/prod-attachments.oss-accelerate.aliyuncs.com/2024/06/private.png", 404, ""},
-		{"/images/avatars/User/missing", 404, ""},
+		{"/images/avatars/User/missing", 200, "image/jpeg"},
 		{"/_assets/public.educoder.net/PortalImage/missing", 404, ""},
 		{"/_assets/unknown.educoder.net/images/avatars/User/a", 404, ""},
 	} {

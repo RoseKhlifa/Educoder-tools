@@ -126,7 +126,9 @@ Windows 推荐独立后台进程启动，避免交互终端结束后服务一起
 
 顶部全局网络错误横幅已按用户要求停用，仅修改原 HTML 中的 `showNetworkErrorTip` 钩子，不重写页面组件。实际请求错误仍由原业务逻辑处理。
 
-图片补齐工具 `tools/image_assets.py` 获取公开配置与 HAR 引用的真实图片，支持无扩展名、缓存查询参数和实际图片 MIME 核验。Go 将已下载图片映射为同源静态地址；API 首页中的图片也会指向本地资源。运行时不下载或代理缺失图片。
+图片补齐工具 `tools/image_assets.py` 获取公开配置与 HAR 引用的真实图片，支持无扩展名、缓存查询参数和实际图片 MIME 核验。Go 将已下载公共图片映射为同源静态地址；API 首页中的图片也会指向本地资源。
+
+用户和教师头像通过专用 `/images/avatars/User/{key}` 读取器按需加载，兼容原编译包对应的 `/_assets/` 地址。读取器只访问固定官方头像源，发送正确 Referer，按实际 PNG/JPEG/GIF/WebP/AVIF 字节返回图片类型；失效头像回落到官方真实默认头像 `User/b`。头像仅在进程内有界缓存，不写入发布资源、磁盘或 Git。其他缺失静态文件仍返回 404，不进行通用网络代理。
 
 ```powershell
 python .\resource-reuse\tools\image_assets.py --har .\educoder_from_login_to_get_homework.har

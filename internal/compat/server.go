@@ -61,6 +61,7 @@ type Server struct {
 	store          *sessionStore
 	newClient      func() *educoder.Client
 	unsupportedLog *log.Logger
+	avatars        *avatarService
 }
 
 func NewServer(cfg Config) *Server {
@@ -78,6 +79,7 @@ func NewServer(cfg Config) *Server {
 		cfg.SessionTTL = defaults.SessionTTL
 	}
 	s := &Server{config: cfg, store: newSessionStore(cfg.SessionTTL), unsupportedLog: log.New(os.Stderr, "reuse unsupported API: ", log.LstdFlags)}
+	s.avatars = newAvatarService(cfg.StaticDir)
 	s.newClient = func() *educoder.Client {
 		client := educoder.New(cfg.APIBaseURL)
 		client.HTTP.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
@@ -91,6 +93,9 @@ func (s *Server) Sweep()                { s.store.sweep() }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-App-Version", buildinfo.Current())
+	if s.serveAvatar(w, r) {
+		return
+	}
 	if r.URL.Path == "/healthz" || r.URL.Path == "/version" {
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", http.MethodGet)

@@ -77,6 +77,10 @@ func newCompatFixture(t *testing.T) *compatFixture {
 	}))
 	t.Cleanup(upstream.Close)
 	f.server = NewServer(Config{APIBaseURL: upstream.URL, StaticDir: t.TempDir(), SessionTTL: time.Hour, CookieSecure: true})
+	// Tests must never fetch public avatars from the real network.
+	f.server.avatars.client.Transport = avatarRoundTripper(func(*http.Request) (*http.Response, error) {
+		return avatarResponse(http.StatusNotFound, nil), nil
+	})
 	return f
 }
 

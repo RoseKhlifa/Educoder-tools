@@ -52,3 +52,25 @@ func TestDownloadedImageURLsLocalizeWithoutChangingAPIAndMissingImages(t *testin
 		}
 	}
 }
+
+func TestOfficialAvatarURLsUseDedicatedLocalRouteWithoutDownloadedFiles(t *testing.T) {
+	s := NewServer(Config{StaticDir: t.TempDir()})
+	for _, host := range []string{"data.educoder.net", "ali-cdn.educoder.net", "public.educoder.net"} {
+		for _, tc := range []struct{ input, expected string }{
+			{"/images/avatars/User/b", "/images/avatars/User/b"},
+			{"/images/avatars/User/avatar_12-Ab?t=123", "/images/avatars/User/avatar_12-Ab?t=123"},
+			{"/images/avatars/User/avatar_12-Ab?t=123&unused=secret", "/images/avatars/User/avatar_12-Ab?t=123"},
+		} {
+			if got := s.localImageURL("https://" + host + tc.input); got != tc.expected {
+				t.Errorf("%s%s -> %q, want %q", host, tc.input, got, tc.expected)
+			}
+		}
+	}
+	// Relative avatar keys remain compatible with the original UI's IMG_SERVER
+	// concatenation. Unsupported hosts and malformed keys do not gain a route.
+	for _, value := range []string{"avatars/User/b", "https://unrelated.example/images/avatars/User/b", "https://data.educoder.net/images/avatars/User/../private", "https://data.educoder.net/images/avatars/User/"} {
+		if got := s.localImageURL(value); got != value {
+			t.Errorf("unexpected rewrite %q -> %q", value, got)
+		}
+	}
+}

@@ -26,6 +26,8 @@ bash deploy/install-release.sh VERSION FULL_COMMIT_SHA
 
 The version and commit arguments must exactly identify the published archive. `/healthz` and `/version` expose the running version and commit. Login sessions are in memory and expire across service replacements.
 
+User and teacher avatars are fetched by a dedicated fixed-source image reader with an in-memory cache. They are not baked into the image or persisted in the repository/container filesystem; runtime HTTPS access to the official avatar source is required. Responses use verified image MIME types and private/no-store browser caching.
+
 ## Rollback
 
 Keep the previous release directory and Docker image. From that directory, set its `APP_VERSION` and `VCS_REF`, then run:

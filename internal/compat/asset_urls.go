@@ -65,6 +65,19 @@ func (s *Server) localImageURL(value string) string {
 			return value
 		}
 	}
+	// User avatars are session-independent public resources loaded on demand by
+	// the dedicated avatar handler; they must not require a checked-in file.
+	if host == "data.educoder.net" || host == "ali-cdn.educoder.net" || host == "public.educoder.net" {
+		if key, matched := matchAvatarPath(parsed.Path); matched && validAvatarKey(key) {
+			query := parsed.Query()
+			parsed.Scheme, parsed.Host, parsed.RawPath, parsed.Fragment = "", "", "", ""
+			parsed.RawQuery = ""
+			if timestamp := query.Get("t"); timestamp != "" && validAvatarQuery("t="+url.QueryEscape(timestamp)) {
+				parsed.RawQuery = "t=" + url.QueryEscape(timestamp)
+			}
+			return parsed.String()
+		}
+	}
 	file, ok := localFile(filepath.Join(s.config.StaticDir, host), strings.TrimPrefix(parsed.Path, "/"))
 	if !ok || !localImageFile(file) {
 		return value
