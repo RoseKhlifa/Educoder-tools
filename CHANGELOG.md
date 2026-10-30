@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.14 — 2026-10-31
+
+- Verify objective full scores using exact decimal progress in every output mode
+
 ## 0.1.13 — 2026-10-31
 
 - Require exact full score before advancing objective-question levels

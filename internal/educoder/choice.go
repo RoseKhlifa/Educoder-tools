@@ -8,7 +8,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/big"
 	"net/http"
 	"net/url"
 	"sort"
@@ -170,6 +169,8 @@ type ChoiceSubmitResult struct {
 	ScoreKnown         bool            `json:"score_known"`
 	Score              string          `json:"score,omitempty"`
 	MaxScore           string          `json:"max_score,omitempty"`
+	ScoreCheck         string          `json:"score_check"`
+	ScoreDiagnostic    string          `json:"score_diagnostic,omitempty"`
 }
 
 // ObjectiveSubmit sends only the observed choose_build mutation. It never
@@ -199,31 +200,40 @@ func (c *Client) ObjectiveSubmit(ctx context.Context, task *ChoiceTask, answers 
 	if err := c.requestWithStatuses(ctx, http.MethodPost, "/api/tasks/"+task.Task.Game.Identifier+"/choose_build.json", query, body, taskRef(task.Task), &response, 0, 1, 2); err != nil {
 		return nil, err
 	}
-	if response.Correct != nil {
-		response.Passed = response.Count > 0 && *response.Correct == response.Count
+	// These are locally derived fields; never trust similarly named upstream
+	// fields or a generic submitted/completed flag to prove a full-score result.
+	response.Passed, response.ScoreKnown = false, false
+	response.Score, response.MaxScore = "", ""
+	response.ScoreCheck, response.ScoreDiagnostic = "unconfirmed", ""
+	progress, progressErr := c.HomeworkProgress(ctx, task.Task.CourseIdentifier, task.Task.HomeworkID)
+	if progressErr != nil {
+		response.ScoreDiagnostic = "提交已返回，关卡分数读取失败，满分尚未确认；请重新读取进度"
+		return &response, nil
 	}
-	// Some objective assignments hide choose_correct_num. In that case the
-	// homework progress response is the authoritative score record. A level is
-	// reusable only when earned score equals its configured full score.
-	if response.Correct == nil && task.Task.CourseIdentifier != "" {
-		if progress, progressErr := c.HomeworkProgress(ctx, task.Task.CourseIdentifier, task.Task.HomeworkID); progressErr == nil {
-			for _, level := range progress.Challenges {
-				if level.ChallengeID != task.Task.Challenge.ID || level.ChallengeScore == "" || level.GameScore == "" {
-					continue
-				}
-				response.ScoreKnown = true
-				response.Score = level.GameScore
-				response.MaxScore = level.ChallengeScore
-				response.Passed = decimalEqual(level.GameScore, level.ChallengeScore)
-				break
-			}
+	for _, level := range progress.Challenges {
+		if level.ChallengeID != task.Task.Challenge.ID {
+			continue
 		}
+		response.Score, response.MaxScore = level.GameScore, level.ChallengeScore
+		known, full := scoreComparison(level.GameScore, level.ChallengeScore)
+		response.ScoreKnown = known
+		if !known {
+			response.ScoreDiagnostic = "目标关卡得分或正满分分值缺失/无效，满分尚未确认"
+			return &response, nil
+		}
+		response.ScoreCheck = "not_full_score"
+		if !full {
+			response.ScoreDiagnostic = "目标关卡尚未获得满分"
+			return &response, nil
+		}
+		if response.Count != len(task.Questions) || (response.Correct != nil && *response.Correct != response.Count) {
+			response.ScoreCheck = "unconfirmed"
+			response.ScoreDiagnostic = "分值与本次提交的题目统计不一致，满分尚未确认"
+			return &response, nil
+		}
+		response.Passed, response.ScoreCheck = true, "full_score"
+		return &response, nil
 	}
+	response.ScoreDiagnostic = "进度响应缺少目标关卡，满分尚未确认"
 	return &response, nil
-}
-
-func decimalEqual(left, right string) bool {
-	a, okA := new(big.Rat).SetString(strings.TrimSpace(left))
-	b, okB := new(big.Rat).SetString(strings.TrimSpace(right))
-	return okA && okB && a.Cmp(b) == 0
 }

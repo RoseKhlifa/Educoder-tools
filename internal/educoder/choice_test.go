@@ -39,6 +39,8 @@ func TestChoiceLoadAndSubmitUsesOnlyChooseBuild(t *testing.T) {
 				t.Error(err)
 			}
 			_, _ = w.Write([]byte(`{"status":1,"choose_correct_num":2,"challenge_chooses_count":2,"test_sets":[]}`))
+		case "/api/homework_commons/44/shixun_challenge_data.json":
+			_, _ = w.Write([]byte(`{"data":{"challenge_settings":[{"challenge_id":9,"challenge_score":13.3,"game_score":"13.30"}]}}`))
 		default:
 			t.Errorf("unexpected route %s", r.URL.Path)
 			http.NotFound(w, r)

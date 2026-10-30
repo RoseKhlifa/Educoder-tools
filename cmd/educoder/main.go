@@ -192,18 +192,7 @@ func run() error {
 			if submitErr != nil {
 				return submitErr
 			}
-			if *jsonOutput {
-				return outputJSON(map[string]any{"candidate": result.Candidate, "evaluation": submitted})
-			}
-			if submitted.ScoreKnown {
-				fmt.Printf("客观题提交：得分=%s/%s，通过=%t\n", submitted.Score, submitted.MaxScore, submitted.Passed)
-			} else {
-				fmt.Printf("客观题提交：正确数=%d/%d，通过=%t（平台未公开满分分值）\n", valueOrZero(submitted.Correct), submitted.Count, submitted.Passed)
-			}
-			if !submitted.Passed {
-				return fmt.Errorf("客观题未达到关卡满分，不进入下一关")
-			}
-			return nil
+			return writeObjectiveSubmission(os.Stdout, result.Candidate, submitted, *jsonOutput)
 		}
 		if *jsonOutput {
 			return outputJSON(result.Candidate)
@@ -418,11 +407,31 @@ func outputJSON(value any) error {
 	return enc.Encode(value)
 }
 
-func valueOrZero(value *int) int {
-	if value == nil {
-		return 0
+func writeObjectiveSubmission(w io.Writer, candidate answer.ObjectiveCandidate, submitted *educoder.ChoiceSubmitResult, jsonOutput bool) error {
+	if submitted == nil {
+		return fmt.Errorf("客观题缺少提交结果，满分尚未确认")
 	}
-	return *value
+	if jsonOutput {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(map[string]any{"candidate": candidate, "evaluation": submitted}); err != nil {
+			return err
+		}
+	} else {
+		if _, err := fmt.Fprintf(w, "客观题提交：得分=%s/%s，分值已读取=%t，通过=%t\n", submitted.Score, submitted.MaxScore, submitted.ScoreKnown, submitted.Passed); err != nil {
+			return err
+		}
+	}
+	// JSON output is a report, not an indication that the objective passed.
+	// Both output modes return an error for incomplete or partial scores.
+	if !submitted.Passed {
+		if submitted.ScoreDiagnostic != "" {
+			return fmt.Errorf("%s；本关未确认满分，不进入下一关", submitted.ScoreDiagnostic)
+		}
+		return fmt.Errorf("客观题未确认关卡满分，不进入下一关")
+	}
+	return nil
 }
 
 func printCourses(courses []educoder.Course) {

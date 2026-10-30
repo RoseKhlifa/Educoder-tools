@@ -123,6 +123,8 @@ body: {answer:["A", "BC", ...], challenge_id, subject_id, exercise_id,
        competition_entry_id, smart_plan_page_item_bank_id, ip}
 ```
 
-响应包含 `choose_correct_num`、`challenge_chooses_count`、`test_sets`、`next_game` 和游戏状态字段。部分作业关闭公开正确数时，`choose_correct_num` 可能为空；此时客户端重新读取作业进度，只有 `game_score` 与 `challenge_score` 精确相等才报告通过。`game_original_status=2` 和 `passed_status=2` 只是上下文，不能替代满分比较；部分得分不得进入下一关。它不调用 `update_file`、`log_output`、`game_build` 或代码 WebSocket。
+响应包含 `choose_correct_num`、`challenge_chooses_count`、`test_sets`、`next_game` 和游戏状态字段。部分作业关闭公开正确数时，`choose_correct_num` 可能为空；客户端无论是否公开正确数都重新读取目标关卡进度，只有非负 `game_score` 与正的 `challenge_score` 精确相等才报告通过。JSON 数值 `13.3` 与字符串 `"13.30"` 均按原始十进制值比较，不经过 float64。公开正确数或题目总数若与满分证据矛盾，则仍保留未确认状态。`game_original_status=2` 和 `passed_status=2` 只是上下文，不能替代满分比较；部分得分不得进入下一关。它不调用 `update_file`、`log_output`、`game_build` 或代码 WebSocket。
 
 模型使用单独的 objective prompt 和 `{kind:"objective",answers:[...]}` JSON 契约，选项题干与选项文本进入白名单快照。选择题题库候选和正式验证记录仍需单独扩展，不能把源码 `solution_files` 当作选择题答案。
+
+满分核验结果包含 `score`、`max_score`、`score_known`、`score_check` 和脱敏诊断。`full_score` 为已确认满分，`not_full_score` 为分值明确但非满分，`unconfirmed` 为分值缺失、读取失败或证据矛盾。JSON 模式保留报告，并与普通模式一样对未通过结果返回失败；输出 JSON 本身不等于答题通过。
