@@ -195,7 +195,14 @@ func run() error {
 			if *jsonOutput {
 				return outputJSON(map[string]any{"candidate": result.Candidate, "evaluation": submitted})
 			}
-			fmt.Printf("客观题提交：%d/%d\n", valueOrZero(submitted.Correct), submitted.Count)
+			if submitted.ScoreKnown {
+				fmt.Printf("客观题提交：得分=%s/%s，通过=%t\n", submitted.Score, submitted.MaxScore, submitted.Passed)
+			} else {
+				fmt.Printf("客观题提交：正确数=%d/%d，通过=%t（平台未公开满分分值）\n", valueOrZero(submitted.Correct), submitted.Count, submitted.Passed)
+			}
+			if !submitted.Passed {
+				return fmt.Errorf("客观题未达到关卡满分，不进入下一关")
+			}
 			return nil
 		}
 		if *jsonOutput {

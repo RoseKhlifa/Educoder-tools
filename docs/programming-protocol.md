@@ -123,6 +123,6 @@ body: {answer:["A", "BC", ...], challenge_id, subject_id, exercise_id,
        competition_entry_id, smart_plan_page_item_bank_id, ip}
 ```
 
-响应包含 `choose_correct_num`、`challenge_chooses_count`、`test_sets`、`next_game` 和游戏状态字段。部分作业关闭公开正确数时，`choose_correct_num` 可能为空；此时客户端只在观察到完成状态（本次 `game_original_status=2`，随后作业进度对应 `passed_status=2`）后报告通过，否则保留为未知结果。它不调用 `update_file`、`log_output`、`game_build` 或代码 WebSocket。
+响应包含 `choose_correct_num`、`challenge_chooses_count`、`test_sets`、`next_game` 和游戏状态字段。部分作业关闭公开正确数时，`choose_correct_num` 可能为空；此时客户端重新读取作业进度，只有 `game_score` 与 `challenge_score` 精确相等才报告通过。`game_original_status=2` 和 `passed_status=2` 只是上下文，不能替代满分比较；部分得分不得进入下一关。它不调用 `update_file`、`log_output`、`game_build` 或代码 WebSocket。
 
 模型使用单独的 objective prompt 和 `{kind:"objective",answers:[...]}` JSON 契约，选项题干与选项文本进入白名单快照。选择题题库候选和正式验证记录仍需单独扩展，不能把源码 `solution_files` 当作选择题答案。

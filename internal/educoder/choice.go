@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/url"
 	"sort"
@@ -166,6 +167,9 @@ type ChoiceSubmitResult struct {
 	NextGame           *string         `json:"next_game"`
 	TestSets           []ChoiceTestSet `json:"test_sets"`
 	Passed             bool            `json:"passed"`
+	ScoreKnown         bool            `json:"score_known"`
+	Score              string          `json:"score,omitempty"`
+	MaxScore           string          `json:"max_score,omitempty"`
 }
 
 // ObjectiveSubmit sends only the observed choose_build mutation. It never
@@ -195,6 +199,31 @@ func (c *Client) ObjectiveSubmit(ctx context.Context, task *ChoiceTask, answers 
 	if err := c.requestWithStatuses(ctx, http.MethodPost, "/api/tasks/"+task.Task.Game.Identifier+"/choose_build.json", query, body, taskRef(task.Task), &response, 0, 1, 2); err != nil {
 		return nil, err
 	}
-	response.Passed = response.Count > 0 && ((response.Correct != nil && *response.Correct == response.Count) || (response.Correct == nil && response.GameOriginalStatus == 2))
+	if response.Correct != nil {
+		response.Passed = response.Count > 0 && *response.Correct == response.Count
+	}
+	// Some objective assignments hide choose_correct_num. In that case the
+	// homework progress response is the authoritative score record. A level is
+	// reusable only when earned score equals its configured full score.
+	if response.Correct == nil && task.Task.CourseIdentifier != "" {
+		if progress, progressErr := c.HomeworkProgress(ctx, task.Task.CourseIdentifier, task.Task.HomeworkID); progressErr == nil {
+			for _, level := range progress.Challenges {
+				if level.ChallengeID != task.Task.Challenge.ID || level.ChallengeScore == "" || level.GameScore == "" {
+					continue
+				}
+				response.ScoreKnown = true
+				response.Score = level.GameScore
+				response.MaxScore = level.ChallengeScore
+				response.Passed = decimalEqual(level.GameScore, level.ChallengeScore)
+				break
+			}
+		}
+	}
 	return &response, nil
+}
+
+func decimalEqual(left, right string) bool {
+	a, okA := new(big.Rat).SetString(strings.TrimSpace(left))
+	b, okB := new(big.Rat).SetString(strings.TrimSpace(right))
+	return okA && okB && a.Cmp(b) == 0
 }

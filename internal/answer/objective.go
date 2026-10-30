@@ -88,6 +88,12 @@ func validateObjectiveSnapshot(s ObjectiveSnapshot) error {
 	return nil
 }
 
+// ValidateObjectiveSnapshot checks the public question/options contract before
+// a provider call or persistence operation.
+func ValidateObjectiveSnapshot(s ObjectiveSnapshot) error {
+	return validateObjectiveSnapshot(s)
+}
+
 func validateObjectiveCandidate(s ObjectiveSnapshot, c ObjectiveCandidate) error {
 	if err := validateObjectiveSnapshot(s); err != nil {
 		return err
@@ -127,6 +133,13 @@ func validateObjectiveCandidate(s ObjectiveSnapshot, c ObjectiveCandidate) error
 		}
 	}
 	return nil
+}
+
+// ValidateObjectiveCandidate exposes the same strict contract used for model
+// responses so callers can validate cached or user-selected answers before
+// sending them to the objective submit endpoint.
+func ValidateObjectiveCandidate(s ObjectiveSnapshot, c ObjectiveCandidate) error {
+	return validateObjectiveCandidate(s, c)
 }
 
 func buildObjectiveRequest(req ObjectiveRequest) (wireRequest, error) {

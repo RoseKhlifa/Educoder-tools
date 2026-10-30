@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.13 — 2026-10-31
+
+- Require exact full score before advancing objective-question levels
+
 ## 0.1.12 — 2026-10-31
 
 - Include the objective protocol dependency in Docker builds and keep task action labels on one line

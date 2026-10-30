@@ -3,6 +3,7 @@ package educoder
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -82,5 +83,41 @@ func TestChoiceValidationAndProgrammingIsolation(t *testing.T) {
 	program := decodeTaskFixture(t, programmingTaskFixture("GAME", 1))
 	if _, err := (&Client{}).ObjectiveSubmit(context.Background(), &ChoiceTask{Task: program}, nil); err == nil {
 		t.Fatal("programming task entered objective submit")
+	}
+}
+
+func TestChoiceHiddenCorrectCountRequiresExactFullScore(t *testing.T) {
+	for _, tc := range []struct {
+		name, score, max string
+		passed           bool
+	}{
+		{"full score", "13.30", "13.3", true},
+		{"partial score", "12.00", "13.3", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/api/tasks/OBJGAME.json":
+					_ = json.NewEncoder(w).Encode(objectiveFixture())
+				case "/api/tasks/OBJGAME/choose_build.json":
+					_, _ = w.Write([]byte(`{"status":0,"choose_correct_num":null,"challenge_chooses_count":2,"game_original_status":2}`))
+				case "/api/homework_commons/44/shixun_challenge_data.json":
+					_, _ = fmt.Fprintf(w, `{"data":{"passed_count":0,"challenge_settings":[{"challenge_id":9,"challenge_score":"%s","game_score":"%s","passed_status":2}]}}`, tc.max, tc.score)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			client := New(server.URL)
+			task, err := client.LoadChoiceTask(context.Background(), "COURSE", 44, "OBJGAME")
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := client.ObjectiveSubmit(context.Background(), task, []string{"A", "AB"})
+			if err != nil || !result.ScoreKnown || result.Passed != tc.passed {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+		})
 	}
 }

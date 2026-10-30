@@ -91,7 +91,7 @@ $env:DEEPSEEK_API_KEY = 'set-in-process-only'
 go run ./cmd/educoder solve --course COURSE --homework HOMEWORK_ID --game GAME --bank .\data\questionbank.sqlite --mode submit --idempotency-key run-1 --json
 ~~~
 
-模式 generate_only 仅生成，selftest 保存并运行公开测试，submit 继续正式评测。编程题已验证编排范围是单文件。v0.1.10 新增独立选择题协议、题型路由及模型提示词，objective CLI 支持 generate_only 和 submit，使用 choose_build，不走代码文件、自测或代码评测流程。选择题题库和验证证据仍待独立扩展；UI 迁移保留这批已发布的 Go 实现。网页运行接口、持久卷、后台任务及题库管理另行接入。
+模式 generate_only 仅生成，selftest 保存并运行公开测试，submit 继续正式评测。编程题已验证编排范围是单文件。v0.1.10 新增独立选择题协议、题型路由及模型提示词，objective CLI 支持 generate_only 和 submit，使用 choose_build，不走代码文件、自测或代码评测流程。选择题提交在平台隐藏正确数时会重新读取作业进度，只有 `game_score` 与 `challenge_score` 精确相等才算通过，部分得分不会推进到下一关。选择题题库和验证证据仍待独立扩展；UI 迁移保留这批已发布的 Go 实现。网页运行接口、持久卷、后台任务及题库管理另行接入。
 
 ## 验证与发布
 
