@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.16 — 2026-10-31
+
+- Keep the workbench available when the optional model secret is absent
+
 ## 0.1.15 — 2026-10-31
 
 - Run programming and objective answers asynchronously in bounded Go workers

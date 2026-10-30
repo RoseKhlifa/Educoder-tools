@@ -69,16 +69,21 @@ func modelKey(cfg Config) (string, error) {
 	if cfg.ModelAPIKeyFile != "" {
 		file, err := os.Open(cfg.ModelAPIKeyFile)
 		if err != nil {
+			// A missing optional secret keeps browsing available. The deployment
+			// UI reports model_configured=false and can be enabled on restart.
+			if os.IsNotExist(err) {
+				return "", nil
+			}
 			return "", errors.New("read model credential file failed")
 		}
 		defer file.Close()
 		info, err := file.Stat()
 		if err != nil || !info.Mode().IsRegular() || info.Size() > 8192 {
-			return "", errors.New("invalid model credential file")
+			return "", nil
 		}
 		raw, err := os.ReadFile(cfg.ModelAPIKeyFile)
 		if err != nil {
-			return "", errors.New("read model credential file failed")
+			return "", nil
 		}
 		value := strings.TrimSpace(string(raw))
 		if strings.ContainsAny(value, "\r\n\x00") {
