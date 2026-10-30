@@ -1,8 +1,11 @@
 import type {
   ApiError,
+  AnswerJob,
   Course,
   EnteredTask,
   Homework,
+  JobList,
+  JobRequest,
   User,
 } from './types.js';
 
@@ -118,6 +121,7 @@ function normalizeEnteredTask(value: unknown): EnteredTask {
   const shixun = asRecord(item.shixun);
   return {
     courseIdentifier: text(item.courseIdentifier || item.course_identifier),
+    kind: item.kind === 'programming' || item.kind === 'choice' ? item.kind : 'unknown',
     homeworkId: number(item.homeworkId || item.homework_id || item.homework_common_id) ?? 0,
     gameIdentifier: text(item.gameIdentifier || item.game_identifier || game.identifier),
     challenge: {
@@ -147,6 +151,10 @@ export interface EducoderApi {
   courses(): Promise<Course[]>;
   homeworks(courseIdentifier: string): Promise<Homework[]>;
   enter(courseIdentifier: string, homeworkId: number): Promise<EnteredTask>;
+  jobs(): Promise<JobList>;
+  job(id: string): Promise<AnswerJob>;
+  createJob(request: JobRequest): Promise<AnswerJob>;
+  cancelJob(id: string): Promise<AnswerJob>;
 }
 
 export class BrowserApi implements EducoderApi {
@@ -195,6 +203,15 @@ export class BrowserApi implements EducoderApi {
 
   async enter(courseIdentifier: string, homeworkId: number): Promise<EnteredTask> {
     return normalizeEnteredTask(await this.request<unknown>(`/api/courses/${encodeURIComponent(courseIdentifier)}/homeworks/${encodeURIComponent(String(homeworkId))}/enter`));
+  }
+
+  async jobs(): Promise<JobList> { return this.request<JobList>('/api/jobs'); }
+  async job(id: string): Promise<AnswerJob> { return this.request<AnswerJob>(`/api/jobs/${encodeURIComponent(id)}`); }
+  async createJob(request: JobRequest): Promise<AnswerJob> {
+    return this.request<AnswerJob>('/api/jobs', { method: 'POST', body: JSON.stringify(request) });
+  }
+  async cancelJob(id: string): Promise<AnswerJob> {
+    return this.request<AnswerJob>(`/api/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
   }
 }
 

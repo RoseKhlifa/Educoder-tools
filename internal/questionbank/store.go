@@ -75,6 +75,11 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate question bank: %w", err)
 	}
+	if _, err = tx.Exec(objectiveSchema); err != nil {
+		tx.Rollback()
+		db.Close()
+		return nil, fmt.Errorf("migrate objective bank: %w", err)
+	}
 	if err = tx.Commit(); err != nil {
 		db.Close()
 		return nil, err
@@ -121,6 +126,7 @@ func (s *Store) UpsertSnapshot(ctx context.Context, in problem.Snapshot) (Ref, e
 	// The contract row excludes changing current editor contents. Snapshots keep
 	// the most recent editor version for change detection and model generation.
 	contract := p
+	contract.Files = append([]problem.File(nil), p.Files...)
 	contract.Title = ""
 	contract.StatementMarkdown = ""
 	contract.PublicTests = nil
@@ -582,4 +588,28 @@ func (s *Store) RecordUsage(ctx context.Context, u Usage) error {
 	}
 	_, err := s.db.ExecContext(ctx, "INSERT INTO usage_ledger(run_id,solution_id,provider,model,pricing_version,input_tokens,cached_input_tokens,output_tokens,reserved_micro_usd,cost_micro_usd,status,finish_reason,latency_millis,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", u.RunID, nullInt(u.CandidateID), u.Provider, u.Model, u.PricingVersion, u.InputTokens, u.CachedInputTokens, u.OutputTokens, u.ReservedMicroUSD, u.CostMicroUSD, u.Status, u.FinishReason, u.LatencyMillis, now())
 	return err
+}
+
+// UsageForRun returns bounded billing evidence for service tests and admin views.
+func (s *Store) UsageForRun(ctx context.Context, runID string) ([]Usage, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,run_id,solution_id,provider,model,pricing_version,input_tokens,cached_input_tokens,output_tokens,reserved_micro_usd,cost_micro_usd,status,finish_reason,latency_millis,created_at FROM usage_ledger WHERE run_id=? ORDER BY id`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Usage
+	for rows.Next() {
+		var u Usage
+		var solution sql.NullInt64
+		var stamp string
+		if err := rows.Scan(&u.ID, &u.RunID, &solution, &u.Provider, &u.Model, &u.PricingVersion, &u.InputTokens, &u.CachedInputTokens, &u.OutputTokens, &u.ReservedMicroUSD, &u.CostMicroUSD, &u.Status, &u.FinishReason, &u.LatencyMillis, &stamp); err != nil {
+			return nil, err
+		}
+		if solution.Valid {
+			u.CandidateID = solution.Int64
+		}
+		u.CreatedAt = parseTime(stamp)
+		out = append(out, u)
+	}
+	return out, rows.Err()
 }

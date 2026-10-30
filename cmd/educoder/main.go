@@ -17,6 +17,7 @@ import (
 	"educoder-cli/internal/educoder"
 	"educoder-cli/internal/questionbank"
 	"educoder-cli/internal/solver"
+	"educoder-cli/internal/taskservice"
 )
 
 func main() {
@@ -106,9 +107,6 @@ func run() error {
 			if *bankPath == "" {
 				return fmt.Errorf("solve 需要 --bank 或 EDUCODER_BANK_PATH")
 			}
-			if strings.TrimSpace(os.Getenv("DEEPSEEK_API_KEY")) == "" {
-				return fmt.Errorf("solve 需要 DEEPSEEK_API_KEY")
-			}
 		}
 		if *timeout <= 0 || *pollInterval <= 0 || *maxOutput <= 0 {
 			return fmt.Errorf("timeout、poll-interval、max-output-bytes 必须大于 0")
@@ -120,9 +118,6 @@ func run() error {
 		}
 		if *mode != "generate_only" && *mode != "submit" {
 			return fmt.Errorf("objective 的 --mode 只能为 generate_only 或 submit")
-		}
-		if strings.TrimSpace(os.Getenv("DEEPSEEK_API_KEY")) == "" {
-			return fmt.Errorf("objective 需要 DEEPSEEK_API_KEY")
 		}
 	}
 	password := os.Getenv("EDUCODER_PASSWORD")
@@ -164,42 +159,39 @@ func run() error {
 	if !*jsonOutput {
 		fmt.Printf("登录成功：%s (%s)\n", user.Name, user.Login)
 	}
-	if objectiveCommand {
-		ctx, stop := context.WithTimeout(ctx, *timeout)
-		defer stop()
-		choice, err := client.LoadChoiceTask(ctx, *course, *homework, *game)
-		if err != nil {
-			return err
+	if objectiveCommand || command == "solve" {
+		if *bankPath == "" {
+			*bankPath = "data/questionbank.sqlite"
 		}
-		questions := make([]answer.ObjectiveQuestion, 0, len(choice.Questions))
-		for _, q := range choice.Questions {
-			options := make([]answer.ObjectiveOption, 0, len(q.Options))
-			for _, option := range q.Options {
-				options = append(options, answer.ObjectiveOption{Label: string(rune('A' + option.Position)), Text: option.OptionName, Position: option.Position})
+		store, e := questionbank.Open(*bankPath)
+		if e != nil {
+			return fmt.Errorf("打开题库: %w", e)
+		}
+		defer store.Close()
+		var provider taskservice.Provider
+		if strings.TrimSpace(os.Getenv("DEEPSEEK_API_KEY")) != "" {
+			provider, e = answer.NewDeepSeek(answer.Config{APIKey: os.Getenv("DEEPSEEK_API_KEY"), BaseURL: *modelBaseURL, Timeout: *timeout})
+			if e != nil {
+				return e
 			}
-			questions = append(questions, answer.ObjectiveQuestion{Position: q.Position, Question: q.Subject, QuestionType: q.QuestionType, Category: q.Category, Options: options})
 		}
-		provider, err := answer.NewDeepSeek(answer.Config{APIKey: os.Getenv("DEEPSEEK_API_KEY"), BaseURL: *modelBaseURL, Timeout: *timeout})
-		if err != nil {
-			return err
-		}
-		result, err := provider.GenerateObjective(ctx, answer.ObjectiveRequest{Problem: answer.ObjectiveSnapshot{Kind: "objective", Title: choice.Task.Challenge.Subject, Statement: choice.Task.Challenge.Description, Questions: questions}, Profile: answer.DefaultProfile()})
-		if err != nil {
-			return err
-		}
-		if *mode == "submit" {
-			submitted, submitErr := client.ObjectiveSubmit(ctx, choice, result.Candidate.Answers)
-			if submitErr != nil {
-				return submitErr
+		service := taskservice.New(store, provider, taskservice.Config{Timeout: *timeout})
+		result, runErr := service.Run(ctx, client, taskservice.Request{Owner: user.Login, IdempotencyKey: *idempotencyKey, Course: *course, HomeworkID: *homework, Game: *game, Mode: solver.Mode(*mode)}, nil)
+		if result != nil {
+			if *jsonOutput {
+				if e := outputJSON(result); e != nil {
+					return e
+				}
+			} else {
+				fmt.Printf("AI 答题运行 %s：题型=%s，状态=%s，模型调用=%d，候选=%d\n", result.RunID, result.Kind, result.Status, result.ModelCalls, result.CandidateID)
+				for _, d := range result.Diagnostics {
+					fmt.Printf("诊断：%s\n", d)
+				}
 			}
-			return writeObjectiveSubmission(os.Stdout, result.Candidate, submitted, *jsonOutput)
 		}
-		if *jsonOutput {
-			return outputJSON(result.Candidate)
-		}
-		fmt.Printf("客观题候选答案：%s\n", strings.Join(result.Candidate.Answers, ","))
-		return nil
+		return runErr
 	}
+
 	if programmingCommand {
 		ctx, stop := context.WithTimeout(ctx, *timeout)
 		defer stop()
@@ -217,36 +209,7 @@ func run() error {
 			}
 			return nil
 		}
-		if command == "solve" {
-			store, err := questionbank.Open(*bankPath)
-			if err != nil {
-				return fmt.Errorf("打开题库: %w", err)
-			}
-			defer store.Close()
-			provider, err := answer.NewDeepSeek(answer.Config{APIKey: os.Getenv("DEEPSEEK_API_KEY"), BaseURL: *modelBaseURL, Timeout: *timeout})
-			if err != nil {
-				return err
-			}
-			adapter, err := solver.NewEducoderAdapter(client)
-			if err != nil {
-				return err
-			}
-			service := solver.New(store, provider, solver.Config{Timeout: *timeout})
-			result, runErr := service.Run(ctx, adapter, solver.Request{Owner: user.Login, IdempotencyKey: *idempotencyKey, Course: *course, HomeworkID: *homework, Game: *game, Mode: solver.Mode(*mode), Timeout: *timeout})
-			if result != nil {
-				if *jsonOutput {
-					if err := outputJSON(result); err != nil {
-						return err
-					}
-				} else {
-					fmt.Printf("AI 答题运行 %s：状态=%s，模型调用=%d，候选=%d\n", result.RunID, result.Status, result.ModelCalls, result.CandidateID)
-					for _, diagnostic := range result.Diagnostics {
-						fmt.Printf("诊断：%s\n", diagnostic)
-					}
-				}
-			}
-			return runErr
-		}
+
 		task, err := client.LoadTask(ctx, *course, *homework, *game)
 		if err != nil {
 			return err

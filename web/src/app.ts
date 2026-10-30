@@ -1,5 +1,6 @@
 import { ApiRequestError, BrowserApi, type EducoderApi } from './api.js';
-import type { AppState, Course, Homework } from './types.js';
+import { pendingJob, renderJobControls, renderJobs } from './jobs.js';
+import type { AnswerJob, AppState, Course, Homework, JobMode } from './types.js';
 
 const appRoot = document.querySelector<HTMLDivElement>('#app');
 if (!appRoot) throw new Error('缺少 #app 容器');
@@ -9,18 +10,28 @@ const api: EducoderApi = new BrowserApi();
 const state: AppState = {
   view: 'login', user: null, courses: [], activeCourse: null, homeworks: [], loading: false,
   error: null, taskLoadingId: null, enteredTask: null, drawerOpen: false, filter: '',
+  jobs: [], jobCapacity: null, jobsLoading: false, jobsError: null, creatingJob: false, cancelingJobs: [], jobMode: 'generate_only',
 };
 let sessionVersion = 0;
 let coursesVersion = 0;
 let homeworksVersion = 0;
 let taskVersion = 0;
+let jobsVersion = 0;
+let jobsTimer: ReturnType<typeof setTimeout> | undefined;
+
+function clearJobsTimer(): void {
+  if (jobsTimer !== undefined) clearTimeout(jobsTimer);
+  jobsTimer = undefined;
+}
 
 function resetSession(error: AppState['error'] = null): void {
   sessionVersion++;
   coursesVersion++;
   homeworksVersion++;
   taskVersion++;
-  setState({ view: 'login', user: null, courses: [], activeCourse: null, homeworks: [], loading: false, taskLoadingId: null, enteredTask: null, drawerOpen: false, filter: '', error });
+  jobsVersion++;
+  clearJobsTimer();
+  setState({ view: 'login', user: null, courses: [], activeCourse: null, homeworks: [], loading: false, taskLoadingId: null, enteredTask: null, drawerOpen: false, filter: '', error, jobs: [], jobCapacity: null, jobsLoading: false, jobsError: null, creatingJob: false, cancelingJobs: [], jobMode: 'generate_only' });
 }
 
 function escapeHtml(value: unknown): string {
@@ -85,11 +96,81 @@ async function enterHomework(homework: Homework): Promise<void> {
   if (!state.activeCourse) return;
   const version = ++taskVersion;
   const courseIdentifier = state.activeCourse.identifier;
-  setState({ taskLoadingId: homework.id, error: null, drawerOpen: true, enteredTask: null });
+  setState({ taskLoadingId: homework.id, error: null, drawerOpen: true, enteredTask: null, jobMode: 'generate_only' });
   try {
     const enteredTask = await api.enter(courseIdentifier, homework.id);
     if (version === taskVersion) setState({ enteredTask, taskLoadingId: null });
   } catch (error) { if (version === taskVersion) showError(error); }
+}
+
+function scheduleJobsRefresh(): void {
+  clearJobsTimer();
+  if (!state.user || !state.jobs.some(pendingJob)) return;
+  jobsTimer = setTimeout(() => { jobsTimer = undefined; void loadJobs(); }, 2000);
+}
+
+async function loadJobs(preserveError = false): Promise<void> {
+  if (!state.user) return;
+  clearJobsTimer();
+  const version = ++jobsVersion;
+  const session = sessionVersion;
+  setState({ jobsLoading: true, ...(preserveError ? {} : { jobsError: null }) });
+  try {
+    const result = await api.jobs();
+    if (session !== sessionVersion || version !== jobsVersion) return;
+    setState({ jobs: result.jobs, jobCapacity: result.capacity, jobsLoading: false });
+  } catch (error) {
+    if (session !== sessionVersion || version !== jobsVersion) return;
+    if (isExpired(error)) { showError(error); return; }
+    setState({ jobsLoading: false, jobsError: error instanceof Error ? error.message : '任务记录暂时无法读取，请刷新重试。' });
+  }
+  scheduleJobsRefresh();
+}
+
+function mergeJob(job: AnswerJob): void {
+  const jobs = [job, ...state.jobs.filter(item => item.id !== job.id)].sort((left, right) => right.created_at.localeCompare(left.created_at));
+  setState({ jobs });
+}
+
+async function createJob(): Promise<void> {
+  const task = state.enteredTask;
+  if (!state.user || !task || task.kind === 'unknown' || !task.gameIdentifier || !state.jobCapacity?.model_configured || state.creatingJob) return;
+  if (state.jobs.some(job => pendingJob(job) && job.request.course === task.courseIdentifier && job.request.homework_id === task.homeworkId && job.request.game === task.gameIdentifier)) return;
+  const session = sessionVersion;
+  const mode = task.kind === 'choice' && state.jobMode === 'selftest' ? 'generate_only' : state.jobMode;
+  const idempotencyKey = typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : [...crypto.getRandomValues(new Uint8Array(16))].map(value => value.toString(16).padStart(2, '0')).join('');
+  setState({ creatingJob: true, jobsError: null });
+  try {
+    const job = await api.createJob({ course: task.courseIdentifier, homework_id: task.homeworkId, game: task.gameIdentifier, mode, idempotency_key: idempotencyKey });
+    if (session !== sessionVersion) return;
+    mergeJob(job);
+    setState({ creatingJob: false });
+    // Read the accepted job from the shared queue rather than holding this request open.
+    void loadJobs();
+  } catch (error) {
+    if (session !== sessionVersion) return;
+    if (isExpired(error)) { showError(error); return; }
+    setState({ creatingJob: false, jobsError: error instanceof ApiRequestError ? error.message : '创建结果未确认，正在重新读取任务记录。请先检查记录再决定是否重试。' });
+    void loadJobs(true);
+  }
+}
+
+async function cancelJob(id: string): Promise<void> {
+  if (!state.user || state.cancelingJobs.includes(id)) return;
+  const session = sessionVersion;
+  setState({ cancelingJobs: [...state.cancelingJobs, id], jobsError: null });
+  try {
+    const job = await api.cancelJob(id);
+    if (session !== sessionVersion) return;
+    mergeJob(job);
+  } catch (error) {
+    if (session !== sessionVersion) return;
+    if (isExpired(error)) { showError(error); return; }
+    setState({ jobsError: error instanceof Error ? error.message : '停止请求失败，请刷新任务记录确认。' });
+  }
+  if (session !== sessionVersion) return;
+  setState({ cancelingJobs: state.cancelingJobs.filter(item => item !== id) });
+  void loadJobs();
 }
 
 async function handleLogin(event: Event): Promise<void> {
@@ -106,6 +187,7 @@ async function handleLogin(event: Event): Promise<void> {
     if (version !== sessionVersion) return;
     form.reset();
     setState({ user, view: 'courses', loading: false, error: null });
+    void loadJobs();
     await loadCourses();
   } catch (error) { if (version === sessionVersion) showError(error); }
 }
@@ -116,6 +198,7 @@ async function restoreSession(): Promise<void> {
     const user = await api.me();
     if (version !== sessionVersion) return;
     setState({ user, view: 'courses', error: null });
+    void loadJobs();
     await loadCourses();
   } catch { if (version === sessionVersion) render(); }
 }
@@ -188,21 +271,32 @@ function renderHomeworkRow(homework: Homework): string {
 function renderTaskDrawer(): string {
   if (!state.drawerOpen) return '';
   const task = state.enteredTask;
-  return `<div class="drawer-backdrop" data-action="close-drawer"></div><aside class="task-drawer" role="dialog" aria-modal="true" aria-label="任务详情"><div class="drawer-head"><div><p class="eyebrow">TASK DETAIL</p><h2>任务详情</h2></div><button class="close-button" data-action="close-drawer" aria-label="关闭">×</button></div>${state.taskLoadingId ? '<div class="drawer-loading"><span class="spinner spinner-blue"></span><p>正在打开任务…</p></div>' : task ? `<div class="drawer-body"><div class="task-status-line"><span class="status-pill status-progress">${escapeHtml(task.requiredStatus || '待开始')}</span><span class="muted">任务 ${task.homeworkId}</span></div><h3 class="task-title">${escapeHtml(task.challenge.subject || task.shixun.name || '实训任务')}</h3><p class="task-path">${escapeHtml(task.challenge.path || '按顺序完成实训关卡，提交后查看结果。')}</p><dl class="task-facts"><div><dt>当前关卡</dt><dd>${task.challenge.position ? `第 ${task.challenge.position} 关` : '—'}</dd></div><div><dt>实训名称</dt><dd>${escapeHtml(task.shixun.name || '—')}</dd></div><div><dt>关卡总数</dt><dd>${task.shixun.challengesCount ?? '—'}</dd></div></dl><div class="task-callout"><span>⌁</span><div><strong>任务信息已就绪</strong><p>这里查看任务信息，代码编辑与提交请在头歌官方平台进行。</p></div></div><button class="button button-primary button-block" data-action="open-official" ${officialTaskUrl() ? '' : 'disabled'}>前往头歌官方实训 <span>↗</span></button><p class="drawer-note">${officialTaskUrl() ? '将打开 educoder.net 官方页面，需使用该平台的登录会话。' : '该任务暂未返回有效的官方实训地址。'}</p></div>` : '<div class="drawer-empty"><span class="empty-icon">!</span><p>任务详情暂时无法加载</p></div>'}</aside>`;
+  return `<div class="drawer-backdrop" data-action="close-drawer"></div><aside class="task-drawer" role="dialog" aria-modal="true" aria-label="任务详情"><div class="drawer-head"><div><p class="eyebrow">TASK DETAIL</p><h2>任务详情</h2></div><button class="close-button" data-action="close-drawer" aria-label="关闭">×</button></div>${state.taskLoadingId ? '<div class="drawer-loading"><span class="spinner spinner-blue"></span><p>正在打开任务…</p></div>' : task ? `<div class="drawer-body"><div class="task-status-line"><span class="status-pill status-progress">${escapeHtml(task.requiredStatus || '待开始')}</span><span class="muted">任务 ${task.homeworkId}</span></div><h3 class="task-title">${escapeHtml(task.challenge.subject || task.shixun.name || '实训任务')}</h3><p class="task-path">${escapeHtml(task.challenge.path || '按顺序完成实训关卡，提交后查看结果。')}</p><dl class="task-facts"><div><dt>当前关卡</dt><dd>${task.challenge.position ? `第 ${task.challenge.position} 关` : '—'}</dd></div><div><dt>实训名称</dt><dd>${escapeHtml(task.shixun.name || '—')}</dd></div><div><dt>关卡总数</dt><dd>${task.shixun.challengesCount ?? '—'}</dd></div></dl><div class="task-callout"><span>⌁</span><div><strong>任务信息已就绪</strong><p>可在下方异步执行当前关卡，也可前往头歌官方平台手动处理。</p></div></div>${renderJobControls(state)}<button class="button button-outline button-block" data-action="open-official" ${officialTaskUrl() ? '' : 'disabled'}>前往头歌官方实训 <span>↗</span></button><p class="drawer-note">${officialTaskUrl() ? '将打开 educoder.net 官方页面，需使用该平台的登录会话。' : '该任务暂未返回有效的官方实训地址。'}</p></div>` : '<div class="drawer-empty"><span class="empty-icon">!</span><p>任务详情暂时无法加载</p></div>'}</aside>`;
 }
 
 function renderWorkspace(): string {
   const active = state.activeCourse;
   const tasks = state.filter ? state.homeworks.filter(item => `${item.name} ${item.status}`.toLowerCase().includes(state.filter.toLowerCase())) : state.homeworks;
-  return `<div class="app-shell">${renderHeader()}<div class="workspace"><div class="sidebar-wrap">${renderSidebar()}</div><main class="main-content"><div class="mobile-context"><button class="mobile-back" data-action="courses">‹</button><span>${escapeHtml(active?.name ?? '我的课堂')}</span></div>${renderCourseRail()}<section class="task-section"><div class="section-heading task-heading"><div><p class="eyebrow">${active ? 'CLASSROOM TASKS' : 'SELECT A CLASSROOM'}</p><h2>${escapeHtml(active?.name ?? '选择一个课堂')}</h2></div>${active ? `<label class="search-box"><span>⌕</span><input data-role="filter" value="${escapeHtml(state.filter)}" placeholder="搜索任务" aria-label="搜索任务" /></label>` : ''}</div>${state.loading ? '<div class="state-panel"><span class="spinner spinner-blue"></span><p>正在加载课堂内容…</p></div>' : !active ? '<div class="state-panel"><span class="state-icon">▦</span><p>从左侧选择一个课堂查看任务</p></div>' : !tasks.length ? `<div class="state-panel"><span class="state-icon">✓</span><h3>${state.filter ? '没有找到相关任务' : '这个课堂还没有任务'}</h3><p>${state.filter ? '换个关键词试试。' : '任务发布后会显示在这里。'}</p></div>` : `<div class="homework-list">${tasks.map(renderHomeworkRow).join('')}</div>`}</section>${state.error ? `<div class="alert alert-error floating-alert" role="alert"><span class="alert-dot"></span>${escapeHtml(state.error.message)}<button data-action="dismiss-error" aria-label="关闭提示">×</button></div>` : ''}</main></div>${renderTaskDrawer()}</div>`;
+  return `<div class="app-shell">${renderHeader()}<div class="workspace"><div class="sidebar-wrap">${renderSidebar()}</div><main class="main-content"><div class="mobile-context"><button class="mobile-back" data-action="courses">‹</button><span>${escapeHtml(active?.name ?? '我的课堂')}</span></div>${renderCourseRail()}<section class="task-section"><div class="section-heading task-heading"><div><p class="eyebrow">${active ? 'CLASSROOM TASKS' : 'SELECT A CLASSROOM'}</p><h2>${escapeHtml(active?.name ?? '选择一个课堂')}</h2></div>${active ? `<label class="search-box"><span>⌕</span><input data-role="filter" value="${escapeHtml(state.filter)}" placeholder="搜索任务" aria-label="搜索任务" /></label>` : ''}</div>${state.loading ? '<div class="state-panel"><span class="spinner spinner-blue"></span><p>正在加载课堂内容…</p></div>' : !active ? '<div class="state-panel"><span class="state-icon">▦</span><p>从左侧选择一个课堂查看任务</p></div>' : !tasks.length ? `<div class="state-panel"><span class="state-icon">✓</span><h3>${state.filter ? '没有找到相关任务' : '这个课堂还没有任务'}</h3><p>${state.filter ? '换个关键词试试。' : '任务发布后会显示在这里。'}</p></div>` : `<div class="homework-list">${tasks.map(renderHomeworkRow).join('')}</div>`}</section>${renderJobs(state)}${state.error ? `<div class="alert alert-error floating-alert" role="alert"><span class="alert-dot"></span>${escapeHtml(state.error.message)}<button data-action="dismiss-error" aria-label="关闭提示">×</button></div>` : ''}</main></div>${renderTaskDrawer()}</div>`;
 }
 
 function render(): void {
+  const previousFilter = document.querySelector<HTMLInputElement>('[data-role="filter"]');
+  const filterSelection = previousFilter && document.activeElement === previousFilter ? [previousFilter.selectionStart, previousFilter.selectionEnd] : null;
   root.innerHTML = state.view === 'login' ? renderLogin() : renderWorkspace();
   bindEvents();
+  if (filterSelection) {
+    const filter = document.querySelector<HTMLInputElement>('[data-role="filter"]');
+    filter?.focus();
+    filter?.setSelectionRange(filterSelection[0], filterSelection[1]);
+  }
 }
 
 function bindEvents(): void {
+  document.querySelector<HTMLElement>('[data-action="refresh-jobs"]')?.addEventListener('click', () => { void loadJobs(); });
+  document.querySelector<HTMLElement>('[data-action="create-job"]')?.addEventListener('click', () => { void createJob(); });
+  document.querySelectorAll<HTMLElement>('[data-cancel-job]').forEach(element => element.addEventListener('click', () => { if (element.dataset.cancelJob) void cancelJob(element.dataset.cancelJob); }));
+  document.querySelectorAll<HTMLInputElement>('[data-job-mode]').forEach(element => element.addEventListener('change', () => { setState({ jobMode: element.dataset.jobMode as JobMode }); }));
   document.querySelector<HTMLFormElement>('#login-form')?.addEventListener('submit', event => { void handleLogin(event); });
   document.querySelectorAll<HTMLElement>('[data-course]').forEach(element => element.addEventListener('click', () => {
     const course = state.courses.find(item => item.identifier === element.dataset.course);

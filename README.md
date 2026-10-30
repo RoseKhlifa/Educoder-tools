@@ -19,7 +19,7 @@ Go CLI（cmd/educoder）
     └─ solver → answer / questionbank → 同一 Go 协议客户端
 ~~~
 
-工作台支持登录、查看课堂、选择课堂加载任务、搜索任务、任务详情和退出。详情中的官方实训链接会在外部平台新开标签。AI 自动答题当前通过 Go CLI 使用，尚未接入网页按钮、运行查询或后台 worker。
+工作台支持登录、查看课堂、选择课堂加载任务、搜索任务、任务详情和退出。详情中的官方实训链接会在外部平台新开标签。网页答题通过 Go 进程内的异步任务服务运行：提交后返回 job ID，由有界 worker 队列执行，浏览器查询状态和事件；不会启动 CLI 子进程。每个账号限制待处理数量，同一账号上游写操作串行，不同账号可以并行。服务重启会把未完成任务标为 interrupted/uncertain，不自动重放可能产生副作用的提交。
 
 ## 本地启动
 
@@ -91,7 +91,7 @@ $env:DEEPSEEK_API_KEY = 'set-in-process-only'
 go run ./cmd/educoder solve --course COURSE --homework HOMEWORK_ID --game GAME --bank .\data\questionbank.sqlite --mode submit --idempotency-key run-1 --json
 ~~~
 
-模式 generate_only 仅生成，selftest 保存并运行公开测试，submit 继续正式评测。编程题已验证编排范围是单文件。v0.1.10 新增独立选择题协议、题型路由及模型提示词，objective CLI 支持 generate_only 和 submit，使用 choose_build，不走代码文件、自测或代码评测流程。选择题每次提交后都会读取目标关卡分数，只有有效 `game_score` 与正的 `challenge_score` 精确相等且题目统计不矛盾才算通过。分数兼容 JSON 数值和字符串，不经过浮点舍入；已提交/完成标记不代替满分。部分得分或分数未确认时，普通输出和 JSON 输出均返回非零退出状态。选择题题库和验证证据仍待独立扩展；UI 迁移保留这批已发布的 Go 实现。网页运行接口、持久卷、后台任务及题库管理另行接入。
+模式 generate_only 仅生成，selftest 保存并运行公开测试，submit 继续正式评测。编程题已验证编排范围是单文件。v0.1.10 新增独立选择题协议、题型路由及模型提示词，objective CLI 支持 generate_only 和 submit，使用 choose_build，不走代码文件、自测或代码评测流程。选择题每次提交后都会读取目标关卡分数，只有有效 `game_score` 与正的 `challenge_score` 精确相等且题目统计不矛盾才算通过。分数兼容 JSON 数值和字符串，不经过浮点舍入；已提交/完成标记不代替满分。部分得分或分数未确认时，普通输出和 JSON 输出均返回非零退出状态。选择题题库和验证证据仍待独立扩展；UI 迁移保留这批已发布的 Go 实现。两类流程现在通过统一 Go taskservice 接入异步任务，网页结果只返回白名单摘要，不返回源码、Cookie、执行密钥或模型原始响应。
 
 ## 验证与发布
 

@@ -27,6 +27,18 @@ func run() error {
 		return err
 	}
 	app := web.NewServer(cfg)
+	jobRuntime, err := web.NewJobRuntime(cfg)
+	if err != nil {
+		return err
+	}
+	app.AttachJobs(jobRuntime)
+	defer func() {
+		shutdown, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		if err := jobRuntime.Close(shutdown); err != nil {
+			fmt.Fprintln(os.Stderr, "job shutdown:", err)
+		}
+	}()
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           app.Handler(),
@@ -49,14 +61,19 @@ func run() error {
 			}
 		}
 	}()
+	shutdownDone := make(chan struct{})
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdownCtx)
+		close(shutdownDone)
 	}()
 	fmt.Printf("educoder-workbench version=%s starting on %s\n", buildinfo.Current(), cfg.HTTPAddr)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	err = server.ListenAndServe()
+	stop()
+	<-shutdownDone
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
 	return nil

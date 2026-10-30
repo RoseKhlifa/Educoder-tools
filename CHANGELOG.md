@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.15 — 2026-10-31
+
+- Run programming and objective answers asynchronously in bounded Go workers
+
 ## 0.1.14 — 2026-10-31
 
 - Verify objective full scores using exact decimal progress in every output mode

@@ -24,16 +24,25 @@ import (
 const sessionCookieName = "educoder_web_session"
 
 type Config struct {
-	HTTPAddr     string
-	WebOrigin    string
-	APIBaseURL   string
-	SessionTTL   time.Duration
-	StaticDir    string
-	CookieSecure bool
+	HTTPAddr         string
+	WebOrigin        string
+	APIBaseURL       string
+	SessionTTL       time.Duration
+	StaticDir        string
+	CookieSecure     bool
+	DataDir          string
+	JobWorkers       int
+	JobQueueSize     int
+	JobPerOwner      int
+	JobTimeout       time.Duration
+	ModelConcurrency int
+	ModelTimeout     time.Duration
+	ModelAPIKeyFile  string
+	ModelBaseURL     string
 }
 
 func DefaultConfig() Config {
-	return Config{HTTPAddr: "0.0.0.0:11454", APIBaseURL: educoder.DefaultBaseURL, SessionTTL: 8 * time.Hour, StaticDir: filepath.FromSlash("web")}
+	return Config{HTTPAddr: "0.0.0.0:11454", APIBaseURL: educoder.DefaultBaseURL, SessionTTL: 8 * time.Hour, StaticDir: filepath.FromSlash("web"), DataDir: "data", JobWorkers: 8, JobQueueSize: 128, JobPerOwner: 4, JobTimeout: 10 * time.Minute, ModelConcurrency: 2, ModelTimeout: 2 * time.Minute}
 }
 
 func LoadConfig() (Config, error) {
@@ -67,6 +76,9 @@ func LoadConfig() (Config, error) {
 	if cfg.WebOrigin != "" && !validOrigin(cfg.WebOrigin) {
 		return Config{}, errors.New("invalid WEB_ORIGIN: expected an exact http(s) origin")
 	}
+	if err := loadJobConfig(&cfg); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
 }
 
@@ -78,6 +90,7 @@ type Server struct {
 	factory ClientFactory
 	static  http.Handler
 	avatars *avatar.Service
+	jobs    *JobRuntime
 }
 
 func NewServer(config Config) *Server {
@@ -171,7 +184,7 @@ func (s *Server) cors(w http.ResponseWriter, r *http.Request, requestID string) 
 	}
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Access-Control-Allow-Credentials", "true")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Request-Id")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Request-Id, Idempotency-Key")
 	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 	w.Header().Add("Vary", "Origin")
 	return true
@@ -183,6 +196,10 @@ func validOrigin(origin string) bool {
 }
 
 func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request, requestID string) {
+	if r.URL.Path == "/api/jobs" || strings.HasPrefix(r.URL.Path, "/api/jobs/") {
+		s.handleJobs(w, r, requestID)
+		return
+	}
 	if r.URL.Path == "/api/avatar" {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")

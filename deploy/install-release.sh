@@ -14,6 +14,17 @@ command -v python3 >/dev/null
 docker compose version >/dev/null
 cd -- "$release_root"
 
+# This file is outside every release archive and is mounted read-only. Empty
+# credentials keep browsing available while the UI reports the model unavailable.
+secret_root=/opt/educoder-tools/secrets
+mkdir -p -- "$secret_root"
+chmod 700 -- "$secret_root"
+export DEEPSEEK_SECRET_FILE="${DEEPSEEK_SECRET_FILE:-$secret_root/deepseek_api_key}"
+if [[ ! -e "$DEEPSEEK_SECRET_FILE" ]]; then
+  install -m 0400 /dev/null "$DEEPSEEK_SECRET_FILE"
+fi
+chmod 0400 -- "$DEEPSEEK_SECRET_FILE"
+
 # Build before replacing the live container. A failed build leaves it untouched.
 export APP_VERSION="$version" VCS_REF="$commit" WEB_COOKIE_SECURE=true
 docker compose --project-name educoder-tools build

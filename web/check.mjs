@@ -8,10 +8,10 @@ const css = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
 
 assert.match(html, /id="app"/);
 assert.match(html, /dist\/app\.js/);
-for (const route of ['/api/auth/login', '/api/auth/me', '/api/courses', '/homeworks/', '/enter']) assert.ok(api.includes(route), `missing route ${route}`);
+for (const route of ['/api/auth/login', '/api/auth/me', '/api/courses', '/homeworks/', '/enter', '/api/jobs', '/cancel']) assert.ok(api.includes(route), `missing route ${route}`);
 assert.match(api, /credentials:\s*'include'/);
 assert.equal(/localStorage|sessionStorage|console\.(log|debug|info)\s*\(/.test(`${source}\n${api}`), false, 'sensitive browser persistence/logging found');
-for (const marker of ['renderLogin', 'renderCourseRail', 'renderHomeworkRow', 'renderTaskDrawer', 'loading', 'drawerOpen']) assert.ok(source.includes(marker), `missing UI state ${marker}`);
+for (const marker of ['renderLogin', 'renderCourseRail', 'renderHomeworkRow', 'renderTaskDrawer', 'renderJobs', 'renderJobControls', 'loadJobs', 'cancelJob', 'loading', 'drawerOpen']) assert.ok(source.includes(marker), `missing UI state ${marker}`);
 assert.match(css, /@media \(max-width: 620px\)/);
 assert.match(css, /\.topbar/);
 assert.equal(/https?:\/\/|@import|url\(/.test(`${html}\n${css}`), false, 'workbench shell should not download external fonts or media');

@@ -21,7 +21,7 @@ cmd/web → internal/web → internal/educoder → Educoder API。
 
 internal/educoder 保留 Go 登录、课堂、作业、任务、代码读取、保存、自测、提交和状态查询。签名请求辅助方法仍可用于头像资料等 Go 功能，不会启动旧 UI 服务。
 
-internal/solver、answer、problem 和 questionbank 保持独立，当前由 Go CLI 使用。网页 AI 运行入口及后台任务另行接入。已发布的 v0.1.10 选择题协议和 objective CLI 一并保留，选择题题库仍待扩展；UI 迁移不修改对应源文件。
+internal/solver、answer、problem 和 questionbank 保持独立，当前由 Go CLI 使用。网页 AI 运行入口现在通过 internal/jobs 和 internal/taskservice 接入：HTTP 返回 job ID，Go worker 在进程内异步执行；没有 CLI 子进程。题库和 jobs 数据放在 /data 独立 SQLite，模型密钥使用 Docker secret。已发布的 v0.1.10 选择题协议和 objective CLI 一并保留，选择题题库仍待扩展；UI 迁移不修改对应源文件。
 
 工作台复用早期的蓝色导航、课堂列表、任务列表和详情抽屉。官方实训链接明确在外部站点打开，当前没有代码编辑器或 AI 控制面板。
 

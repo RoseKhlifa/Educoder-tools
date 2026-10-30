@@ -56,4 +56,27 @@ await test('browser API uses the Go workbench contract', async t => {
     globalThis.fetch = async () => envelope({ user: { login: 'demo', name: '测试', avatarUrl: 'https://unrelated.example/track' } });
     assert.equal((await new BrowserApi().me()).avatarUrl, undefined);
   });
+  await t.test('answer jobs use accepted asynchronous responses, session cookies and encoded IDs', async () => {
+    const requests = [];
+    const job = { id: 'job/1', status: 'queued', phase: 'queued' };
+    globalThis.fetch = async (url, options) => {
+      requests.push({ url, options });
+      return envelope(url === '/api/jobs' && options.method !== 'POST' ? { jobs: [job], capacity: { model_configured: true } } : job, options.method === 'POST' && url === '/api/jobs' ? 202 : 200);
+    };
+    const api = new BrowserApi();
+    const input = { course: 'COURSE_A', homework_id: 20, game: 'game-1', mode: 'submit', idempotency_key: 'click-1' };
+    assert.equal((await api.createJob(input)).status, 'queued');
+    assert.deepEqual(JSON.parse(requests[0].options.body), input);
+    assert.equal(requests[0].options.credentials, 'include');
+    assert.equal((await api.jobs()).jobs[0].id, 'job/1');
+    await api.job('job/1');
+    await api.cancelJob('job/1');
+    assert.equal(requests[2].url, '/api/jobs/job%2F1');
+    assert.equal(requests[3].url, '/api/jobs/job%2F1/cancel');
+    assert.equal(requests[3].options.method, 'POST');
+  });
+  await t.test('foreign job errors remain errors rather than empty successful histories', async () => {
+    globalThis.fetch = async () => new Response(JSON.stringify({ error: { code: 'JOB_NOT_FOUND', message: '任务不存在' } }), { status: 404 });
+    await assert.rejects(new BrowserApi().job('foreign-job'), error => error.code === 'JOB_NOT_FOUND' && !error.isSessionExpired);
+  });
 });

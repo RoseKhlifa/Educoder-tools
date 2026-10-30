@@ -11,6 +11,14 @@
 /resource-reuse/verification/
 /resource-reuse/original/
 /artifacts/
+/data/
+/deploy/secrets/
+*.sqlite
+*.sqlite-*
+/data/
+/deploy/secrets/
+*.sqlite
+*.sqlite-*
 /node_modules/
 /har_assets/
 /design-demos/

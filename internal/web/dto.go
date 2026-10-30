@@ -59,6 +59,7 @@ func toHomeworkDTO(homework educoder.Homework) homeworkDTO {
 }
 
 type taskDTO struct {
+	Kind           string `json:"kind"`
 	RequiredStatus string `json:"requiredStatus,omitempty"`
 	Game           struct {
 		ID         int64  `json:"id"`
@@ -85,6 +86,7 @@ type taskDTO struct {
 
 func toTaskDTO(task educoder.Task) taskDTO {
 	var result taskDTO
+	result.Kind = string(task.Kind())
 	result.RequiredStatus = task.RequiredStatus
 	result.Game.ID = task.Game.ID
 	result.Game.Identifier = task.Game.Identifier
