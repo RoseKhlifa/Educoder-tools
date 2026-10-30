@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.17 — 2026-10-31
+
+- Treat an unavailable optional model secret as browse-only mode
+
 ## 0.1.16 — 2026-10-31
 
 - Keep the workbench available when the optional model secret is absent

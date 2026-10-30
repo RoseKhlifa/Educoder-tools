@@ -71,10 +71,7 @@ func modelKey(cfg Config) (string, error) {
 		if err != nil {
 			// A missing optional secret keeps browsing available. The deployment
 			// UI reports model_configured=false and can be enabled on restart.
-			if os.IsNotExist(err) {
-				return "", nil
-			}
-			return "", errors.New("read model credential file failed")
+			return "", nil
 		}
 		defer file.Close()
 		info, err := file.Stat()
