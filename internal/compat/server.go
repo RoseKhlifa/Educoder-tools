@@ -5,8 +5,10 @@ package compat
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -62,6 +64,8 @@ type Server struct {
 	newClient      func() *educoder.Client
 	unsupportedLog *log.Logger
 	avatars        *avatarService
+	apiCache       *apiResponseCache
+	staticCache    *staticAssetCache
 }
 
 func NewServer(cfg Config) *Server {
@@ -80,6 +84,8 @@ func NewServer(cfg Config) *Server {
 	}
 	s := &Server{config: cfg, store: newSessionStore(cfg.SessionTTL), unsupportedLog: log.New(os.Stderr, "reuse unsupported API: ", log.LstdFlags)}
 	s.avatars = newAvatarService(cfg.StaticDir)
+	s.apiCache = newAPIResponseCache()
+	s.staticCache = newStaticAssetCache(64 << 20)
 	s.newClient = func() *educoder.Client {
 		client := educoder.New(cfg.APIBaseURL)
 		client.HTTP.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
@@ -89,7 +95,10 @@ func NewServer(cfg Config) *Server {
 }
 
 func (s *Server) Handler() http.Handler { return s }
-func (s *Server) Sweep()                { s.store.sweep() }
+func (s *Server) Sweep() {
+	s.store.sweep()
+	s.apiCache.sweep()
+}
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-App-Version", buildinfo.Current())
@@ -121,6 +130,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("X-App-Cache", "BYPASS")
 	path := educoder.NormalizeObservedPath(r.URL.Path)
 	if path == "/api/accounts/logout.json" {
 		if r.Method != http.MethodGet && r.Method != http.MethodPost {
@@ -172,22 +182,48 @@ func (s *Server) serveAPI(w http.ResponseWriter, r *http.Request) {
 	if strings.HasSuffix(path, "/courses.json") {
 		query.Set("username", item.login)
 	}
-	response, err := client.RecordedRequest(r.Context(), r.Method, path, query, nil)
+	fetch := func(ctx context.Context) (apiResponse, error) {
+		started := time.Now()
+		response, err := client.RecordedRequest(ctx, r.Method, path, query, nil)
+		upstreamTime := time.Since(started)
+		if err != nil {
+			return apiResponse{}, errors.New("上游请求失败")
+		}
+		started = time.Now()
+		body, err := cleanJSON(response.Body, item.marker, client.RecordedSecrets())
+		if err != nil {
+			return apiResponse{}, errors.New("上游响应格式错误")
+		}
+		body, err = s.localizeImageURLs(body)
+		if err != nil {
+			return apiResponse{}, errors.New("图片地址处理失败")
+		}
+		return apiResponse{status: response.StatusCode, body: body, upstream: upstreamTime, processing: time.Since(started)}, nil
+	}
+	started := time.Now()
+	var result apiResponse
+	var err error
+	cacheState := "BYPASS"
+	if ttl := apiCacheTTL(r.Method, path); ttl > 0 && !apiCacheBypass(r) {
+		scope := "anonymous"
+		if authenticated {
+			cookie, _ := r.Cookie(sessionCookie)
+			scope = "session:" + cookie.Value
+		}
+		result, cacheState, err = s.apiCache.get(r.Context(), makeAPICacheKey(scope, r.Method, path, query), ttl, fetch)
+	} else {
+		result, err = fetch(r.Context())
+	}
+	w.Header().Set("X-App-Cache", cacheState)
+	w.Header().Set("Server-Timing", fmt.Sprintf("upstream;dur=%.3f, processing;dur=%.3f, total;dur=%.3f", float64(result.upstream)/float64(time.Millisecond), float64(result.processing)/float64(time.Millisecond), float64(time.Since(started))/float64(time.Millisecond)))
 	if err != nil {
-		apiError(w, http.StatusBadGateway, "上游请求失败")
+		if r.Context().Err() != nil {
+			return
+		}
+		apiError(w, http.StatusBadGateway, err.Error())
 		return
 	}
-	body, err := cleanJSON(response.Body, item.marker, client.RecordedSecrets())
-	if err != nil {
-		apiError(w, http.StatusBadGateway, "上游响应格式错误")
-		return
-	}
-	body, err = s.localizeImageURLs(body)
-	if err != nil {
-		apiError(w, http.StatusBadGateway, "图片地址处理失败")
-		return
-	}
-	writeJSON(w, response.StatusCode, body)
+	writeJSON(w, result.status, result.body)
 }
 
 func publicRoute(path string) bool {

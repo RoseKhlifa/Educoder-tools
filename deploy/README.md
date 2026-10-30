@@ -28,6 +28,8 @@ The version and commit arguments must exactly identify the published archive. `/
 
 User and teacher avatars are fetched by a dedicated fixed-source image reader with an in-memory cache. They are not baked into the image or persisted in the repository/container filesystem; runtime HTTPS access to the official avatar source is required. Responses use verified image MIME types and private/no-store browser caching.
 
+Performance caches stay in application memory: up to 64 MB of compressed public static representations and 32 MB/512 entries of session-isolated, short-lived API reads. These are bounded caches rather than startup allocations. `X-App-Cache` and `Server-Timing` distinguish an application hit from upstream latency. Domain/CDN and client-to-server round trips remain outside those timings; this service does not change the user's 1Panel proxy configuration.
+
 ## Rollback
 
 Keep the previous release directory and Docker image. From that directory, set its `APP_VERSION` and `VCS_REF`, then run:

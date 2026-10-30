@@ -138,6 +138,14 @@ node .\resource-reuse\tools\verify_banner.cjs .\resource-reuse\site\www.educoder
 
 图片修复记录见 `reports/banner-images-fix/`；原始静态文件保持原样。
 
+### 页面切换性能
+
+JS/CSS/HTML/SVG 等文本资源由 Go 提供 gzip，压缩结果保存在最多 64 MB 的内存缓存中；原文件不变。带内容指纹的静态文件使用一年 `immutable` 缓存，HTML 每次重新验证；ETag 支持 `304`，HEAD 和 Range 仍保持标准行为。首次进入尚未加载过的路由需要获取对应 chunk，后续可复用浏览器缓存。
+
+会话内安全的只读 API 使用短时、有界内存缓存，并合并同时发出的相同请求：用户信息和课堂列表 15 秒、任务列表/课堂通知 10 秒、课堂导航 60 秒、站点设置 5 分钟。缓存按站内登录会话隔离，未登录响应独立；实际错误、任务进入、代码内容、评测相关和有副作用的 GET 不缓存。返回的私人 API 仍标记 `Cache-Control: no-store`，不会进入公共 CDN/浏览器共享缓存。
+
+排查性能时可查看 `X-App-Cache`（`HIT`、`MISS`、`COALESCED`、`BYPASS`）和 `Server-Timing`（上游等待、数据处理、总时间）。请求添加 `Cache-Control: no-cache` 可以强制重新读取。列表在上述短 TTL 内可能保持先前内容；进入任务和代码读取继续使用实时数据。
+
 配置：`REUSE_ADDR` 设置监听地址，`REUSE_STATIC_DIR` 设置部署目录，`EDUCODER_API_BASE_URL` 设置协议模块使用的上游 API 地址。Docker 部署见 `deploy/README.md`；服务直接监听 `11454`，`touge.mom` 的反向代理由用户在 1Panel 配置。版本来自根 `VERSION`，`/version` 和 `/healthz` 提供版本与 commit。
 
 Go 服务本身完成下面三类路由：

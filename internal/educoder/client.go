@@ -25,6 +25,18 @@ import (
 const DefaultBaseURL = "https://data.educoder.net"
 const DefaultOrigin = "https://www.educoder.net"
 
+// Page navigation fans out into several API calls. Share a generously sized
+// keep-alive pool across clients while each user's CookieJar stays separate.
+// The default two idle connections per host otherwise discard most of these
+// connections between navigations and repeat cross-region TLS handshakes.
+var upstreamTransport = func() *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 128
+	transport.MaxIdleConnsPerHost = 32
+	transport.IdleConnTimeout = 90 * time.Second
+	return transport
+}()
+
 // These are public web-client protocol constants, decoded from module 527951.
 // They are not user credentials. The password key is confirmed against the HAR.
 var accessKey = decodeTwice("WlRsa1pEVmlORE15TW1ZNVpqZGtPRE5rTURBNVpHVTVZbVpoTVRBd1l6TT0=")
@@ -130,7 +142,7 @@ func New(baseURL string) *Client {
 		baseURL = DefaultBaseURL
 	}
 	jar, _ := cookiejar.New(nil)
-	return &Client{HTTP: &http.Client{Jar: jar, Timeout: 45 * time.Second}, BaseURL: strings.TrimRight(baseURL, "/"), Origin: DefaultOrigin}
+	return &Client{HTTP: &http.Client{Transport: upstreamTransport, Jar: jar, Timeout: 45 * time.Second}, BaseURL: strings.TrimRight(baseURL, "/"), Origin: DefaultOrigin}
 }
 
 func (c *Client) request(ctx context.Context, method, path string, query url.Values, body any, ref string, out any) error {

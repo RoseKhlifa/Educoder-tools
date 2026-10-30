@@ -79,7 +79,7 @@ func (s *Server) serveStatic(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", contentType)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 	}
-	http.ServeFile(w, r, file)
+	s.serveStaticFile(w, r, file)
 }
 
 func localFile(base, path string) (string, bool) {
