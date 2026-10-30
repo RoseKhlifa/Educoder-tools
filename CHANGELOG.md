@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.9 — 2026-10-31
+
+- Mark the programming-only AI prompt boundary explicitly
+
 ## 0.1.8 — 2026-10-31
 
 - Clarify suffix-specific source and header semantics in AI prompts

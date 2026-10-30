@@ -45,7 +45,7 @@ func TestDeepSeekWireAndStrictCandidate(t *testing.T) {
 	if got.ResponseFormat.Type != "json_object" || got.Thinking["type"] != "disabled" || got.MaxTokens != 4096 || got.Stream {
 		t.Fatalf("wire defaults not preserved: %#v", got)
 	}
-	if !strings.Contains(got.Messages[0].Content, "turn a header into a source file") || !strings.Contains(got.Messages[0].Content, "exact filename and extension") {
+	if !strings.Contains(got.Messages[0].Content, "only for tasks classified as programming") || !strings.Contains(got.Messages[0].Content, "turn a header into a source file") || !strings.Contains(got.Messages[0].Content, "exact filename and extension") {
 		t.Fatalf("prompt does not make suffix semantics explicit: %s", got.Messages[0].Content)
 	}
 	if got.Model != "deepseek-flash" || result.ProviderRequestID != "req-test" || result.Usage.CacheHitTokens != 3 || result.Usage.ReasoningTokens != 2 {
