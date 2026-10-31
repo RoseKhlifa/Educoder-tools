@@ -224,6 +224,27 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 		out.CompletedLevels++
 		emit(BatchProgress{TotalLevels: out.TotalLevels, CompletedLevels: out.CompletedLevels, SkippedLevels: out.SkippedLevels, FailedLevels: out.FailedLevels}, "verified", fmt.Sprintf("第 %d 关已核验满分", l.Position))
 	}
+	// A level that was full-score during preflight must still be full-score at
+	// the end. This catches upstream progress races or a changed assignment
+	// before exposing the batch as completely passed.
+	finalProgress, finalErr := client.HomeworkProgress(ctx, req.Course, req.HomeworkID)
+	if finalErr != nil {
+		out.Status = "verification_unconfirmed"
+		out.FailedLevels++
+		out.Diagnostics = append(out.Diagnostics, finalErr.Error())
+		return out, finalErr
+	}
+	for i, l := range roster.Levels {
+		p, ok := findFull(finalProgress, l.ChallengeID)
+		if !ok {
+			out.Status = "verification_unconfirmed"
+			out.FailedLevels++
+			out.Levels[i].Status = "verification_unconfirmed"
+			out.Diagnostics = append(out.Diagnostics, fmt.Sprintf("第 %d 关最终满分状态未确认", l.Position))
+			return out, errors.New("final homework verification did not confirm every planned level")
+		}
+		out.Levels[i].Score, out.Levels[i].MaxScore = p.GameScore, p.ChallengeScore
+	}
 	out.CurrentPosition = 0
 	out.CurrentTitle = ""
 	if out.CompletedLevels == out.TotalLevels && out.FailedLevels == 0 {

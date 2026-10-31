@@ -204,6 +204,15 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 			if err != nil {
 				out.ErrorCode = "HOMEWORK_BATCH_FAILED"
 				out.Message = "整份作业在中途停止，已保留已完成关卡"
+				// The batch result is authoritative when its final score check
+				// is uncertain. Returning the transport error as well would make
+				// jobs.Manager overwrite Uncertain with Failed before it can show
+				// the preserved per-level result to the user.
+				if status == jobs.Uncertain {
+					out.ErrorCode = "RESULT_UNCONFIRMED"
+					out.Message = "整份作业的平台结果待复核，已保留已完成关卡"
+					return out, nil
+				}
 			}
 			return out, err
 		}

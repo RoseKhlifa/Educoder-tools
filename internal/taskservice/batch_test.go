@@ -81,3 +81,35 @@ func TestRunHomeworkRejectsIncompleteRosterBeforeModel(t *testing.T) {
 		t.Fatalf("batch=%+v err=%v calls=%d", r, err, p.objectiveCalls.Load())
 	}
 }
+
+func TestRunHomeworkFinalVerificationRejectsLostFullScore(t *testing.T) {
+	progressCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/courses/C/homework_commons.json":
+			fmt.Fprint(w, `{"homeworks":[{"homework_id":44,"name":"hw","is_shixun":true,"shixun_identifier":"SHIXUN","challenge_count":1}]}`)
+		case "/api/shixun_homeworks/44/header_info.json":
+			fmt.Fprint(w, `{"data":{"homework_id":44,"work_id":5,"myshixun_identifier":"RUNTIME","shixun_identifier":"SHIXUN","challenges":[{"id":10,"name":"first"}]}}`)
+		case "/api/homework_commons/44/shixun_challenge_data.json":
+			progressCalls++
+			if progressCalls < 3 {
+				fmt.Fprint(w, `{"data":{"challenge_settings":[{"challenge_id":10,"challenge_name":"first","challenge_score":"10","game_score":"10"}]}}`)
+			} else {
+				fmt.Fprint(w, `{"data":{"challenge_settings":[{"challenge_id":10,"challenge_name":"first","challenge_score":"10","game_score":"9"}]}}`)
+			}
+		case "/api/myshixuns/RUNTIME/challenges.json":
+			fmt.Fprint(w, `[{"identifier":"G1","position":1,"name":"first","status":2}]`)
+		case "/api/tasks/G1.json":
+			fmt.Fprint(w, batchChoiceJSON("G1", "first", 10, 8, 1))
+		default:
+			t.Errorf("unexpected final verification route %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	r, err := New(bank(t), nil, Config{}).RunHomework(context.Background(), educoder.New(server.URL), Request{Owner: "o", Course: "C", HomeworkID: 44, Mode: solver.ModeSubmit}, nil)
+	if err == nil || r.Status != "verification_unconfirmed" || r.CompletedLevels != 1 || r.SkippedLevels != 1 || r.FailedLevels != 1 || r.Levels[0].Status != "verification_unconfirmed" {
+		t.Fatalf("batch=%+v err=%v progress_calls=%d", r, err, progressCalls)
+	}
+}

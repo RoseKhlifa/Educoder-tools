@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.25 — 2026-10-31
+
+- Finalize whole-homework score verification and preserve uncertain batch results
+
 ## 0.1.24 — 2026-10-31
 
 - Allow whole-homework batches to run within their bounded thirty-minute job timeout
