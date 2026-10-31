@@ -88,11 +88,11 @@ func New(store *questionbank.Store, provider Provider, cfg Config) *Service {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 5 * time.Minute
 	}
-	if cfg.MaxModelCalls <= 0 || cfg.MaxModelCalls > 5 {
-		cfg.MaxModelCalls = 5
+	if cfg.MaxModelCalls <= 0 || cfg.MaxModelCalls > 10 {
+		cfg.MaxModelCalls = 10
 	}
-	if cfg.MaxEvaluations <= 0 || cfg.MaxEvaluations > 5 {
-		cfg.MaxEvaluations = 5
+	if cfg.MaxEvaluations <= 0 || cfg.MaxEvaluations > 10 {
+		cfg.MaxEvaluations = 10
 	}
 	if cfg.BudgetMicroUSD <= 0 || cfg.BudgetMicroUSD > 50000 {
 		cfg.BudgetMicroUSD = 50000

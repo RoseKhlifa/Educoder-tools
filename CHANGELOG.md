@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.30 — 2026-10-31
+
+- Allow ten bounded model repairs for persistently non-full objective levels
+
 ## 0.1.29 — 2026-10-31
 
 - Repair newline-only selftest failures, retry model outputs, and expose precise homework stop reasons

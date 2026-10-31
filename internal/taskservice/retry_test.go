@@ -32,7 +32,7 @@ func TestObjectiveTruncationRetryChangesOutputProfileAndRecordsEveryCharge(t *te
 	client, submits := objectiveServer(t, `"13.30"`, false)
 	provider := &objectiveRetryProvider{}
 	service := New(store, provider, Config{})
-	if service.cfg.MaxModelCalls != 5 || service.cfg.MaxEvaluations != 5 {
+	if service.cfg.MaxModelCalls != 10 || service.cfg.MaxEvaluations != 10 {
 		t.Fatalf("web task retry defaults=%+v", service.cfg)
 	}
 	r, err := service.Run(context.Background(), client, req(solver.ModeSubmit), nil)
