@@ -130,6 +130,7 @@ export interface JobCapacity {
   queued: number;
   running: number;
   per_owner_pending: number;
+  per_owner_running: number;
   model_concurrency: number;
   model_configured: boolean;
 }

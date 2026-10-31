@@ -178,6 +178,36 @@ func TestFairSchedulingAndConcurrency(t *testing.T) {
 	}
 }
 
+func TestPerOwnerRunningLimitAllowsIndependentConcurrentJobs(t *testing.T) {
+	m := testManager(t, Config{Workers: 3, QueueSize: 8, PerOwnerPending: 4, PerOwnerRunning: 2})
+	started := make(chan string, 3)
+	release := make(chan struct{})
+	exec := func(ctx context.Context, r Request, _ func(Event)) (Outcome, error) {
+		started <- r.Game
+		select {
+		case <-release:
+			return Outcome{Status: Succeeded}, nil
+		case <-ctx.Done():
+			return Outcome{}, ctx.Err()
+		}
+	}
+	first := submit(t, m, "owner", request("one"), exec)
+	second := submit(t, m, "owner", request("two"), exec)
+	for i := 0; i < 2; i++ {
+		select {
+		case <-started:
+		case <-time.After(3 * time.Second):
+			t.Fatal("second same-owner job did not start concurrently")
+		}
+	}
+	if got := m.Stats(); got.Running != 2 || got.Queued != 0 || got.PerOwnerRunning != 2 {
+		t.Fatalf("stats=%+v", got)
+	}
+	close(release)
+	waitJob(t, m, "owner", first.ID, Succeeded)
+	waitJob(t, m, "owner", second.ID, Succeeded)
+}
+
 func TestQueueLimitsAndQueuedCancellation(t *testing.T) {
 	m := testManager(t, Config{Workers: 1, QueueSize: 1, PerOwnerPending: 1})
 	started := make(chan struct{})

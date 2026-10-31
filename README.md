@@ -19,7 +19,7 @@ Go CLI（cmd/educoder）
     └─ solver → answer / questionbank → 同一 Go 协议客户端
 ~~~
 
-工作台支持登录、查看课堂、选择课堂加载任务、搜索任务、任务详情和退出。详情中的官方实训链接会在外部平台新开标签。网页答题通过 Go 进程内的异步任务服务运行：提交后返回 job ID，由有界 worker 队列执行，浏览器查询状态和事件；不会启动 CLI 子进程。每个账号限制待处理数量，同一账号上游写操作串行，不同账号可以并行。服务重启会把未完成任务标为 interrupted/uncertain，不自动重放可能产生副作用的提交。
+工作台支持登录、查看课堂、选择课堂加载任务、搜索任务、任务详情和退出。详情中的官方实训链接会在外部平台新开标签。网页答题通过 Go 进程内的异步任务服务运行：提交后返回 job ID，由有界 worker 队列执行，浏览器查询状态和事件；不会启动 CLI 子进程。每个账号限制待处理数量，同一账号的不同作业可以按 `JOB_PER_ACCOUNT_RUNNING` 并行执行；同一作业目标仍保持幂等和单目标写入锁。服务重启会把未完成任务标为 interrupted/uncertain，不自动重放可能产生副作用的提交。
 
 ## 本地启动
 
@@ -62,6 +62,11 @@ go run ./cmd/web
 | WEB_COOKIE_SECURE | HTTPS 部署为 true；本地 HTTP 为 false |
 | WEB_ORIGIN | 默认同源；分离开发时指定精确来源 |
 | EDUCODER_API_BASE_URL | 默认官方 API 地址 |
+| JOB_WORKERS | 默认 16 个后台 worker |
+| JOB_QUEUE_SIZE | 默认 256 个等待任务 |
+| JOB_PER_ACCOUNT_PENDING | 默认每账号最多 16 个排队或执行任务 |
+| JOB_PER_ACCOUNT_RUNNING | 默认每账号最多 4 个并行执行任务 |
+| MODEL_CONCURRENCY | 默认最多 8 个同时进行的模型请求；供应商 RPM 仍由模型账户限制 |
 
 ## Go 协议终端
 

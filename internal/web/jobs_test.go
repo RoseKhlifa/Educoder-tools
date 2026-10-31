@@ -223,7 +223,7 @@ func TestHTTPJobsAdmissionUnderConcurrentAccountsIsBounded(t *testing.T) {
 }
 
 func TestJobRuntimeCredentialAndConfig(t *testing.T) {
-	for _, name := range []string{"JOB_WORKERS", "JOB_QUEUE_SIZE", "JOB_PER_ACCOUNT_PENDING", "MODEL_CONCURRENCY", "JOB_TIMEOUT", "MODEL_TIMEOUT", "APP_DATA_DIR", "DEEPSEEK_API_KEY_FILE", "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL"} {
+	for _, name := range []string{"JOB_WORKERS", "JOB_QUEUE_SIZE", "JOB_PER_ACCOUNT_PENDING", "JOB_PER_ACCOUNT_RUNNING", "MODEL_CONCURRENCY", "JOB_TIMEOUT", "MODEL_TIMEOUT", "APP_DATA_DIR", "DEEPSEEK_API_KEY_FILE", "DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL"} {
 		t.Setenv(name, "")
 	}
 	cfg := DefaultConfig()
@@ -232,7 +232,7 @@ func TestJobRuntimeCredentialAndConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.modelConfigured || runtime.manager.Stats().Workers != 8 {
+	if runtime.modelConfigured || runtime.manager.Stats().Workers != 16 || runtime.manager.Stats().PerOwnerRunning != 4 || runtime.modelConcurrency != 8 {
 		t.Fatal("unexpected runtime defaults")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -245,5 +245,9 @@ func TestJobRuntimeCredentialAndConfig(t *testing.T) {
 		if _, err = LoadConfig(); err == nil {
 			t.Fatalf("accepted invalid workers %q", bad)
 		}
+	}
+	t.Setenv("JOB_PER_ACCOUNT_RUNNING", "17")
+	if _, err = LoadConfig(); err == nil {
+		t.Fatal("accepted per-account running limit above worker count")
 	}
 }

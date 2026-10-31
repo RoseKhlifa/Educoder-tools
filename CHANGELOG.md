@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.28 — 2026-10-31
+
+- Raise bounded account and model concurrency for independent homework jobs
+
 ## 0.1.27 — 2026-10-31
 
 - Handle subset homework rosters and prevent objective answer truncation

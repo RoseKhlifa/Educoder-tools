@@ -24,25 +24,26 @@ import (
 const sessionCookieName = "educoder_web_session"
 
 type Config struct {
-	HTTPAddr         string
-	WebOrigin        string
-	APIBaseURL       string
-	SessionTTL       time.Duration
-	StaticDir        string
-	CookieSecure     bool
-	DataDir          string
-	JobWorkers       int
-	JobQueueSize     int
-	JobPerOwner      int
-	JobTimeout       time.Duration
-	ModelConcurrency int
-	ModelTimeout     time.Duration
-	ModelAPIKeyFile  string
-	ModelBaseURL     string
+	HTTPAddr           string
+	WebOrigin          string
+	APIBaseURL         string
+	SessionTTL         time.Duration
+	StaticDir          string
+	CookieSecure       bool
+	DataDir            string
+	JobWorkers         int
+	JobQueueSize       int
+	JobPerOwner        int
+	JobPerOwnerRunning int
+	JobTimeout         time.Duration
+	ModelConcurrency   int
+	ModelTimeout       time.Duration
+	ModelAPIKeyFile    string
+	ModelBaseURL       string
 }
 
 func DefaultConfig() Config {
-	return Config{HTTPAddr: "0.0.0.0:11454", APIBaseURL: educoder.DefaultBaseURL, SessionTTL: 8 * time.Hour, StaticDir: filepath.FromSlash("web"), DataDir: "data", JobWorkers: 8, JobQueueSize: 128, JobPerOwner: 4, JobTimeout: 30 * time.Minute, ModelConcurrency: 2, ModelTimeout: 2 * time.Minute}
+	return Config{HTTPAddr: "0.0.0.0:11454", APIBaseURL: educoder.DefaultBaseURL, SessionTTL: 8 * time.Hour, StaticDir: filepath.FromSlash("web"), DataDir: "data", JobWorkers: 16, JobQueueSize: 256, JobPerOwner: 16, JobPerOwnerRunning: 4, JobTimeout: 30 * time.Minute, ModelConcurrency: 8, ModelTimeout: 2 * time.Minute}
 }
 
 func LoadConfig() (Config, error) {

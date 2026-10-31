@@ -39,7 +39,8 @@ func loadJobConfig(cfg *Config) error {
 	}
 	for name, value := range map[string]*int{
 		"JOB_WORKERS": &cfg.JobWorkers, "JOB_QUEUE_SIZE": &cfg.JobQueueSize,
-		"JOB_PER_ACCOUNT_PENDING": &cfg.JobPerOwner, "MODEL_CONCURRENCY": &cfg.ModelConcurrency,
+		"JOB_PER_ACCOUNT_PENDING": &cfg.JobPerOwner, "JOB_PER_ACCOUNT_RUNNING": &cfg.JobPerOwnerRunning,
+		"MODEL_CONCURRENCY": &cfg.ModelConcurrency,
 	} {
 		if raw := os.Getenv(name); raw != "" {
 			n, err := strconv.Atoi(raw)
@@ -49,7 +50,7 @@ func loadJobConfig(cfg *Config) error {
 			*value = n
 		}
 	}
-	if cfg.JobWorkers > 256 || cfg.ModelConcurrency > 256 || cfg.JobPerOwner > cfg.JobQueueSize+cfg.JobWorkers {
+	if cfg.JobWorkers > 256 || cfg.ModelConcurrency > 256 || cfg.JobPerOwner > cfg.JobQueueSize+cfg.JobWorkers || cfg.JobPerOwnerRunning > cfg.JobWorkers {
 		return errors.New("invalid worker/model concurrency or account pending limit")
 	}
 	for name, value := range map[string]*time.Duration{"JOB_TIMEOUT": &cfg.JobTimeout, "MODEL_TIMEOUT": &cfg.ModelTimeout} {
@@ -110,6 +111,9 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 	if cfg.JobPerOwner <= 0 {
 		cfg.JobPerOwner = defaults.JobPerOwner
 	}
+	if cfg.JobPerOwnerRunning <= 0 {
+		cfg.JobPerOwnerRunning = defaults.JobPerOwnerRunning
+	}
 	if cfg.JobTimeout <= 0 {
 		cfg.JobTimeout = defaults.JobTimeout
 	}
@@ -135,7 +139,7 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 			return nil, errors.New("initialize model provider failed")
 		}
 	}
-	manager, err := jobs.Open(context.Background(), jobs.Config{Path: filepath.Join(cfg.DataDir, "jobs.sqlite"), Workers: cfg.JobWorkers, QueueSize: cfg.JobQueueSize, PerOwnerPending: cfg.JobPerOwner, Timeout: cfg.JobTimeout})
+	manager, err := jobs.Open(context.Background(), jobs.Config{Path: filepath.Join(cfg.DataDir, "jobs.sqlite"), Workers: cfg.JobWorkers, QueueSize: cfg.JobQueueSize, PerOwnerPending: cfg.JobPerOwner, PerOwnerRunning: cfg.JobPerOwnerRunning, Timeout: cfg.JobTimeout})
 	if err != nil {
 		bank.Close()
 		return nil, err
@@ -280,7 +284,7 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, requestID st
 	parts := splitPath(r.URL.Path)
 	if len(parts) == 2 && r.Method == http.MethodGet {
 		if s.jobs == nil {
-			s.writeJSON(w, requestID, http.StatusOK, map[string]any{"jobs": []jobs.Job{}, "capacity": map[string]any{"workers": 0, "queue_size": 0, "queued": 0, "running": 0, "per_owner_pending": 0, "model_concurrency": 0, "model_configured": false}})
+			s.writeJSON(w, requestID, http.StatusOK, map[string]any{"jobs": []jobs.Job{}, "capacity": map[string]any{"workers": 0, "queue_size": 0, "queued": 0, "running": 0, "per_owner_pending": 0, "per_owner_running": 0, "model_concurrency": 0, "model_configured": false}})
 			return
 		}
 		list, err := s.jobs.manager.List(r.Context(), owner, 50)

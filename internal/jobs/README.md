@@ -12,8 +12,8 @@ Accepted work uses a manager-owned context. HTTP disconnection, page navigation
 and logout do not stop it. Call `Cancel` explicitly to request cancellation.
 Executors must propagate their context into model, HTTP and WebSocket calls.
 
-Defaults are eight workers, 128 waiting jobs, four outstanding jobs per owner,
-one running job per owner, a ten-minute execution deadline, seven-day history,
+Defaults are sixteen workers, 256 waiting jobs, sixteen outstanding jobs per owner,
+four running jobs per owner, a thirty-minute execution deadline, seven-day history,
 64 events per job and a 256 KiB result limit. A worker scans past jobs whose
 owner is already running, allowing other accounts to use available capacity.
 

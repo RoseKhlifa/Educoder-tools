@@ -224,7 +224,7 @@ func (m *Manager) Stats() Stats {
 			running++
 		}
 	}
-	return Stats{Workers: m.cfg.Workers, Running: running, Queued: len(m.queue), QueueCapacity: m.cfg.QueueSize, PerOwnerPending: m.cfg.PerOwnerPending, Accepting: !m.closed}
+	return Stats{Workers: m.cfg.Workers, Running: running, Queued: len(m.queue), QueueCapacity: m.cfg.QueueSize, PerOwnerPending: m.cfg.PerOwnerPending, PerOwnerRunning: m.cfg.PerOwnerRunning, Accepting: !m.closed}
 }
 
 func (m *Manager) removeQueuedLocked(id string) {
@@ -249,7 +249,7 @@ func (m *Manager) claim() (*execution, context.Context, <-chan struct{}) {
 			m.queue = append(m.queue[:i], m.queue[i+1:]...)
 			continue
 		}
-		if m.owners[r.owner] > 0 {
+		if m.owners[r.owner] >= m.cfg.PerOwnerRunning {
 			i++
 			continue
 		}

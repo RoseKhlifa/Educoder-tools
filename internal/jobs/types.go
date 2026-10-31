@@ -90,6 +90,10 @@ type Config struct {
 	Workers         int
 	QueueSize       int
 	PerOwnerPending int
+	// PerOwnerRunning limits simultaneous executions for one account. A value
+	// of one preserves strict account serialization; web deployments can raise
+	// it for independent homework targets.
+	PerOwnerRunning int
 	Timeout         time.Duration
 	Retention       time.Duration
 	EventLimit      int
@@ -102,6 +106,7 @@ type Stats struct {
 	Queued          int  `json:"queued"`
 	QueueCapacity   int  `json:"queue_size"`
 	PerOwnerPending int  `json:"per_owner_pending"`
+	PerOwnerRunning int  `json:"per_owner_running"`
 	Accepting       bool `json:"accepting"`
 }
 
@@ -150,6 +155,9 @@ func (c Config) defaults() (Config, error) {
 	if c.PerOwnerPending == 0 {
 		c.PerOwnerPending = 4
 	}
+	if c.PerOwnerRunning == 0 {
+		c.PerOwnerRunning = 1
+	}
 	if c.Timeout == 0 {
 		c.Timeout = 10 * time.Minute
 	}
@@ -162,7 +170,7 @@ func (c Config) defaults() (Config, error) {
 	if c.MaxResultBytes == 0 {
 		c.MaxResultBytes = 256 * 1024
 	}
-	if c.Workers < 1 || c.Workers > 256 || c.QueueSize < 1 || c.QueueSize > 100000 || c.PerOwnerPending < 1 || c.Timeout < time.Millisecond || c.Retention < time.Millisecond || c.EventLimit < 1 || c.EventLimit > 64 || c.MaxResultBytes < 1 || c.MaxResultBytes > 4*1024*1024 {
+	if c.Workers < 1 || c.Workers > 256 || c.QueueSize < 1 || c.QueueSize > 100000 || c.PerOwnerPending < 1 || c.PerOwnerRunning < 1 || c.PerOwnerRunning > c.Workers || c.Timeout < time.Millisecond || c.Retention < time.Millisecond || c.EventLimit < 1 || c.EventLimit > 64 || c.MaxResultBytes < 1 || c.MaxResultBytes > 4*1024*1024 {
 		return c, fmt.Errorf("invalid jobs configuration")
 	}
 	return c, nil
