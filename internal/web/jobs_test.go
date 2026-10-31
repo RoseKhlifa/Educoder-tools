@@ -14,8 +14,10 @@ import (
 	"testing"
 	"time"
 
+	"educoder-cli/internal/answer"
 	"educoder-cli/internal/educoder"
 	"educoder-cli/internal/jobs"
+	"educoder-cli/internal/taskservice"
 )
 
 func jobsHTTP(t *testing.T, cfg jobs.Config, run func(context.Context, EducoderClient, string, jobs.Request, func(jobs.Event)) (jobs.Outcome, error)) (*httptest.Server, *Server, *jobs.Manager) {
@@ -250,4 +252,30 @@ func TestJobRuntimeCredentialAndConfig(t *testing.T) {
 	if _, err = LoadConfig(); err == nil {
 		t.Fatal("accepted per-account running limit above worker count")
 	}
+}
+
+func TestKnownBatchFailureAfterEarlierSubmissionDoesNotBecomeUncertain(t *testing.T) {
+	_, _, manager := jobsHTTP(t, jobs.Config{Workers: 1}, nil)
+	job, _, err := manager.Submit(context.Background(), "owner", jobs.Request{Course: "C", HomeworkID: 1, Scope: "homework", Mode: "submit"}, func(_ context.Context, _ jobs.Request, report func(jobs.Event)) (jobs.Outcome, error) {
+		report(jobs.Event{Phase: "submitting", Message: "第一关提交"})
+		report(jobs.Event{Phase: "generating", Message: "第二关生成"})
+		return homeworkOutcome(&taskservice.BatchResult{Status: "model_error", TotalLevels: 2, CompletedLevels: 1, FailedLevels: 1, ReasonCode: "model_output_truncated"}, &answer.Error{Kind: "truncated_output"})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
+		got, e := manager.Get(context.Background(), "owner", job.ID)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if got.Status != jobs.Queued && got.Status != jobs.Running {
+			if got.Status != jobs.Failed || got.ErrorCode != "HOMEWORK_BATCH_FAILED" || !strings.Contains(string(got.Result), "model_output_truncated") {
+				t.Fatalf("known failure was overwritten: %+v", got)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("job did not finish")
 }

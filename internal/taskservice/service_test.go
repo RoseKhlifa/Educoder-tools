@@ -23,6 +23,7 @@ type fakeProvider struct {
 	programmingCalls   atomic.Int64
 	objectiveCalls     atomic.Int64
 	objectiveMaxTokens atomic.Int64
+	objectiveFailures  atomic.Int64
 	generate           func(context.Context) error
 	estimated          int64
 	unknown            bool
@@ -51,6 +52,9 @@ func (p *fakeProvider) Generate(ctx context.Context, r answer.Request) (answer.R
 func (p *fakeProvider) GenerateObjective(ctx context.Context, r answer.ObjectiveRequest) (answer.ObjectiveResult, error) {
 	p.objectiveCalls.Add(1)
 	for old := p.objectiveMaxTokens.Load(); int64(r.Profile.MaxTokens) > old && !p.objectiveMaxTokens.CompareAndSwap(old, int64(r.Profile.MaxTokens)); old = p.objectiveMaxTokens.Load() {
+	}
+	if p.objectiveFailures.Load() > 0 && p.objectiveFailures.Add(-1) >= 0 {
+		return answer.ObjectiveResult{}, &answer.Error{Kind: "truncated_output"}
 	}
 	if p.generate != nil {
 		if err := p.generate(ctx); err != nil {
@@ -127,6 +131,18 @@ func TestObjectiveFullScoreBankReuseAndPublicSummary(t *testing.T) {
 		t.Fatalf("private answer data in result %s", raw)
 	}
 }
+
+func TestObjectiveRetriesTruncatedModelOutputBeforeSubmitting(t *testing.T) {
+	store := bank(t)
+	client, submits := objectiveServer(t, `"13.30"`, false)
+	provider := &fakeProvider{}
+	provider.objectiveFailures.Store(2)
+	r, err := New(store, provider, Config{MaxModelCalls: 5, MaxEvaluations: 5}).Run(context.Background(), client, req(solver.ModeSubmit), nil)
+	if err != nil || r == nil || r.Status != "passed" || r.ModelCalls != 3 || provider.objectiveCalls.Load() != 3 || submits.Load() != 1 {
+		t.Fatalf("retry result=%+v err=%v model_calls=%d submits=%d", r, err, provider.objectiveCalls.Load(), submits.Load())
+	}
+}
+
 func TestObjectiveIncompleteOrUncertainNeverPromotesOrRetries(t *testing.T) {
 	for _, tc := range []struct {
 		name, score, status string

@@ -2,40 +2,47 @@ package taskservice
 
 import (
 	"context"
+	"educoder-cli/internal/answer"
 	"educoder-cli/internal/educoder"
 	"educoder-cli/internal/solver"
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 )
 
 const batchBudgetMicroUSD int64 = 500000 // $0.50 across the whole homework
 
 type BatchLevel struct {
-	Position    int    `json:"position"`
-	ChallengeID int64  `json:"challenge_id"`
-	Title       string `json:"title"`
-	Kind        string `json:"kind"`
-	Status      string `json:"status"`
-	Score       string `json:"score,omitempty"`
-	MaxScore    string `json:"max_score,omitempty"`
+	Position      int    `json:"position"`
+	ChallengeID   int64  `json:"challenge_id"`
+	Title         string `json:"title"`
+	Kind          string `json:"kind"`
+	Status        string `json:"status"`
+	Score         string `json:"score,omitempty"`
+	MaxScore      string `json:"max_score,omitempty"`
+	ModelCalls    int    `json:"model_calls"`
+	MaxModelCalls int    `json:"max_model_calls"`
+	ReasonCode    string `json:"reason_code,omitempty"`
 }
 
 type BatchResult struct {
-	Status          string       `json:"status"`
-	Kind            string       `json:"kind"`
-	Scope           string       `json:"scope"`
-	TotalLevels     int          `json:"total_levels"`
-	CompletedLevels int          `json:"completed_levels"`
-	SkippedLevels   int          `json:"skipped_levels"`
-	FailedLevels    int          `json:"failed_levels"`
-	CurrentPosition int          `json:"current_position,omitempty"`
-	CurrentTitle    string       `json:"current_title,omitempty"`
-	ModelCalls      int          `json:"model_calls"`
-	CostMicroUSD    int64        `json:"cost_micro_usd"`
-	Levels          []BatchLevel `json:"levels"`
-	Diagnostics     []string     `json:"diagnostics,omitempty"`
+	Status           string       `json:"status"`
+	Kind             string       `json:"kind"`
+	Scope            string       `json:"scope"`
+	TotalLevels      int          `json:"total_levels"`
+	CompletedLevels  int          `json:"completed_levels"`
+	SkippedLevels    int          `json:"skipped_levels"`
+	FailedLevels     int          `json:"failed_levels"`
+	CurrentPosition  int          `json:"current_position,omitempty"`
+	CurrentTitle     string       `json:"current_title,omitempty"`
+	ModelCalls       int          `json:"model_calls"`
+	CostMicroUSD     int64        `json:"cost_micro_usd"`
+	ReservedMicroUSD int64        `json:"reserved_micro_usd,omitempty"`
+	Levels           []BatchLevel `json:"levels"`
+	Diagnostics      []string     `json:"diagnostics,omitempty"`
+	ReasonCode       string       `json:"reason_code,omitempty"`
 }
 
 // RunHomework executes every level in the selected homework in one process.
@@ -105,7 +112,7 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 	out.TotalLevels = len(roster.Levels)
 	out.Levels = make([]BatchLevel, 0, len(roster.Levels))
 	for _, l := range roster.Levels {
-		out.Levels = append(out.Levels, BatchLevel{Position: l.Position, ChallengeID: l.ChallengeID, Title: l.Title, Status: "planned"})
+		out.Levels = append(out.Levels, BatchLevel{Position: l.Position, ChallengeID: l.ChallengeID, Title: l.Title, Status: "planned", MaxModelCalls: s.cfg.MaxModelCalls})
 	}
 	// Load and validate every planned task before the first solver call. This
 	// is deliberately separate from the per-level guard: a stale or partial
@@ -180,7 +187,7 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 		if e != nil {
 			return out, e
 		}
-		remaining := batchBudgetMicroUSD - out.CostMicroUSD
+		remaining := batchBudgetMicroUSD - out.CostMicroUSD - out.ReservedMicroUSD
 		if remaining <= 0 {
 			out.Status = "budget_exhausted"
 			out.FailedLevels++
@@ -192,12 +199,22 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 		if single != nil {
 			out.ModelCalls += single.ModelCalls
 			out.CostMicroUSD += single.CostMicroUSD
+			out.ReservedMicroUSD += single.ReservedMicroUSD
 			out.Levels[i].Kind = single.Kind
+			out.Levels[i].ModelCalls = single.ModelCalls
+			out.Levels[i].Score = single.Score
+			out.Levels[i].MaxScore = single.MaxScore
 		}
-		if runErr != nil || single == nil {
+		// A returned child result is authoritative. In particular a completed
+		// self-test failure or exhausted repair budget is not an unknown submit.
+		// Preserve that reason instead of replacing every non-full score with
+		// verification_unconfirmed below.
+		if runErr != nil || single == nil || single.Status != "passed" {
 			out.FailedLevels++
 			out.Levels[i].Status = statusOf(single, runErr)
 			out.Status = terminalBatchStatus(single, runErr)
+			out.ReasonCode = batchFailureReason(single, runErr)
+			out.Levels[i].ReasonCode = out.ReasonCode
 			out.Diagnostics = append(out.Diagnostics, errorText(runErr))
 			return out, runErr
 		}
@@ -272,7 +289,7 @@ func statusOf(r *Result, e error) string {
 func terminalBatchStatus(r *Result, e error) string {
 	if r != nil {
 		switch r.Status {
-		case "uncertain", "verification_unconfirmed", "canceled", "budget_exhausted":
+		case "uncertain", "verification_unconfirmed", "canceled", "budget_exhausted", "model_error", "selftest_failed", "attempts_exhausted", "invalid_candidate", "unsupported_multifile", "budget_unavailable", "usage_persistence_failed", "verification_persistence_failed":
 			return r.Status
 		}
 	}
@@ -280,6 +297,59 @@ func terminalBatchStatus(r *Result, e error) string {
 		return "canceled"
 	}
 	return "failed"
+}
+
+// batchFailureReason emits an enum only. Upstream bodies, model responses,
+// source code and execution URLs are never copied into a public reason.
+func batchFailureReason(r *Result, err error) string {
+	var providerErr *answer.Error
+	if errors.As(err, &providerErr) {
+		switch providerErr.Kind {
+		case "truncated_output":
+			return "model_output_truncated"
+		case "invalid_output_json", "candidate_contract", "objective_candidate_contract":
+			return "model_response_invalid"
+		case "timeout":
+			return "model_timeout"
+		case "network_error":
+			return "model_network_error"
+		case "upstream_error":
+			if providerErr.HTTPStatus == 429 {
+				return "model_rate_limited"
+			}
+		}
+		return "model_error"
+	}
+	if r == nil {
+		return "execution_failed"
+	}
+	diagnostics := append([]string(nil), r.Diagnostics...)
+	if r.Programming != nil {
+		diagnostics = append(diagnostics, r.Programming.Diagnostics...)
+	}
+	if err != nil {
+		diagnostics = append(diagnostics, err.Error())
+	}
+	for _, diagnostic := range diagnostics {
+		switch {
+		case strings.Contains(diagnostic, "WebSocket 连接失败"):
+			return "selftest_connection_failed"
+		case strings.Contains(diagnostic, "ProcessFinished") || strings.Contains(diagnostic, "自测等待结束"):
+			return "selftest_stream_unconfirmed"
+		case strings.Contains(diagnostic, "editor content"):
+			return "editor_changed"
+		}
+	}
+	switch r.Status {
+	case "model_error", "selftest_failed", "attempts_exhausted", "verification_unconfirmed", "budget_exhausted", "canceled":
+		return r.Status
+	case "invalid_candidate":
+		return "model_response_invalid"
+	case "uncertain":
+		return "submission_uncertain"
+	default:
+		return "execution_failed"
+	}
 }
 func errorText(e error) string {
 	if e == nil {

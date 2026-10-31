@@ -81,7 +81,7 @@ POST /api/tasks/:game/log_output
 
 HTTP 响应只给 `data.wss_url`。连接其 `/log`，客户端发送明文 JSON `{tp:"log",data:myshixun.id}`。服务端帧内容为 Base64 文本（可能省略 padding），解码 UTF-8 后依次得到 stdout 与精确结束标记 `ProcessFinished`。原编译任务页的 `onmessage` 也执行 `Base64.decode`，确认这属于线上编码，不能将其误作 HAR 额外编码。看到结束标记才算输出完整；提前关闭、超时或超出输出限制应返回未完成状态/错误。
 
-两次自测输入均与该关公开 `test_sets[0].input` 一致。stdout 仅把 CRLF 归一为 LF 后，与公开期望输出一致。比较保留其他空格和末尾换行，避免将不相等输出标成相等。自测输出相等不等于正式通关。
+两次自测输入均与该关公开 `test_sets[0].input` 一致。stdout 比较先把 CRLF 归一为 LF，再允许一次可选的终止换行，以兼容题目样例缺少最后换行而程序正常输出换行的情况。内部空格、额外空行和输出内容仍严格比较。自测输出相等不等于正式通关，必须继续取得正式评测和当前关卡满分证据。
 
 ## 提交、评测和通过状态
 

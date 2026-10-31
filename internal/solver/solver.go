@@ -11,10 +11,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"educoder-cli/internal/answer"
+	"educoder-cli/internal/educoder"
 	"educoder-cli/internal/problem"
 	"educoder-cli/internal/questionbank"
 )
@@ -496,11 +498,23 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 	if err != nil {
 		return nil, err
 	}
-	// Reuse only candidates with formal upstream evidence.
+	// Verified candidates are reusable. A narrowly identified legacy output-
+	// comparison failure may also be re-tested, with no promotion or skipped
+	// samples: its old rejection is not evidence of wrong source.
 	var candidates []questionbank.Candidate
+	legacyRetest := make(map[int64]bool)
 	for _, c := range allCandidates {
 		if c.Status == "upstream_verified" {
 			candidates = append(candidates, c)
+		}
+	}
+	if len(candidates) == 0 && req.Mode != ModeGenerateOnly && len(snap.PublicTests) > 0 {
+		for _, c := range allCandidates {
+			if legacyNewlineOnlyRejection(c) {
+				candidates = append(candidates, c)
+				legacyRetest[c.ID] = true
+				break
+			}
 		}
 	}
 	// Revalidate only the best reusable candidate first. If it fails, feed its
@@ -508,6 +522,7 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 	// stale candidates; every other candidate remains queryable in the bank.
 	var previous = state.LastCandidate
 	feedback := append([]answer.Feedback(nil), state.Feedback...)
+	compactOutput := false
 	if len(candidates) == 0 && previous == nil && len(feedback) == 0 {
 		for _, rejected := range allCandidates {
 			if rejected.Status == "rejected" {
@@ -530,12 +545,17 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 		state.Attempts = attempt + 1
 		var candidate answer.Candidate
 		var bankID int64
+		legacyRetestAttempt := false
 		if len(candidates) > 0 && len(feedback) == 0 {
 			bc := candidates[0]
 			bankID = bc.ID
 			candidate = answer.Candidate{Kind: "programming", Language: languageOf(snap), Files: bc.Files}
 			result.Source = bc.Source
 			result.CandidateID = bankID
+			legacyRetestAttempt = legacyRetest[bankID]
+			if legacyRetestAttempt {
+				result.Diagnostics = append(result.Diagnostics, "旧候选仅因末尾换行比较被拒绝，正在重新执行全部公开自测和正式评测")
+			}
 		} else {
 			if s.provider == nil {
 				result.Status = "needs_provider"
@@ -557,6 +577,12 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			}
 			if result.ModelCalls >= 2 {
 				profile = s.cfg.ProProfile
+			}
+			if compactOutput {
+				// Reasoning shares max_tokens with the emitted source. Following a
+				// truncation, reserve space for a complete candidate and avoid
+				// spending that space on optional reasoning again.
+				profile.Thinking, profile.ReasoningEffort, profile.MaxTokens = "disabled", "", 8192
 			}
 			if previous != nil {
 				if err := validateCandidate(snap, *previous); err != nil {
@@ -649,6 +675,20 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				}
 				state.Feedback = []answer.Feedback{{Kind: "model", Message: ge.Error()}}
 				result.Diagnostics = append(result.Diagnostics, ge.Error())
+				if retryableGenerationError(ge) && attempt+1 < req.MaxEvaluations && result.ModelCalls < req.MaxModelCalls && ctx.Err() == nil {
+					compactOutput = compactOutput || answer.IsTruncatedOutput(ge)
+					feedback = append([]answer.Feedback(nil), state.Feedback...)
+					if len(gen.Candidate.Files) > 0 {
+						previous = &gen.Candidate
+					}
+					state.Result = *result
+					if persistErr := s.persist(ctx, result.RunID, state, "running", created); persistErr != nil {
+						result.Status = "checkpoint_persistence_failed"
+						return result, persistErr
+					}
+					stage(req, "generating", "模型输出未完成，正在自动重试生成")
+					continue
+				}
 				result.Status = "model_error"
 				state.Result = *result
 				_ = s.persist(ctx, result.RunID, state, result.Status, created)
@@ -692,7 +732,7 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 		result.CodeHash, _ = problem.HashFiles(candidate.Files)
 		state.LastCandidate = &candidate
 		for _, rejected := range allCandidates {
-			if rejected.Status == "rejected" && rejected.FilesHash == result.CodeHash {
+			if rejected.Status == "rejected" && rejected.FilesHash == result.CodeHash && !legacyRetestAttempt {
 				feedback = candidateFeedback(rejected)
 				feedback = append(feedback, answer.Feedback{Kind: "repeated_candidate", Message: "This exact candidate already failed. Produce a corrected candidate; do not repeat unchanged source."})
 				state.Feedback = append([]answer.Feedback(nil), feedback...)
@@ -787,6 +827,7 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				_ = s.persist(ctx, result.RunID, state, result.Status, created)
 				return result, nil
 			}
+			stage(req, "repairing", "公开自测未通过，正在根据反馈自动修复")
 			continue
 		}
 		if len(snap.PublicTests) > 0 {
@@ -899,6 +940,14 @@ func languageOf(s problem.Snapshot) string {
 	}
 	return ""
 }
+
+// retryableGenerationError only covers failures before any upstream save or
+// submit. Once an adapter mutation or evaluation is uncertain, the caller
+// must stop and ask for platform verification instead of replaying it.
+func retryableGenerationError(err error) bool {
+	return answer.IsRetryableError(err)
+}
+
 func validateCandidate(s problem.Snapshot, c answer.Candidate) error {
 	if err := answer.ValidateCandidate(s, c); err != nil {
 		return err
@@ -936,6 +985,46 @@ func publicText(s string) string {
 		return "feedback withheld by public-data validator"
 	}
 	return s
+}
+
+// legacyNewlineOnlyRejection is a compatibility read, not a bank migration or
+// correctness verdict. Every historical rejection must bind this exact source
+// and a terminal, complete self-test whose only mismatch was the one terminal
+// newline now handled by PublicOutputMatches. Unknown evaluations and any
+// genuine failed sample keep the ordinary rejected-candidate guard.
+func legacyNewlineOnlyRejection(c questionbank.Candidate) bool {
+	if c.Status != "rejected" || c.FilesHash == "" {
+		return false
+	}
+	hash, err := problem.HashFiles(c.Files)
+	if err != nil || hash != c.FilesHash {
+		return false
+	}
+	found := false
+	for _, validation := range c.Validations {
+		if validation.Result == "unknown" {
+			return false
+		}
+		if validation.Result != "failed" {
+			continue
+		}
+		if validation.Kind != "selftest" || !validation.Terminal || !validation.Complete || validation.TestCount != 1 || validation.PassedCount != 0 || validation.FilesHash != c.FilesHash || validation.SavedFilesHash != c.FilesHash || validation.RevisionHash != c.RevisionHash || validation.ContractHash != c.ContractHash {
+			return false
+		}
+		var feedback []answer.Feedback
+		if json.Unmarshal([]byte(validation.Feedback), &feedback) != nil || len(feedback) == 0 {
+			return false
+		}
+		for _, entry := range feedback {
+			oldActual := strings.ReplaceAll(entry.ActualStdout, "\r\n", "\n")
+			oldExpected := strings.ReplaceAll(entry.ExpectedStdout, "\r\n", "\n")
+			if entry.Kind != "selftest" || oldActual == oldExpected || !educoder.PublicOutputMatches(entry.ActualStdout, entry.ExpectedStdout) {
+				return false
+			}
+		}
+		found = true
+	}
+	return found
 }
 
 func candidateFeedback(c questionbank.Candidate) []answer.Feedback {

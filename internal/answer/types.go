@@ -4,6 +4,7 @@ package answer
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -116,6 +117,32 @@ type Error struct {
 	HTTPStatus    int
 	Retryable     bool
 	BilledUnknown bool
+}
+
+// IsRetryableError classifies provider-only failures. Callers must separately
+// check their mutation boundary and remaining context, cost, and attempt
+// budgets. It never authorizes replaying an uncertain platform operation.
+func IsRetryableError(err error) bool {
+	var providerErr *Error
+	if !errors.As(err, &providerErr) {
+		return false
+	}
+	if providerErr.Retryable {
+		return true
+	}
+	switch providerErr.Kind {
+	case "truncated_output", "invalid_output_json", "candidate_contract", "objective_candidate_contract":
+		return true
+	default:
+		return false
+	}
+}
+
+// IsTruncatedOutput lets orchestration reserve a complete output budget and
+// disable optional reasoning for its next bounded provider attempt.
+func IsTruncatedOutput(err error) bool {
+	var providerErr *Error
+	return errors.As(err, &providerErr) && providerErr.Kind == "truncated_output"
 }
 
 func (e *Error) Error() string {

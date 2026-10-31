@@ -53,19 +53,20 @@ type BatchProgress struct {
 	CurrentTitle    string `json:"current_title,omitempty"`
 }
 type Result struct {
-	Status       string         `json:"status"`
-	Kind         string         `json:"kind"`
-	RunID        string         `json:"run_id,omitempty"`
-	CandidateID  int64          `json:"candidate_id,omitempty"`
-	Source       string         `json:"source,omitempty"`
-	ModelCalls   int            `json:"model_calls"`
-	CostMicroUSD int64          `json:"cost_micro_usd"`
-	Score        string         `json:"score,omitempty"`
-	MaxScore     string         `json:"max_score,omitempty"`
-	ScoreCheck   string         `json:"score_check,omitempty"`
-	ScoreKnown   bool           `json:"score_known,omitempty"`
-	Programming  *solver.Result `json:"programming,omitempty"`
-	Diagnostics  []string       `json:"diagnostics,omitempty"`
+	Status           string         `json:"status"`
+	Kind             string         `json:"kind"`
+	RunID            string         `json:"run_id,omitempty"`
+	CandidateID      int64          `json:"candidate_id,omitempty"`
+	Source           string         `json:"source,omitempty"`
+	ModelCalls       int            `json:"model_calls"`
+	CostMicroUSD     int64          `json:"cost_micro_usd"`
+	ReservedMicroUSD int64          `json:"reserved_micro_usd,omitempty"`
+	Score            string         `json:"score,omitempty"`
+	MaxScore         string         `json:"max_score,omitempty"`
+	ScoreCheck       string         `json:"score_check,omitempty"`
+	ScoreKnown       bool           `json:"score_known,omitempty"`
+	Programming      *solver.Result `json:"programming,omitempty"`
+	Diagnostics      []string       `json:"diagnostics,omitempty"`
 }
 type Service struct {
 	store       *questionbank.Store
@@ -87,11 +88,11 @@ func New(store *questionbank.Store, provider Provider, cfg Config) *Service {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 5 * time.Minute
 	}
-	if cfg.MaxModelCalls <= 0 || cfg.MaxModelCalls > 3 {
-		cfg.MaxModelCalls = 3
+	if cfg.MaxModelCalls <= 0 || cfg.MaxModelCalls > 5 {
+		cfg.MaxModelCalls = 5
 	}
-	if cfg.MaxEvaluations <= 0 || cfg.MaxEvaluations > 3 {
-		cfg.MaxEvaluations = 3
+	if cfg.MaxEvaluations <= 0 || cfg.MaxEvaluations > 5 {
+		cfg.MaxEvaluations = 5
 	}
 	if cfg.BudgetMicroUSD <= 0 || cfg.BudgetMicroUSD > 50000 {
 		cfg.BudgetMicroUSD = 50000
@@ -178,7 +179,7 @@ func (s *Service) Run(ctx context.Context, client *educoder.Client, req Request,
 		if r == nil {
 			return nil, e
 		}
-		return &Result{Status: r.Status, Kind: "programming", RunID: r.RunID, CandidateID: r.CandidateID, Source: r.Source, ModelCalls: r.ModelCalls, CostMicroUSD: r.CostMicroUSD, Programming: publicProgramming(r), Diagnostics: r.Diagnostics}, e
+		return &Result{Status: r.Status, Kind: "programming", RunID: r.RunID, CandidateID: r.CandidateID, Source: r.Source, ModelCalls: r.ModelCalls, CostMicroUSD: r.CostMicroUSD, ReservedMicroUSD: r.ReservedMicroUSD, Programming: publicProgramming(r), Diagnostics: r.Diagnostics}, e
 	case educoder.TaskKindChoice:
 		return s.runObjective(ctx, client, req, func(phase, message string) { emit(phase, "objective", message) }, req.BudgetMicroUSD)
 	default:
@@ -278,6 +279,7 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 	}
 	var previous *answer.ObjectiveCandidate
 	var feedback []answer.Feedback
+	compactOutput := false
 	for attempt := 0; attempt < s.cfg.MaxEvaluations; attempt++ {
 		var c answer.ObjectiveCandidate
 		if attempt == 0 && cacheErr == nil {
@@ -304,6 +306,12 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			// pro profiles can consume the entire 4096-token budget before the
 			// JSON answer is emitted. Leave enough room for a complete candidate.
 			profile.MaxTokens = 8192
+			if compactOutput {
+				// Reasoning and answers share the output limit. If a prior
+				// response was truncated, the next response uses the entire
+				// allowance for the compact answer JSON.
+				profile.Thinking, profile.ReasoningEffort = "disabled", ""
+			}
 			pr := answer.ObjectiveRequest{Problem: snapshot, Previous: previous, Feedback: feedback, Profile: profile}
 			estimate, e := s.provider.EstimateObjective(pr)
 			if e != nil {
@@ -335,13 +343,24 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			}
 			usageErr := s.store.RecordUsage(usageCtx, questionbank.Usage{RunID: r.RunID, Provider: "deepseek", Model: generated.Model, PricingVersion: priceVersion, InputTokens: generated.Usage.PromptTokens, CachedInputTokens: generated.Usage.CacheHitTokens, OutputTokens: generated.Usage.CompletionTokens, ReservedMicroUSD: estimate.CostMicroUSD, CostMicroUSD: generated.CostMicroUSD, Status: status, FinishReason: generated.FinishReason, LatencyMillis: generated.Duration.Milliseconds()})
 			usageCancel()
-			if e != nil {
-				r.Status = "model_error"
-				return r, e
-			}
 			if usageErr != nil {
 				r.Status = "usage_persistence_failed"
-				return r, usageErr
+				return r, errors.Join(e, usageErr)
+			}
+			if e != nil {
+				if retryableObjectiveModelError(e) && attempt+1 < s.cfg.MaxEvaluations && r.ModelCalls < s.cfg.MaxModelCalls && ctx.Err() == nil {
+					compactOutput = compactOutput || answer.IsTruncatedOutput(e)
+					r.Diagnostics = append(r.Diagnostics, e.Error())
+					feedback = []answer.Feedback{{Kind: "model", Message: e.Error()}}
+					if persistErr := s.persistObjective(ctx, req, r, created); persistErr != nil {
+						r.Status = "checkpoint_persistence_failed"
+						return r, persistErr
+					}
+					emit("generating", "模型输出未完成，正在自动重试生成")
+					continue
+				}
+				r.Status = "model_error"
+				return r, e
 			}
 			if r.CostMicroUSD > budget {
 				r.Status = "budget_exhausted"
@@ -399,9 +418,17 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 		}
 		previous = &c
 		feedback = []answer.Feedback{{Kind: "formal", Message: fmt.Sprintf("本关得分 %s / %s，尚未满分，请复核全部题目和选项", submitted.Score, submitted.MaxScore)}}
+		emit("repairing", "当前关卡未满分，正在根据得分自动修复")
 	}
 	r.Status = "attempts_exhausted"
 	return r, nil
+}
+
+// retryableObjectiveModelError is limited to failures before the platform
+// mutation. A truncated or malformed model response can be regenerated; an
+// uncertain submit or platform evaluation must stop to avoid duplicate writes.
+func retryableObjectiveModelError(err error) bool {
+	return answer.IsRetryableError(err)
 }
 
 type limitedProvider struct {

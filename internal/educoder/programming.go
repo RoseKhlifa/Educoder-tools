@@ -256,8 +256,19 @@ type SelfTestResult struct {
 	Completed bool   `json:"completed"`
 	Output    string `json:"output"`
 	// Matches is absent unless the caller supplied expected output. Comparison
-	// only normalizes CRLF; spaces and a final newline remain significant.
+	// normalizes CRLF and ignores one terminal LF; spaces and internal blank
+	// lines remain significant.
 	Matches *bool `json:"matches,omitempty"`
+}
+
+// PublicOutputMatches compares completed stdout with a public sample. The
+// runner may add one final line terminator independently from the sample
+// editor. All other whitespace, including a second terminal LF, is data.
+func PublicOutputMatches(actual, expected string) bool {
+	normalize := func(output string) string {
+		return strings.TrimSuffix(strings.ReplaceAll(output, "\r\n", "\n"), "\n")
+	}
+	return normalize(actual) == normalize(expected)
 }
 
 // SelfTest saves with evaluate=0 and streams one explicit stdin execution.
@@ -339,7 +350,7 @@ func (c *Client) SelfTest(ctx context.Context, t *Task, filePath, content, input
 			}
 			result.Completed = true
 			if options.ExpectedOutput != nil {
-				matches := strings.ReplaceAll(result.Output, "\r\n", "\n") == strings.ReplaceAll(*options.ExpectedOutput, "\r\n", "\n")
+				matches := PublicOutputMatches(result.Output, *options.ExpectedOutput)
 				result.Matches = &matches
 			}
 			_ = connection.Close(websocket.StatusNormalClosure, "")

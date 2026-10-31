@@ -258,6 +258,51 @@ await test('compiled workbench UI behavior', async t => {
     assert.match(page.html(), /第 2 关 · 第二关/);
     assert.match(page.html(), /已满分，跳过/);
   });
+  await t.test('partial homework explains the stopped level and labels later planned levels as not executed', async () => {
+    const job = answerJob({ request: { course: 'COURSE_A', homework_id: 20, scope: 'homework', mode: 'submit' }, status: 'failed', phase: 'selftest', result: { status: 'selftest_failed', total_levels: 3, completed_levels: 1, failed_levels: 1, current_position: 2, current_title: '第二关', reason_code: 'selftest_failed', levels: [{ position: 1, title: '第一关', status: 'passed' }, { position: 2, title: '<第二关>', status: 'selftest_failed', reason_code: 'selftest_failed', model_calls: 6, max_model_calls: 6 }, { position: 3, title: '第三关', status: 'planned' }] } });
+    const page = await app({ '/api/jobs': () => ok({ jobs: [job], capacity }) });
+    assert.match(page.html(), /已完成 1\/3 关/);
+    assert.match(page.html(), /停止位置：第 2 关 · &lt;第二关&gt;/);
+    assert.match(page.html(), /原因：当前代码未通过公开样例自测/);
+    assert.match(page.html(), /模型调用 6 \/ 6 次/);
+    assert.match(page.html(), /第三关<\/span><strong>尚未执行/);
+    assert.doesNotMatch(page.html(), /第三关<\/span><strong>结果待核验|全部关卡已核验通过|平台结果待复核/);
+  });
+  await t.test('model truncation is shown as generation failure without rendering raw diagnostics or arbitrary reason text', async () => {
+    const job = answerJob({ request: { course: 'COURSE_A', homework_id: 20, scope: 'homework', mode: 'submit' }, status: 'uncertain', phase: 'generating', message: 'secret-provider-message', result: { status: 'failed', total_levels: 2, completed_levels: 0, failed_levels: 1, current_position: 1, diagnostics: ['model provider truncated_output', 'secret-upstream-diagnostic'], reason: 'secret-raw-reason', levels: [{ position: 1, title: '第一关', status: 'model_error', model_calls: 6, max_model_calls: 6 }, { position: 2, title: '第二关', status: 'planned' }] } });
+    const page = await app({ '/api/jobs': () => ok({ jobs: [job], capacity }) });
+    assert.match(page.html(), /执行未完成/);
+    assert.match(page.html(), /模型输出被截断，答案未完整返回/);
+    assert.match(page.html(), /未继续提交不完整答案/);
+    assert.doesNotMatch(page.html(), /secret-provider-message|secret-upstream-diagnostic|secret-raw-reason|平台结果待复核|全部关卡已核验通过/);
+  });
+  await t.test('repair exhaustion and platform uncertainty remain different failure explanations', async () => {
+    const request = { course: 'COURSE_A', homework_id: 20, scope: 'homework', mode: 'submit' };
+    const exhausted = await app({ '/api/jobs': () => ok({ jobs: [answerJob({ request, status: 'failed', phase: 'repairing', result: { status: 'attempts_exhausted', reason_code: 'attempts_exhausted', current_position: 3, total_levels: 3, completed_levels: 2, failed_levels: 1, levels: [{ position: 3, title: '第三关', status: 'attempts_exhausted', model_calls: 6, max_model_calls: 6 }] } })], capacity }) });
+    assert.match(exhausted.html(), /已达到本次自动修复次数上限，仍未通过/);
+    assert.match(exhausted.html(), /当前关卡未计为完成/);
+    assert.doesNotMatch(exhausted.html(), /平台结果待复核|全部关卡已核验通过/);
+    const unconfirmed = await app({ '/api/jobs': () => ok({ jobs: [answerJob({ request, status: 'uncertain', phase: 'verifying', result: { status: 'verification_unconfirmed', reason_code: 'verification_unconfirmed', current_position: 3, total_levels: 3, completed_levels: 2, failed_levels: 1, levels: [{ position: 3, title: '第三关', status: 'verification_unconfirmed' }] } })], capacity }) });
+    assert.match(unconfirmed.html(), /评测结果待复核/);
+    assert.match(unconfirmed.html(), /平台尚未返回可核验的满分结果/);
+    assert.match(unconfirmed.html(), /避免重复提交/);
+    assert.doesNotMatch(unconfirmed.html(), /次数上限|全部关卡已核验通过/);
+  });
+  await t.test('unrecognized homework reason fields and diagnostics never become visible details', async () => {
+    const job = answerJob({ request: { course: 'COURSE_A', homework_id: 20, scope: 'homework', mode: 'submit' }, status: 'failed', phase: 'generating', result: { status: 'unknown-status-secret', reason_code: 'unknown-code-secret', reason: 'untrusted reason secret', diagnostics: ['model provider truncated_output SECRET'], current_position: 1, levels: [{ position: 1, title: '第一关', status: 'unknown-level-secret', reason_code: 'unrecognized-level-secret', reason: 'untrusted-level-secret', model_calls: -5, max_model_calls: 'secret-limit' }, { position: 2, title: '第二关', status: 'planned' }] } });
+    const page = await app({ '/api/jobs': () => ok({ jobs: [job], capacity }) });
+    assert.match(page.html(), /尚未执行/);
+    assert.doesNotMatch(page.html(), /secret|SECRET|模型调用 -5|模型输出被截断/);
+  });
+  await t.test('active homework displays allowlisted automatic retry progress without exposing arbitrary messages', async () => {
+    let job = answerJob({ request: { course: 'COURSE_A', homework_id: 20, scope: 'homework', mode: 'submit' }, status: 'running', phase: 'generating', message: '模型输出未完成，正在自动重试生成', progress: { total_levels: 2, completed_levels: 0, current_position: 1, current_title: '第一关' } });
+    const page = await app({ '/api/jobs': () => ok({ jobs: [job], capacity }) });
+    assert.match(page.html(), /模型输出未完成，正在自动重新生成答案/);
+    assert.doesNotMatch(page.html(), /停止位置/);
+    job = { ...job, message: 'untrusted-provider-progress-secret' };
+    await page.tick();
+    assert.doesNotMatch(page.html(), /untrusted-provider-progress-secret|模型输出未完成，正在自动重新生成答案/);
+  });
   await t.test('objective tasks omit selftest, unknown types and missing model disable execution', async () => {
     const objective = await app({ '/api/courses/COURSE_A/homeworks/20/enter': () => ok({ ...task, kind: 'choice' }) });
     objective.get('[data-homework="20"]').dispatch('click');

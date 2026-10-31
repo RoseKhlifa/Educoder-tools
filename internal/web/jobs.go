@@ -192,33 +192,7 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 				}
 				report(e)
 			})
-			if batch == nil {
-				return jobs.Outcome{}, err
-			}
-			raw, _ := json.Marshal(batch)
-			status := jobs.Failed
-			if batch.Status == "passed" {
-				status = jobs.Succeeded
-			} else if batch.Status == "uncertain" || batch.Status == "verification_unconfirmed" {
-				status = jobs.Uncertain
-			} else if batch.Status == "canceled" {
-				status = jobs.Canceled
-			}
-			out := jobs.Outcome{Status: status, Result: raw, Message: "整份作业处理完成"}
-			if err != nil {
-				out.ErrorCode = "HOMEWORK_BATCH_FAILED"
-				out.Message = "整份作业在中途停止，已保留已完成关卡"
-				// The batch result is authoritative when its final score check
-				// is uncertain. Returning the transport error as well would make
-				// jobs.Manager overwrite Uncertain with Failed before it can show
-				// the preserved per-level result to the user.
-				if status == jobs.Uncertain {
-					out.ErrorCode = "RESULT_UNCONFIRMED"
-					out.Message = "整份作业的平台结果待复核，已保留已完成关卡"
-					return out, nil
-				}
-			}
-			return out, err
+			return homeworkOutcome(batch, err)
 		}
 		result, err := service.Run(ctx, protocol, taskservice.Request{Owner: owner, Course: req.Course, HomeworkID: req.HomeworkID, Game: req.Game, Mode: solver.Mode(req.Mode), IdempotencyKey: req.IdempotencyKey}, func(progress taskservice.Progress) {
 			e := jobs.Event{Phase: progress.Phase, Kind: progress.Kind, Message: progress.Message}
@@ -250,6 +224,31 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 		return out, err
 	}
 	return runtime, nil
+}
+
+func homeworkOutcome(batch *taskservice.BatchResult, err error) (jobs.Outcome, error) {
+	if batch == nil {
+		return jobs.Outcome{}, err
+	}
+	raw, _ := json.Marshal(batch)
+	out := jobs.Outcome{Status: jobs.Failed, Result: raw, ErrorCode: "HOMEWORK_BATCH_FAILED", Message: "整份作业尚未完成，请查看停止关卡和原因"}
+	switch batch.Status {
+	case "passed":
+		if err == nil && batch.TotalLevels > 0 && batch.CompletedLevels == batch.TotalLevels && batch.FailedLevels == 0 {
+			out.Status, out.ErrorCode, out.Message = jobs.Succeeded, "", "全部关卡已核验满分"
+		}
+	case "uncertain", "verification_unconfirmed":
+		out.Status, out.ErrorCode, out.Message = jobs.Uncertain, "RESULT_UNCONFIRMED", "当前关卡的评测结果待复核，已保留已完成关卡"
+		return out, nil
+	case "canceled":
+		out.Status, out.ErrorCode, out.Message = jobs.Canceled, "", "后续关卡已停止"
+	case "model_error", "selftest_failed", "attempts_exhausted", "invalid_candidate", "budget_exhausted", "budget_unavailable", "unsupported_multifile", "unsupported_roster", "usage_persistence_failed", "verification_persistence_failed":
+		// Earlier levels may have submitted successfully. A known failure in
+		// a later generation or confirmed self-test must not be turned into an
+		// unknown submission merely because Manager's mutation flag is sticky.
+		return out, nil
+	}
+	return out, err
 }
 
 func (r *JobRuntime) Close(ctx context.Context) error {

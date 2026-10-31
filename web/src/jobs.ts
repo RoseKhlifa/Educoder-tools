@@ -17,7 +17,66 @@ const phases: Record<string, string> = {
   recording: '记录题库', completed: '流程结束', done: '流程结束', canceled: '停止执行',
   selftesting: '执行自测', evaluating: '等待正式评测', bank_lookup: '查询题库', bank_saved: '记录题库验证',
   listing_levels: '读取全部关卡', checking_levels: '核验已完成关卡', homework_loading: '读取作业关卡', level_starting: '准备下一关',
+  retrying: '正在自动重试', generation_retry: '重新生成答案', generating_retry: '重新生成答案', selftest_retry: '重试自测连接', reconciling: '重新读取评测结果',
 };
+
+// Only these public codes may turn backend details into visible explanations.
+// In particular, never render arbitrary diagnostics, provider output or reason text.
+const failureReasons: Record<string, { summary: string; next: string }> = {
+  model_output_truncated: { summary: '模型输出被截断，答案未完整返回', next: '本次自动重新生成已结束，未继续提交不完整答案。' },
+  model_response_invalid: { summary: '模型答案格式未通过检查', next: '本次自动重新生成已结束，未继续提交格式错误的答案。' },
+  model_rate_limited: { summary: '模型服务触发请求限流', next: '本次限流重试已结束，请稍后继续。' },
+  model_timeout: { summary: '模型响应超时', next: '本次超时重试已结束，请稍后继续。' },
+  model_network_error: { summary: '连接模型服务失败', next: '本次连接重试已结束，请稍后继续。' },
+  model_error: { summary: '模型生成失败', next: '本次自动重新生成已结束，后续关卡尚未执行。' },
+  selftest_failed: { summary: '当前代码未通过公开样例自测', next: '本次自动修复已结束，当前关卡未计为完成。' },
+  selftest_connection_failed: { summary: '自测连接失败，未取得自测结果', next: '本次连接重试已结束，当前关卡未计为完成。' },
+  selftest_stream_unconfirmed: { summary: '自测结果流中断，未取得完整结果', next: '当前关卡未计为完成，需先重新读取平台状态。' },
+  editor_changed: { summary: '平台编辑器内容发生变化', next: '本次执行已停止，需先确认当前关卡代码。' },
+  attempts_exhausted: { summary: '已达到本次自动修复次数上限，仍未通过', next: '当前关卡未计为完成，后续关卡尚未执行。' },
+  verification_unconfirmed: { summary: '平台尚未返回可核验的满分结果', next: '需先重新读取评测结果，确认后再继续，避免重复提交。' },
+  submission_uncertain: { summary: '提交可能已被平台受理，最终结果尚未确认', next: '需先重新读取评测结果，确认后再继续，避免重复提交。' },
+  budget_exhausted: { summary: '已达到本次模型调用或费用上限', next: '已完成的关卡会保留，后续关卡尚未执行。' },
+  canceled: { summary: '用户停止了后续步骤', next: '已完成的关卡会保留，已送达平台的提交不会撤回。' },
+  unsupported_roster: { summary: '作业关卡清单未通过完整性或身份检查', next: '尚未开始处理剩余关卡，请重新加载作业信息。' },
+  execution_failed: { summary: '当前关卡执行失败', next: '已完成的关卡会保留，后续关卡尚未执行。' },
+};
+const legacyFailureCodes: Record<string, string> = {
+  'model provider truncated_output': 'model_output_truncated',
+  truncated_output: 'model_output_truncated',
+  'model provider invalid_output_json': 'model_response_invalid',
+  'model provider invalid_candidate': 'model_response_invalid',
+  'model provider objective_candidate_contract': 'model_response_invalid',
+  'model provider rate_limited': 'model_rate_limited',
+  'model provider timeout': 'model_timeout',
+  'model provider network_error': 'model_network_error',
+};
+const progressMessages: Record<string, string> = {
+  '模型输出未完成，正在自动重试生成': '模型输出未完成，正在自动重新生成答案。',
+  '公开自测未通过，正在根据反馈自动修复': '公开自测未通过，正在根据反馈自动修复。',
+  '当前关卡未满分，正在根据得分自动修复': '当前关卡未满分，正在根据得分自动修复。',
+};
+function progressMessage(job: AnswerJob): string | undefined {
+  for (const value of [job.message, job.events?.at(-1)?.message]) {
+    if (typeof value === 'string' && Object.hasOwn(progressMessages, value)) return progressMessages[value];
+  }
+  return undefined;
+}
+function failureCode(value: Record<string, unknown> | undefined): string | undefined {
+  if (!value) return undefined;
+  if (typeof value.reason_code === 'string' && Object.hasOwn(failureReasons, value.reason_code)) return value.reason_code;
+  if (Array.isArray(value.diagnostics)) {
+    for (let index = value.diagnostics.length - 1; index >= 0; index--) {
+      const diagnostic: unknown = value.diagnostics[index];
+      if (typeof diagnostic === 'string' && Object.hasOwn(legacyFailureCodes, diagnostic)) return legacyFailureCodes[diagnostic];
+    }
+  }
+  if (typeof value.status === 'string' && Object.hasOwn(failureReasons, value.status)) return value.status;
+  if (value.status === 'uncertain') return 'submission_uncertain';
+  if (value.status === 'unconfirmed') return 'verification_unconfirmed';
+  return undefined;
+}
+const nonnegativeCount = (value: unknown): number | undefined => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 
 function homeworkProgress(job: AnswerJob): HomeworkProgress {
   const latest = job.events?.filter(event => event.progress).at(-1)?.progress;
@@ -35,7 +94,13 @@ function homeworkCard(job: AnswerJob, canceling: boolean): string {
   const pending = pendingJob(job);
   const progress = homeworkProgress(job);
   const allPassed = job.status === 'succeeded' && job.result?.status === 'passed' && typeof progress.total_levels === 'number' && progress.total_levels > 0 && progress.completed_levels === progress.total_levels && progress.failed_levels === 0;
-  const label = allPassed ? '全部关卡已核验通过' : job.status === 'succeeded' ? '执行已结束，仍有关卡待核验' : job.status === 'running' ? '正在完成整份作业' : statusLabels[job.status];
+  const levels = Array.isArray(job.result?.levels) ? job.result.levels.filter((value): value is Record<string, unknown> => Boolean(value) && typeof value === 'object' && !Array.isArray(value)) : [];
+  const stoppedLevel = levels.find(value => value.position === progress.current_position && failureCode(value)) ?? levels.find(value => failureCode(value));
+  const explicitLevelCode = typeof stoppedLevel?.reason_code === 'string' && Object.hasOwn(failureReasons, stoppedLevel.reason_code) ? stoppedLevel.reason_code : undefined;
+  const code = explicitLevelCode ?? failureCode(job.result) ?? failureCode(stoppedLevel);
+  const failure = code ? failureReasons[code] : undefined;
+  const needsReview = code === 'submission_uncertain' || code === 'verification_unconfirmed' || code === 'selftest_stream_unconfirmed';
+  const label = allPassed ? '全部关卡已核验通过' : job.status === 'succeeded' ? '执行已结束，仍有关卡待核验' : job.status === 'running' ? '正在完成整份作业' : job.status === 'uncertain' && failure ? needsReview ? '评测结果待复核' : '执行未完成' : statusLabels[job.status];
   const tone = allPassed ? 'status-done' : pending ? 'status-progress' : 'status-attention';
   const counters: string[] = [];
   if (progress.completed_levels !== undefined) counters.push(`已完成 ${progress.completed_levels}${progress.total_levels !== undefined ? `/${progress.total_levels}` : ''} 关`);
@@ -43,26 +108,34 @@ function homeworkCard(job: AnswerJob, canceling: boolean): string {
   if (progress.skipped_levels !== undefined) counters.push(`跳过已满分 ${progress.skipped_levels} 关（计入已完成）`);
   if (progress.failed_levels !== undefined && progress.failed_levels > 0) counters.push(`未通过 ${progress.failed_levels} 关`);
   const current = pending && progress.current_position ? `<p class="job-message">正在处理第 ${progress.current_position} 关${progress.current_title ? `：${escape(progress.current_title)}` : ''}</p>` : '';
-  const levels = Array.isArray(job.result?.levels) ? job.result.levels : [];
-  const levelLabels: Record<string, string> = { passed: '已核验通过', skipped: '已满分，跳过', already_passed: '已满分，跳过', failed: '未通过，已停止', generated: '仅生成，未提交', unconfirmed: '结果待核验', uncertain: '平台结果待复核', canceled: '后续步骤已停止', unsupported: '暂不支持此题型', stopped: '已停止', pending: '尚未执行' };
-  const rows = levels.filter(value => value && typeof value === 'object' && !Array.isArray(value)).map(value => {
-    const level = value as Record<string, unknown>;
+  const retryMessage = pending ? progressMessage(job) : undefined;
+  const levelLabels: Record<string, string> = { passed: '已核验通过', skipped: '已满分，跳过', already_passed: '已满分，跳过', failed: '未通过，已停止', generated: '仅生成，未提交', unconfirmed: '结果待核验', uncertain: '平台结果待复核', verification_unconfirmed: '满分结果待核验', canceled: '后续步骤已停止', unsupported: '暂不支持此题型', unsupported_roster: '关卡信息未通过检查', stopped: '已停止', pending: '尚未执行', planned: '尚未执行', running: '正在执行', retrying: '正在自动重试', model_error: '模型生成失败', selftest_failed: '公开自测未通过', attempts_exhausted: '自动修复次数已用尽', budget_exhausted: '本次调用或费用上限已到' };
+  const rows = levels.map(level => {
     const position = typeof level.position === 'number' && Number.isSafeInteger(level.position) && level.position > 0 ? `第 ${level.position} 关` : '关卡';
     const title = typeof level.title === 'string' ? ` · ${escape(level.title)}` : '';
     const status = typeof level.status === 'string' && Object.hasOwn(levelLabels, level.status) ? levelLabels[level.status] : '结果待核验';
     const score = (typeof level.score === 'string' || typeof level.score === 'number') && (typeof level.max_score === 'string' || typeof level.max_score === 'number') ? ` · ${escape(level.score)} / ${escape(level.max_score)}` : '';
-    return `<li><span>${position}${title}</span><strong>${status}${score}</strong></li>`;
+    const levelCode = level === stoppedLevel ? code : failureCode(level);
+    const reason = levelCode ? failureReasons[levelCode]?.summary : '';
+    const calls = nonnegativeCount(level.model_calls);
+    const maxCalls = nonnegativeCount(level.max_model_calls);
+    const attempts = calls !== undefined && calls > 0 ? `模型调用 ${calls}${maxCalls !== undefined && maxCalls >= calls ? ` / ${maxCalls}` : ''} 次` : '';
+    return `<li><span>${position}${title}</span><strong>${status}${score}</strong>${reason ? `<p class="job-note">原因：${reason}</p>` : ''}${attempts ? `<p class="job-result">${attempts}</p>` : ''}</li>`;
   });
   const stamp = new Date(job.created_at);
   const time = Number.isNaN(stamp.getTime()) ? '' : ` · ${stamp.toLocaleString('zh-CN')}`;
-  const note = job.status === 'uncertain' ? '当前关卡的平台结果待复核，后续关卡已停止；请先核对平台状态再决定是否重试。'
+  const stopPosition = nonnegativeCount(stoppedLevel?.position) ?? progress.current_position;
+  const stopTitle = typeof stoppedLevel?.title === 'string' ? stoppedLevel.title : progress.current_title;
+  const stopContext = !pending && !allPassed && stopPosition ? `<p class="job-message">停止位置：第 ${stopPosition} 关${stopTitle ? ` · ${escape(stopTitle)}` : ''}</p>` : '';
+  const note = !pending && !allPassed && failure ? `原因：${failure.summary}。${failure.next}`
+    : job.status === 'uncertain' ? '当前关卡的执行结果尚未确认，后续关卡已停止；请先核对平台状态再决定是否重试。'
     : job.status === 'canceled' ? '后续关卡已停止；已经完成的关卡会保留，已送达平台的提交不会撤回。'
     : job.status === 'interrupted' ? '服务重启中断了整份作业任务，不会自动重放；请先核对已完成关卡。'
     : !pending && !allPassed ? '整份作业尚未全部核验通过。后续关卡未继续执行，请查看当前关卡的结果。' : '';
   const calls = job.result?.model_calls;
   const cost = job.result?.cost_micro_usd;
   const usage = [typeof job.result?.score === 'number' || typeof job.result?.score === 'string' && job.result.score.length ? `平台得分 ${escape(job.result.score)}${typeof job.result?.max_score === 'number' || typeof job.result?.max_score === 'string' && job.result.max_score.length ? ` / ${escape(job.result.max_score)}` : ''}` : '', typeof calls === 'number' && Number.isSafeInteger(calls) && calls >= 0 ? `模型调用 ${calls} 次` : '', typeof cost === 'number' && Number.isFinite(cost) && cost >= 0 ? `模型费用 $${(cost / 1_000_000).toFixed(6)}` : ''].filter(Boolean).join(' · ');
-  return `<article class="job-card job-homework" data-job-id="${escape(job.id)}"><div class="job-card-top"><strong>作业 ${escape(job.request.homework_id)} · 完成整份作业</strong><span class="status-pill ${tone}">${escape(label)}</span></div><p class="job-context">${escape(job.request.course)}${escape(time)}</p><p class="job-phase">${pending ? '<span class="spinner spinner-blue"></span>' : ''}${escape(phases[job.phase] ?? (pending ? '按顺序处理关卡' : '本次执行已结束'))}</p>${counters.length ? `<p class="job-result">${counters.join(' · ')}</p>` : '<p class="job-result">等待读取这份作业的完整关卡列表。</p>'}${current}${usage ? `<p class="job-result">${usage}</p>` : ''}${rows.length ? `<details class="homework-levels"${!allPassed && !pending ? ' open' : ''}><summary>各关卡结果</summary><ol>${rows.join('')}</ol></details>` : ''}${note ? `<p class="job-note">${note}</p>` : ''}${pending ? `<button class="button button-outline job-cancel" data-cancel-job="${escape(job.id)}" ${canceling ? 'disabled' : ''}>${canceling ? '正在请求停止…' : '停止后续关卡'}</button>` : ''}</article>`;
+  return `<article class="job-card job-homework" data-job-id="${escape(job.id)}"><div class="job-card-top"><strong>作业 ${escape(job.request.homework_id)} · 完成整份作业</strong><span class="status-pill ${tone}">${escape(label)}</span></div><p class="job-context">${escape(job.request.course)}${escape(time)}</p><p class="job-phase">${pending ? '<span class="spinner spinner-blue"></span>' : ''}${escape(phases[job.phase] ?? (pending ? '按顺序处理关卡' : '本次执行已结束'))}</p>${counters.length ? `<p class="job-result">${counters.join(' · ')}</p>` : '<p class="job-result">等待读取这份作业的完整关卡列表。</p>'}${current}${retryMessage ? `<p class="job-message">${retryMessage}</p>` : ''}${stopContext}${usage ? `<p class="job-result">${usage}</p>` : ''}${rows.length ? `<details class="homework-levels"${!allPassed && !pending ? ' open' : ''}><summary>各关卡结果</summary><ol>${rows.join('')}</ol></details>` : ''}${note ? `<p class="job-note">${note}</p>` : ''}${pending ? `<button class="button button-outline job-cancel" data-cancel-job="${escape(job.id)}" ${canceling ? 'disabled' : ''}>${canceling ? '正在请求停止…' : '停止后续关卡'}</button>` : ''}</article>`;
 }
 const resultStatuses: Record<string, string> = {
   generated: '答案已生成，未提交', passed: '平台评测已通过', selftest_passed: '公开样例自测通过，未正式提交',
@@ -189,7 +262,7 @@ function jobCard(job: AnswerJob, canceling: boolean): string {
 
 export function renderJobs(state: AppState): string {
   const capacity = state.jobCapacity;
-  return `<section class="jobs-section" id="answer-jobs" aria-label="答题任务记录"><div class="section-heading"><div><p class="eyebrow">ANSWER JOBS</p><h2>答题任务记录</h2></div><button class="button button-outline" data-action="refresh-jobs" ${state.jobsLoading ? 'disabled' : ''}>${state.jobsLoading ? '更新中…' : '刷新记录'}</button></div><p class="jobs-intro">后台异步执行，切换课堂或关闭页面后任务仍会继续。默认完成所选作业的全部关卡，已通过的关卡自动跳过；遇到未通过或待复核结果时停止后续关卡。登录后的题库采集单独记录。</p>${capacity ? `<p class="jobs-capacity">执行中 ${escape(capacity.running)} · 排队 ${escape(capacity.queued)} · 全站并行上限 ${escape(capacity.workers)} · 本账号并行上限 ${escape(capacity.per_owner_running ?? 1)} · 模型并发 ${escape(capacity.model_concurrency ?? 1)}</p>${!capacity.model_configured ? '<p class="job-config-note">服务端尚未配置模型，暂时不能创建答题任务。请联系管理员配置模型后刷新。</p>' : ''}` : ''}${state.jobsError ? `<div class="alert alert-error jobs-alert" role="alert">${escape(state.jobsError)}</div>` : ''}${state.jobs.length ? `<div class="job-list">${state.jobs.map(job => jobCard(job, state.cancelingJobs.includes(job.id))).join('')}</div>` : `<p class="empty-mini">${state.jobsLoading ? '正在读取任务记录…' : '暂无答题任务。从任务详情中选择执行方式即可开始。'}</p>`}</section>`;
+  return `<section class="jobs-section" id="answer-jobs" aria-label="答题任务记录"><div class="section-heading"><div><p class="eyebrow">ANSWER JOBS</p><h2>答题任务记录</h2></div><button class="button button-outline" data-action="refresh-jobs" ${state.jobsLoading ? 'disabled' : ''}>${state.jobsLoading ? '更新中…' : '刷新记录'}</button></div><p class="jobs-intro">后台异步执行，切换课堂或关闭页面后任务仍会继续。默认完成所选作业的全部关卡，已通过的关卡自动跳过；生成出错或自测失败会在本次上限内自动重试和修复；达到上限或平台结果仍未确认时停止后续关卡。登录后的题库采集单独记录。</p>${capacity ? `<p class="jobs-capacity">执行中 ${escape(capacity.running)} · 排队 ${escape(capacity.queued)} · 全站并行上限 ${escape(capacity.workers)} · 本账号并行上限 ${escape(capacity.per_owner_running ?? 1)} · 模型并发 ${escape(capacity.model_concurrency ?? 1)}</p>${!capacity.model_configured ? '<p class="job-config-note">服务端尚未配置模型，暂时不能创建答题任务。请联系管理员配置模型后刷新。</p>' : ''}` : ''}${state.jobsError ? `<div class="alert alert-error jobs-alert" role="alert">${escape(state.jobsError)}</div>` : ''}${state.jobs.length ? `<div class="job-list">${state.jobs.map(job => jobCard(job, state.cancelingJobs.includes(job.id))).join('')}</div>` : `<p class="empty-mini">${state.jobsLoading ? '正在读取任务记录…' : '暂无答题任务。从任务详情中选择执行方式即可开始。'}</p>`}</section>`;
 }
 
 export function renderJobControls(state: AppState): string {
@@ -202,5 +275,5 @@ export function renderJobControls(state: AppState): string {
   const label = mode === 'submit' ? '完成整份作业' : modes[mode];
   const modeLabel = (value: JobMode): string => value === 'submit' ? '完成整份作业并核验满分' : value === 'generate_only' ? '仅生成当前关答案' : '仅自测当前关卡';
   const modesForTask: JobMode[] = ['submit', ...(kind !== 'unknown' ? ['generate_only' as const] : []), ...(kind === 'programming' ? ['selftest' as const] : [])];
-  return `<section class="job-controls" aria-label="执行作业"><h4>执行这份作业 <span class="muted">${kind === 'programming' ? '当前关为编程题' : kind === 'choice' ? '当前关为客观题' : '当前关题型待识别，后台将逐关判断'}</span></h4><div class="job-modes">${modesForTask.map(value => `<label><input type="radio" name="job-mode" data-job-mode="${value}" value="${value}" ${mode === value ? 'checked' : ''} ${busy ? 'disabled' : ''} /><span>${modeLabel(value)}</span></label>`).join('')}</div><p class="job-control-note">${mode === 'generate_only' ? '只生成当前关卡的答案并记录候选，不提交，也不继续下一关。' : mode === 'selftest' ? '仅保存并自测当前关卡的公开样例，不正式提交，也不继续下一关。' : '一次点击，后台按顺序完成这份作业的全部关卡，自动跳过已核验满分的关卡。遇到未通过或待复核结果会停止，不影响其他作业。'}</p><button class="button button-primary button-block" data-action="create-job" ${!ready || busy ? 'disabled' : ''}>${state.creatingJob ? '正在创建任务…' : busy ? '这份作业正在执行' : label}</button>${kind === 'unknown' ? '<p class="job-config-note">当前关卡题型尚未识别；整份作业仍可执行，服务端会逐关判断题型。仅生成或自测当前关卡需要先识别题型。</p>' : !state.jobCapacity ? '<p class="job-config-note">请先刷新下方任务记录，确认服务可用。</p>' : !state.jobCapacity.model_configured ? '<p class="job-config-note">服务端尚未配置模型，请联系管理员配置后刷新。</p>' : ''}<p class="job-control-note">任务只处理当前所选的这份作业，不会批量处理整课堂。在下方记录查看各关进度或停止后续关卡，关闭页面后任务仍会继续。</p></section>`;
+  return `<section class="job-controls" aria-label="执行作业"><h4>执行这份作业 <span class="muted">${kind === 'programming' ? '当前关为编程题' : kind === 'choice' ? '当前关为客观题' : '当前关题型待识别，后台将逐关判断'}</span></h4><div class="job-modes">${modesForTask.map(value => `<label><input type="radio" name="job-mode" data-job-mode="${value}" value="${value}" ${mode === value ? 'checked' : ''} ${busy ? 'disabled' : ''} /><span>${modeLabel(value)}</span></label>`).join('')}</div><p class="job-control-note">${mode === 'generate_only' ? '只生成当前关卡的答案并记录候选，不提交，也不继续下一关。' : mode === 'selftest' ? '仅保存并自测当前关卡的公开样例，不正式提交，也不继续下一关。' : '一次点击，后台按顺序完成这份作业的全部关卡，自动跳过已核验满分的关卡。生成出错或自测失败会自动重试和修复；达到本次上限或平台结果仍未确认时停止，不影响其他作业。'}</p><button class="button button-primary button-block" data-action="create-job" ${!ready || busy ? 'disabled' : ''}>${state.creatingJob ? '正在创建任务…' : busy ? '这份作业正在执行' : label}</button>${kind === 'unknown' ? '<p class="job-config-note">当前关卡题型尚未识别；整份作业仍可执行，服务端会逐关判断题型。仅生成或自测当前关卡需要先识别题型。</p>' : !state.jobCapacity ? '<p class="job-config-note">请先刷新下方任务记录，确认服务可用。</p>' : !state.jobCapacity.model_configured ? '<p class="job-config-note">服务端尚未配置模型，请联系管理员配置后刷新。</p>' : ''}<p class="job-control-note">任务只处理当前所选的这份作业，不会批量处理整课堂。在下方记录查看各关进度或停止后续关卡，关闭页面后任务仍会继续。</p></section>`;
 }

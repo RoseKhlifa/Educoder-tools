@@ -299,7 +299,10 @@ func (d *DeepSeek) GenerateObjective(ctx context.Context, req ObjectiveRequest) 
 	result.CostMicroUSD, err = costMicroUSD(result.Usage.CacheMissTokens, result.Usage.CacheHitTokens, result.Usage.CompletionTokens, price)
 	result.CostKnown = result.Usage.Known && err == nil && has && validPricing(price)
 	if ch.FinishReason == "length" || ch.FinishReason == "max_tokens" {
-		return result, &Error{Kind: "truncated_output"}
+		// ObjectiveSubmit has not been called, so a bounded provider retry is
+		// safe.  Once submission begins, taskservice preserves uncertainty and
+		// never replays the mutation automatically.
+		return result, &Error{Kind: "truncated_output", Retryable: true}
 	}
 	candidate, err := parseObjectiveCandidate(req.Problem, ch.Message.Content)
 	if err != nil {

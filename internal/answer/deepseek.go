@@ -235,7 +235,9 @@ func (d *DeepSeek) Generate(ctx context.Context, req Request) (Result, error) {
 	result.CostMicroUSD, err = costMicroUSD(result.Usage.CacheMissTokens, result.Usage.CacheHitTokens, result.Usage.CompletionTokens, price)
 	result.CostKnown = result.Usage.Known && err == nil && hasPrice && validPricing(price)
 	if choice.FinishReason == "length" || choice.FinishReason == "max_tokens" {
-		return result, &Error{Kind: "truncated_output"}
+		// No platform mutation has happened yet.  The caller may safely ask the
+		// provider again within its bounded model/evaluation budget.
+		return result, &Error{Kind: "truncated_output", Retryable: true}
 	}
 	candidate, parseErr := parseCandidate(req.Problem, choice.Message.Content)
 	if parseErr != nil {

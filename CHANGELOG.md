@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.29 — 2026-10-31
+
+- Repair newline-only selftest failures, retry model outputs, and expose precise homework stop reasons
+
 ## 0.1.28 — 2026-10-31
 
 - Raise bounded account and model concurrency for independent homework jobs

@@ -291,6 +291,9 @@ func TestSelfTestStreamBoundaries(t *testing.T) {
 		matches  bool
 		fragment bool
 	}{
+		{name: "runner-adds-terminal-newline", payload: "YES\r\n", finish: true, expected: "YES", matches: true},
+		{name: "sample-adds-terminal-newline", payload: "YES", finish: true, expected: "YES\n", matches: true},
+		{name: "extra-terminal-blank-line-remains-significant", payload: "YES\n\n", finish: true, expected: "YES\n", matches: false},
 		{name: "spaces-remain-significant", payload: "YES \r\n", finish: true, expected: "YES\n", matches: false},
 		{name: "finish-must-be-exact", payload: "ProcessFinished\n", finish: true, expected: "ProcessFinished\n", matches: true},
 		{name: "closed-before-finish", payload: "YES\n", wantErr: true},
