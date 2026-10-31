@@ -47,6 +47,7 @@ export interface EnteredTask {
   kind: 'programming' | 'choice' | 'unknown';
   courseIdentifier: string;
   homeworkId: number;
+  gameCount?: number;
   gameIdentifier: string;
   challenge: {
     id?: number;

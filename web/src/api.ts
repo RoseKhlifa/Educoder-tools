@@ -123,6 +123,7 @@ function normalizeEnteredTask(value: unknown): EnteredTask {
     courseIdentifier: text(item.courseIdentifier || item.course_identifier),
     kind: item.kind === 'programming' || item.kind === 'choice' ? item.kind : 'unknown',
     homeworkId: number(item.homeworkId || item.homework_id || item.homework_common_id) ?? 0,
+    gameCount: number(item.gameCount || item.game_count),
     gameIdentifier: text(item.gameIdentifier || item.game_identifier || game.identifier),
     challenge: {
       id: number(challenge.id),

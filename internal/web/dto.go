@@ -2,6 +2,12 @@ package web
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"math"
+	"strconv"
+	"strings"
+	"time"
 
 	"educoder-cli/internal/educoder"
 )
@@ -52,15 +58,60 @@ type homeworkDTO struct {
 	IsShixun         bool     `json:"isShixun"`
 	EnterStatus      int      `json:"enterStatus"`
 	Category         string   `json:"category,omitempty"`
+	ChallengeCount   int      `json:"challengeCount,omitempty"`
+	FinishedCount    int      `json:"finishedChallengeCount,omitempty"`
+	Deadline         string   `json:"deadline,omitempty"`
 }
 
 func toHomeworkDTO(homework educoder.Homework) homeworkDTO {
-	return homeworkDTO{ID: homework.ID, Name: homework.Name, Status: homework.Status, ShixunIdentifier: homework.ShixunIdentifier, IsShixun: homework.IsShixun, EnterStatus: homework.EnterStatus, Category: homework.Category}
+	return homeworkDTO{ID: homework.ID, Name: homework.Name, Status: homework.Status, ShixunIdentifier: homework.ShixunIdentifier, IsShixun: homework.IsShixun, EnterStatus: homework.EnterStatus, Category: homework.Category, ChallengeCount: homework.ChallengeCount, FinishedCount: homework.FinishedCount, Deadline: homeworkDeadline(homework)}
+}
+
+// homeworkDeadline accepts the string and numeric forms seen in the upstream
+// classroom response. Numeric values are interpreted as Unix seconds or
+// milliseconds and emitted as RFC3339 for the browser's local date formatter.
+func homeworkDeadline(homework educoder.Homework) string {
+	for _, value := range []any{homework.Deadline, homework.EndTime, homework.EndDate} {
+		if result := normalizeDeadline(value); result != "" {
+			return result
+		}
+	}
+	return ""
+}
+
+func normalizeDeadline(value any) string {
+	switch current := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return strings.TrimSpace(current)
+	case json.Number:
+		return normalizeDeadlineNumber(string(current))
+	case float64:
+		if math.IsNaN(current) || math.IsInf(current, 0) {
+			return ""
+		}
+		return normalizeDeadlineNumber(strconv.FormatFloat(current, 'f', -1, 64))
+	default:
+		return strings.TrimSpace(fmt.Sprint(current))
+	}
+}
+
+func normalizeDeadlineNumber(raw string) string {
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value <= 0 {
+		return ""
+	}
+	if value > 100000000000 {
+		value /= 1000
+	}
+	return time.Unix(value, 0).UTC().Format(time.RFC3339)
 }
 
 type taskDTO struct {
 	Kind           string `json:"kind"`
 	RequiredStatus string `json:"requiredStatus,omitempty"`
+	GameCount      int    `json:"gameCount,omitempty"`
 	Game           struct {
 		ID         int64  `json:"id"`
 		Identifier string `json:"identifier"`
@@ -72,11 +123,13 @@ type taskDTO struct {
 		Subject     string `json:"subject"`
 		Description string `json:"description,omitempty"`
 		Path        string `json:"path,omitempty"`
+		Position    int    `json:"position,omitempty"`
 	} `json:"challenge"`
 	Shixun struct {
-		ID         int64  `json:"id"`
-		Identifier string `json:"identifier"`
-		Name       string `json:"name"`
+		ID              int64  `json:"id"`
+		Identifier      string `json:"identifier"`
+		Name            string `json:"name"`
+		ChallengesCount int    `json:"challengesCount,omitempty"`
 	} `json:"shixun"`
 	CourseIdentifier string  `json:"courseIdentifier"`
 	HomeworkID       int64   `json:"homeworkId"`
@@ -88,6 +141,7 @@ func toTaskDTO(task educoder.Task) taskDTO {
 	var result taskDTO
 	result.Kind = string(task.Kind())
 	result.RequiredStatus = task.RequiredStatus
+	result.GameCount = task.GameCount
 	result.Game.ID = task.Game.ID
 	result.Game.Identifier = task.Game.Identifier
 	result.Game.MyShixunID = task.Game.MyShixunID
@@ -96,9 +150,11 @@ func toTaskDTO(task educoder.Task) taskDTO {
 	result.Challenge.Subject = task.Challenge.Subject
 	result.Challenge.Description = task.Challenge.Description
 	result.Challenge.Path = task.Challenge.Path
+	result.Challenge.Position = task.Challenge.Position
 	result.Shixun.ID = task.Shixun.ID
 	result.Shixun.Identifier = task.Shixun.Identifier
 	result.Shixun.Name = task.Shixun.Name
+	result.Shixun.ChallengesCount = task.Shixun.ChallengesCount
 	result.CourseIdentifier = task.CourseIdentifier
 	result.HomeworkID = task.HomeworkID
 	result.NextGame = task.NextGame

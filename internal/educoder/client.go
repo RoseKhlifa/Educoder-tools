@@ -93,14 +93,22 @@ type Course struct {
 }
 
 type Homework struct {
-	ID               int64             `json:"homework_id"`
-	Name             string            `json:"name"`
-	Status           []string          `json:"status"`
-	ShixunIdentifier string            `json:"shixun_identifier"`
-	IsShixun         bool              `json:"is_shixun"`
-	EnterStatus      int               `json:"shixun_enter_status"`
-	Category         string            `json:"upper_category_name,omitempty"`
-	Operation        []json.RawMessage `json:"task_operation,omitempty"`
+	ID               int64    `json:"homework_id"`
+	Name             string   `json:"name"`
+	Status           []string `json:"status"`
+	ShixunIdentifier string   `json:"shixun_identifier"`
+	IsShixun         bool     `json:"is_shixun"`
+	EnterStatus      int      `json:"shixun_enter_status"`
+	Category         string   `json:"upper_category_name,omitempty"`
+	ChallengeCount   int      `json:"challenge_count"`
+	FinishedCount    int      `json:"finished_challenge_count"`
+	// Educoder has returned deadline values under several names and as either
+	// strings or Unix timestamps. Keep the raw JSON value until the web DTO
+	// normalizes it so one unexpected type cannot discard the whole task list.
+	Deadline  any               `json:"deadline"`
+	EndTime   any               `json:"end_time"`
+	EndDate   any               `json:"end_date"`
+	Operation []json.RawMessage `json:"task_operation,omitempty"`
 }
 
 type Task struct {
@@ -118,15 +126,17 @@ type Task struct {
 		Subject      string `json:"subject"`
 		Description  string `json:"task_pass"`
 		Path         string `json:"path"`
+		Position     int    `json:"position"`
 		ST           *int   `json:"st"`
 		WithCodeFile *bool  `json:"with_code_file"`
 	} `json:"challenge"`
 	Chooses         []ChoiceQuestion `json:"chooses"`
 	ChooseTestCases ChoiceTestCases  `json:"choose_test_cases"`
 	Shixun          struct {
-		ID         int64  `json:"id"`
-		Identifier string `json:"identifier"`
-		Name       string `json:"name"`
+		ID              int64  `json:"id"`
+		Identifier      string `json:"identifier"`
+		Name            string `json:"name"`
+		ChallengesCount int    `json:"challenges_count"`
 	} `json:"shixun"`
 	MyShixun struct {
 		ID         int64  `json:"id"`

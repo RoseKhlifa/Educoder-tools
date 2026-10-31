@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.19 — 2026-10-31
+
+- Expose homework deadlines and complete task detail metadata in the workbench
+
 ## 0.1.18 — 2026-10-31
 
 - Complete course batches with verified objective caching, image inputs, recoverable solver state and API accounting
