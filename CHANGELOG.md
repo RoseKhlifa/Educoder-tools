@@ -1,6 +1,10 @@
 # Changelog
 
-## 0.1.32 鈥?2026-10-31
+## 0.1.33 - 2026-10-31
+
+- Fix release changelog encoding across Windows shells
+
+## 0.1.32 - 2026-10-31
 
 - A服务界面、头歌平台身份隔离、管理端与课程批处理
 

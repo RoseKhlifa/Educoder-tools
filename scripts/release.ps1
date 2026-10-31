@@ -34,7 +34,7 @@ try {
     $changelogPath = Join-Path $repositoryPath 'CHANGELOG.md'
     $changelog = [IO.File]::ReadAllText($changelogPath)
     $date = [TimeZoneInfo]::ConvertTimeBySystemTimeZoneId([DateTime]::UtcNow, 'China Standard Time').ToString('yyyy-MM-dd')
-    $entry = "# Changelog`n`n## $next — $date`n`n- $Message`n"
+    $entry = "# Changelog`n`n## $next - $date`n`n- $Message`n"
     [IO.File]::WriteAllText($changelogPath, $changelog.Replace('# Changelog', $entry.TrimEnd()))
 
     & go test ./...
