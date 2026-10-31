@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.26 — 2026-10-31
+
+- Treat legacy submit requests as whole-homework batches and bust stale UI assets
+
 ## 0.1.25 — 2026-10-31
 
 - Finalize whole-homework score verification and preserve uncertain batch results

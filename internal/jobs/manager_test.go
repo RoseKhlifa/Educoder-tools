@@ -35,6 +35,24 @@ func testManager(t *testing.T, c Config) *Manager {
 func request(game string) Request {
 	return Request{Course: "course", HomeworkID: 42, Game: game, Mode: "generate_only"}
 }
+
+func TestNormalizeLegacySubmitUsesWholeHomeworkScope(t *testing.T) {
+	req, _, _, err := normalize(Request{Course: "course", HomeworkID: 42, Game: "legacy-game", Mode: "submit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req.Scope != "homework" || req.Game != "" {
+		t.Fatalf("legacy submit was not canonicalized: %#v", req)
+	}
+
+	current, _, _, err := normalize(Request{Course: "course", HomeworkID: 42, Game: "current-game", Scope: "current", Mode: "generate_only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Scope != "" || current.Game != "current-game" {
+		t.Fatalf("explicit current scope changed unexpectedly: %#v", current)
+	}
+}
 func submit(t *testing.T, m *Manager, owner string, r Request, e Executor) Job {
 	t.Helper()
 	j, _, err := m.Submit(context.Background(), owner, r, e)

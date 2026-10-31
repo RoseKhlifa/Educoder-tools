@@ -22,8 +22,16 @@ func normalize(req Request) (Request, string, string, error) {
 	if collect && (req.Course != "" || req.HomeworkID != 0 || req.Game != "" || req.Scope != "") {
 		return req, "", "", fail("invalid_request", "Collection scans the authenticated account, not a supplied target")
 	}
-	// Missing scope keeps older clients on the original current-level contract.
-	// Canonicalize current to empty so published idempotency payloads remain valid.
+	// Older workbench bundles submitted the current game for a normal submit
+	// action and omitted scope. A submit is now a whole-homework operation, so
+	// normalize that legacy shape before clearing the explicit current alias.
+	// This keeps stale browser bundles from silently running one level at a time.
+	if req.Scope == "" && req.Mode == "submit" && req.Game != "" {
+		req.Scope = "homework"
+		req.Game = ""
+	}
+	// Canonicalize explicit current to empty so published idempotency payloads
+	// remain valid for the generate-only and self-test current-level modes.
 	if req.Scope == "current" {
 		req.Scope = ""
 	}
