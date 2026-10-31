@@ -300,6 +300,10 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			if r.ModelCalls >= 2 {
 				profile = answer.ProProfile()
 			}
+			// Objective answers are compact, but reasoning-enabled repair and
+			// pro profiles can consume the entire 4096-token budget before the
+			// JSON answer is emitted. Leave enough room for a complete candidate.
+			profile.MaxTokens = 8192
 			pr := answer.ObjectiveRequest{Problem: snapshot, Previous: previous, Feedback: feedback, Profile: profile}
 			estimate, e := s.provider.EstimateObjective(pr)
 			if e != nil {

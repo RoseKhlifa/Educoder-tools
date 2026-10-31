@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.27 — 2026-10-31
+
+- Handle subset homework rosters and prevent objective answer truncation
+
 ## 0.1.26 — 2026-10-31
 
 - Treat legacy submit requests as whole-homework batches and bust stale UI assets

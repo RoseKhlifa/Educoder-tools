@@ -20,11 +20,12 @@ import (
 )
 
 type fakeProvider struct {
-	programmingCalls atomic.Int64
-	objectiveCalls   atomic.Int64
-	generate         func(context.Context) error
-	estimated        int64
-	unknown          bool
+	programmingCalls   atomic.Int64
+	objectiveCalls     atomic.Int64
+	objectiveMaxTokens atomic.Int64
+	generate           func(context.Context) error
+	estimated          int64
+	unknown            bool
 }
 
 func (p *fakeProvider) Estimate(answer.Request) (answer.Estimate, error) { return p.estimate(), nil }
@@ -49,6 +50,8 @@ func (p *fakeProvider) Generate(ctx context.Context, r answer.Request) (answer.R
 }
 func (p *fakeProvider) GenerateObjective(ctx context.Context, r answer.ObjectiveRequest) (answer.ObjectiveResult, error) {
 	p.objectiveCalls.Add(1)
+	for old := p.objectiveMaxTokens.Load(); int64(r.Profile.MaxTokens) > old && !p.objectiveMaxTokens.CompareAndSwap(old, int64(r.Profile.MaxTokens)); old = p.objectiveMaxTokens.Load() {
+	}
 	if p.generate != nil {
 		if err := p.generate(ctx); err != nil {
 			return answer.ObjectiveResult{}, err
@@ -106,7 +109,7 @@ func TestObjectiveFullScoreBankReuseAndPublicSummary(t *testing.T) {
 	service := New(store, provider, Config{})
 	var phases []string
 	r, err := service.Run(context.Background(), client, req(solver.ModeSubmit), func(p Progress) { phases = append(phases, p.Phase) })
-	if err != nil || r.Status != "passed" || r.ScoreCheck != "full_score" || r.ModelCalls != 1 || r.CandidateID == 0 {
+	if err != nil || r.Status != "passed" || r.ScoreCheck != "full_score" || r.ModelCalls != 1 || r.CandidateID == 0 || provider.objectiveMaxTokens.Load() != 8192 {
 		t.Fatalf("result=%+v err=%v", r, err)
 	}
 	for _, phase := range []string{"loading", "bank_lookup", "generating", "validating", "submitting", "verifying", "bank_saved"} {
