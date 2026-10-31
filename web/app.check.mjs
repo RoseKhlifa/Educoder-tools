@@ -223,7 +223,7 @@ await test('compiled workbench UI behavior', async t => {
     page.get('[data-action="create-job"]').dispatch('click');
     assert.equal(postCount, 1);
     const request = JSON.parse(page.requests.find(item => item.url === '/api/jobs' && item.options.method === 'POST').options.body);
-    assert.deepEqual({ ...request, idempotency_key: 'redacted' }, { course: 'COURSE_A', homework_id: 20, game: 'game-1', mode: 'submit', idempotency_key: 'redacted' });
+    assert.deepEqual({ ...request, idempotency_key: 'redacted' }, { course: 'COURSE_A', homework_id: 20, scope: 'homework', mode: 'submit', idempotency_key: 'redacted' });
     assert.match(request.idempotency_key, /^[a-f0-9-]{36}$/);
     job = answerJob({ request, status: 'queued' });
     accepting.resolve(new Response(JSON.stringify({ data: job, error: null }), { status: 202 }));
@@ -240,22 +240,35 @@ await test('compiled workbench UI behavior', async t => {
     assert.match(page.html(), /生成答案/);
     job = answerJob({ status: 'succeeded', phase: 'completed', request, result: { model_calls: 1, status: 'submitted', score: 50 } });
     await page.tick();
-    assert.match(page.html(), /流程已完成/);
+    assert.match(page.html(), /执行已结束，仍有关卡待核验/);
     assert.match(page.html(), /平台得分 50/);
     assert.doesNotMatch(page.html(), /已核验满分/);
     assert.equal(page.timers.size, 0);
+  });
+  await t.test('whole-homework jobs render live progress and only claim all levels after strict verification', async () => {
+    let job = answerJob({ request: { course: 'COURSE_A', homework_id: 20, scope: 'homework', mode: 'submit' }, status: 'running', phase: 'level_starting', progress: { total_levels: 3, completed_levels: 1, skipped_levels: 1, current_position: 2, current_title: '<第二关>' } });
+    const page = await app({ '/api/jobs': () => ok({ jobs: [job], capacity }) });
+    assert.match(page.html(), /已完成 1\/3 关/);
+    assert.match(page.html(), /跳过已满分 1 关/);
+    assert.match(page.html(), /正在处理第 2 关：&lt;第二关&gt;/);
+    assert.doesNotMatch(page.html(), /全部关卡已核验通过/);
+    job = { ...job, status: 'succeeded', phase: 'completed', progress: undefined, result: { status: 'passed', total_levels: 3, completed_levels: 3, skipped_levels: 1, failed_levels: 0, levels: [{ position: 1, title: '<第一关>', status: 'passed' }, { position: 2, title: '第二关', status: 'skipped' }, { position: 3, title: '第三关', status: 'passed' }] } };
+    await page.tick();
+    assert.match(page.html(), /全部关卡已核验通过/);
+    assert.match(page.html(), /第 2 关 · 第二关/);
+    assert.match(page.html(), /已满分，跳过/);
   });
   await t.test('objective tasks omit selftest, unknown types and missing model disable execution', async () => {
     const objective = await app({ '/api/courses/COURSE_A/homeworks/20/enter': () => ok({ ...task, kind: 'choice' }) });
     objective.get('[data-homework="20"]').dispatch('click');
     await settle();
     assert.equal(objective.document.querySelector('[data-job-mode="selftest"]'), null);
-    assert.match(objective.html(), /提交并核验满分/);
+    assert.match(objective.html(), /完成整份作业并核验满分/);
     const unknown = await app({ '/api/courses/COURSE_A/homeworks/20/enter': () => ok({ ...task, kind: 'unrecognized' }) });
     unknown.get('[data-homework="20"]').dispatch('click');
     await settle();
-    assert.ok('disabled' in unknown.get('[data-action="create-job"]').attributes);
-    assert.match(unknown.html(), /尚未识别该关卡题型/);
+    assert.equal('disabled' in unknown.get('[data-action="create-job"]').attributes, false);
+    assert.match(unknown.html(), /整份作业仍可执行/);
     const unconfigured = await app({ '/api/jobs': () => ok({ jobs: [], capacity: { ...capacity, model_configured: false } }) });
     unconfigured.get('[data-homework="20"]').dispatch('click');
     await settle();

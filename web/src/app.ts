@@ -1,5 +1,5 @@
 import { ApiRequestError, BrowserApi, type EducoderApi } from './api.js';
-import { pendingJob, renderJobControls, renderJobs } from './jobs.js';
+import { isHomeworkJob, pendingJob, renderJobControls, renderJobs, taskHasPendingJob } from './jobs.js';
 import type { AnswerJob, AppState, Course, Homework, JobMode } from './types.js';
 
 const appRoot = document.querySelector<HTMLDivElement>('#app');
@@ -10,7 +10,7 @@ const api: EducoderApi = new BrowserApi();
 const state: AppState = {
   view: 'login', user: null, courses: [], activeCourse: null, homeworks: [], loading: false,
   error: null, taskLoadingId: null, enteredTask: null, drawerOpen: false, filter: '',
-  jobs: [], jobCapacity: null, jobsLoading: false, jobsError: null, creatingJob: false, cancelingJobs: [], jobMode: 'generate_only',
+  jobs: [], jobCapacity: null, jobsLoading: false, jobsError: null, creatingJob: false, cancelingJobs: [], jobMode: 'submit',
 };
 let sessionVersion = 0;
 let coursesVersion = 0;
@@ -31,7 +31,7 @@ function resetSession(error: AppState['error'] = null): void {
   taskVersion++;
   jobsVersion++;
   clearJobsTimer();
-  setState({ view: 'login', user: null, courses: [], activeCourse: null, homeworks: [], loading: false, taskLoadingId: null, enteredTask: null, drawerOpen: false, filter: '', error, jobs: [], jobCapacity: null, jobsLoading: false, jobsError: null, creatingJob: false, cancelingJobs: [], jobMode: 'generate_only' });
+  setState({ view: 'login', user: null, courses: [], activeCourse: null, homeworks: [], loading: false, taskLoadingId: null, enteredTask: null, drawerOpen: false, filter: '', error, jobs: [], jobCapacity: null, jobsLoading: false, jobsError: null, creatingJob: false, cancelingJobs: [], jobMode: 'submit' });
 }
 
 function escapeHtml(value: unknown): string {
@@ -96,7 +96,7 @@ async function enterHomework(homework: Homework): Promise<void> {
   if (!state.activeCourse) return;
   const version = ++taskVersion;
   const courseIdentifier = state.activeCourse.identifier;
-  setState({ taskLoadingId: homework.id, error: null, drawerOpen: true, enteredTask: null, jobMode: 'generate_only' });
+  setState({ taskLoadingId: homework.id, error: null, drawerOpen: true, enteredTask: null, jobMode: 'submit' });
   try {
     const enteredTask = await api.enter(courseIdentifier, homework.id);
     if (version === taskVersion) setState({ enteredTask, taskLoadingId: null });
@@ -118,13 +118,31 @@ async function loadJobs(preserveError = false): Promise<void> {
   try {
     const result = await api.jobs();
     if (session !== sessionVersion || version !== jobsVersion) return;
+    const previousJobs = state.jobs;
     setState({ jobs: result.jobs, jobCapacity: result.capacity, jobsLoading: false });
+    const course = state.activeCourse;
+    if (course && result.jobs.some(job => isHomeworkJob(job) && !pendingJob(job) && job.request.course === course.identifier && previousJobs.some(previous => previous.id === job.id && pendingJob(previous)))) {
+      void refreshHomeworkProgress(course, session);
+    }
   } catch (error) {
     if (session !== sessionVersion || version !== jobsVersion) return;
     if (isExpired(error)) { showError(error); return; }
     setState({ jobsLoading: false, jobsError: error instanceof Error ? error.message : '任务记录暂时无法读取，请刷新重试。' });
   }
   scheduleJobsRefresh();
+}
+
+// Refresh counts in place; keep an open drawer, search and a newer classroom selection.
+async function refreshHomeworkProgress(course: Course, session: number): Promise<void> {
+  const version = homeworksVersion;
+  try {
+    const homeworks = await api.homeworks(course.identifier);
+    if (session === sessionVersion && version === homeworksVersion && state.activeCourse?.identifier === course.identifier) setState({ homeworks });
+  } catch (error) {
+    if (session !== sessionVersion || version !== homeworksVersion) return;
+    if (isExpired(error)) showError(error);
+    else setState({ jobsError: '任务记录已更新，课堂进度暂未刷新。请重新选择课堂查看最新进度。' });
+  }
 }
 
 function mergeJob(job: AnswerJob): void {
@@ -134,14 +152,15 @@ function mergeJob(job: AnswerJob): void {
 
 async function createJob(): Promise<void> {
   const task = state.enteredTask;
-  if (!state.user || !task || task.kind === 'unknown' || !task.gameIdentifier || !state.jobCapacity?.model_configured || state.creatingJob) return;
-  if (state.jobs.some(job => pendingJob(job) && job.request.course === task.courseIdentifier && job.request.homework_id === task.homeworkId && job.request.game === task.gameIdentifier)) return;
+  if (!state.user || !task || !state.jobCapacity?.model_configured || state.creatingJob) return;
+  if (state.jobMode !== 'submit' && (task.kind === 'unknown' || !task.gameIdentifier)) return;
+  if (taskHasPendingJob(state)) return;
   const session = sessionVersion;
   const mode = task.kind === 'choice' && state.jobMode === 'selftest' ? 'generate_only' : state.jobMode;
   const idempotencyKey = typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : [...crypto.getRandomValues(new Uint8Array(16))].map(value => value.toString(16).padStart(2, '0')).join('');
   setState({ creatingJob: true, jobsError: null });
   try {
-    const job = await api.createJob({ course: task.courseIdentifier, homework_id: task.homeworkId, game: task.gameIdentifier, mode, idempotency_key: idempotencyKey });
+    const job = await api.createJob({ course: task.courseIdentifier, homework_id: task.homeworkId, ...(mode === 'submit' ? { scope: 'homework' as const } : { scope: 'current' as const, game: task.gameIdentifier }), mode, idempotency_key: idempotencyKey });
     if (session !== sessionVersion) return;
     mergeJob(job);
     setState({ creatingJob: false });
@@ -273,7 +292,7 @@ function renderTaskDrawer(): string {
   const task = state.enteredTask;
   const description = task?.challenge.description?.trim();
   const path = task?.challenge.path?.trim();
-  return `<div class="drawer-backdrop" data-action="close-drawer"></div><aside class="task-drawer" role="dialog" aria-modal="true" aria-label="任务详情"><div class="drawer-head"><div><p class="eyebrow">TASK DETAIL</p><h2>任务详情</h2></div><button class="close-button" data-action="close-drawer" aria-label="关闭">×</button></div>${state.taskLoadingId ? '<div class="drawer-loading"><span class="spinner spinner-blue"></span><p>正在打开任务…</p></div>' : task ? `<div class="drawer-body"><div class="task-status-line"><span class="status-pill status-progress">${escapeHtml(task.requiredStatus || '待开始')}</span><span class="muted">任务 ${task.homeworkId}</span></div><h3 class="task-title">${escapeHtml(task.challenge.subject || task.shixun.name || '实训任务')}</h3>${description ? `<section class="task-description"><h4>题目说明</h4><p>${escapeHtml(description)}</p></section>` : ''}${path ? `<p class="task-path"><strong>编辑文件：</strong>${escapeHtml(path)}</p>` : ''}<dl class="task-facts"><div><dt>当前关卡</dt><dd>${task.challenge.position ? `第 ${task.challenge.position} 关` : '—'}</dd></div><div><dt>实训名称</dt><dd>${escapeHtml(task.shixun.name || '—')}</dd></div><div><dt>关卡总数</dt><dd>${task.shixun.challengesCount || task.gameCount || '—'}</dd></div></dl><div class="task-callout"><span>⌁</span><div><strong>任务信息已就绪</strong><p>可在下方异步执行当前关卡，也可前往头歌官方平台手动处理。</p></div></div>${renderJobControls(state)}<button class="button button-outline button-block" data-action="open-official" ${officialTaskUrl() ? '' : 'disabled'}>前往头歌官方实训 <span>↗</span></button><p class="drawer-note">${officialTaskUrl() ? '将打开 educoder.net 官方页面，需使用该平台的登录会话。' : '该任务暂未返回有效的官方实训地址。'}</p></div>` : '<div class="drawer-empty"><span class="empty-icon">!</span><p>任务详情暂时无法加载</p></div>'}</aside>`;
+  return `<div class="drawer-backdrop" data-action="close-drawer"></div><aside class="task-drawer" role="dialog" aria-modal="true" aria-label="任务详情"><div class="drawer-head"><div><p class="eyebrow">TASK DETAIL</p><h2>任务详情</h2></div><button class="close-button" data-action="close-drawer" aria-label="关闭">×</button></div>${state.taskLoadingId ? '<div class="drawer-loading"><span class="spinner spinner-blue"></span><p>正在打开任务…</p></div>' : task ? `<div class="drawer-body"><div class="task-status-line"><span class="status-pill status-progress">${escapeHtml(task.requiredStatus || '待开始')}</span><span class="muted">任务 ${task.homeworkId}</span></div><h3 class="task-title">${escapeHtml(task.challenge.subject || task.shixun.name || '实训任务')}</h3>${description ? `<section class="task-description"><h4>题目说明</h4><p>${escapeHtml(description)}</p></section>` : ''}${path ? `<p class="task-path"><strong>编辑文件：</strong>${escapeHtml(path)}</p>` : ''}<dl class="task-facts"><div><dt>当前关卡</dt><dd>${task.challenge.position ? `第 ${task.challenge.position} 关` : '—'}</dd></div><div><dt>实训名称</dt><dd>${escapeHtml(task.shixun.name || '—')}</dd></div><div><dt>关卡总数</dt><dd>${task.shixun.challengesCount || task.gameCount || '—'}</dd></div></dl><div class="task-callout"><span>⌁</span><div><strong>任务信息已就绪</strong><p>点击下方按钮即可在后台完成这份作业的全部关卡，也可前往头歌官方平台手动处理。</p></div></div>${renderJobControls(state)}<button class="button button-outline button-block" data-action="open-official" ${officialTaskUrl() ? '' : 'disabled'}>前往头歌官方实训 <span>↗</span></button><p class="drawer-note">${officialTaskUrl() ? '将打开 educoder.net 官方页面，需使用该平台的登录会话。' : '该任务暂未返回有效的官方实训地址。'}</p></div>` : '<div class="drawer-empty"><span class="empty-icon">!</span><p>任务详情暂时无法加载</p></div>'}</aside>`;
 }
 
 function renderWorkspace(): string {

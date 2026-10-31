@@ -19,8 +19,19 @@ func normalize(req Request) (Request, string, string, error) {
 	req.Course = strings.TrimSpace(req.Course)
 	req.Game = strings.TrimSpace(req.Game)
 	collect := req.Mode == "collect_verified"
-	if collect && (req.Course != "" || req.HomeworkID != 0 || req.Game != "") {
+	if collect && (req.Course != "" || req.HomeworkID != 0 || req.Game != "" || req.Scope != "") {
 		return req, "", "", fail("invalid_request", "Collection scans the authenticated account, not a supplied target")
+	}
+	// Missing scope keeps older clients on the original current-level contract.
+	// Canonicalize current to empty so published idempotency payloads remain valid.
+	if req.Scope == "current" {
+		req.Scope = ""
+	}
+	if req.Scope != "" && req.Scope != "homework" {
+		return req, "", "", fail("invalid_request", "Unknown execution scope")
+	}
+	if req.Scope == "homework" && (req.Mode != "submit" || req.Game != "") {
+		return req, "", "", fail("invalid_request", "Whole-homework jobs require submit mode and no current game")
 	}
 	if !collect && (!identifier.MatchString(req.Course) || req.HomeworkID < 1 || (req.Game != "" && !identifier.MatchString(req.Game))) {
 		return req, "", "", fail("invalid_request", "A valid course, homework_id and optional game are required")
@@ -39,7 +50,8 @@ func normalize(req Request) (Request, string, string, error) {
 		Course     string
 		HomeworkID int64
 		Game, Mode string
-	}{req.Course, req.HomeworkID, req.Game, req.Mode}
+		Scope      string `json:",omitempty"`
+	}{req.Course, req.HomeworkID, req.Game, req.Mode, req.Scope}
 	tb, _ := json.Marshal(t)
 	th := sha256.Sum256(tb)
 	return req, hex.EncodeToString(h[:]), hex.EncodeToString(th[:]), nil
@@ -140,6 +152,10 @@ func mutatingPhase(phase string) bool {
 func clone(j Job) Job {
 	j.Result = append(json.RawMessage(nil), j.Result...)
 	j.Events = append([]Event(nil), j.Events...)
+	for i := range j.Events {
+		j.Events[i].Progress = cloneProgress(j.Events[i].Progress)
+	}
+	j.Progress = cloneProgress(j.Progress)
 	if j.StartedAt != nil {
 		t := *j.StartedAt
 		j.StartedAt = &t
@@ -149,4 +165,21 @@ func clone(j Job) Job {
 		j.FinishedAt = &t
 	}
 	return j
+}
+
+func cloneProgress(p *BatchProgress) *BatchProgress {
+	if p == nil {
+		return nil
+	}
+	copy := *p
+	return &copy
+}
+
+func publicProgress(p *BatchProgress) *BatchProgress {
+	if p == nil || p.TotalLevels < 1 || p.TotalLevels > 100 || p.CompletedLevels < 0 || p.CompletedLevels > p.TotalLevels || p.SkippedLevels < 0 || p.SkippedLevels > p.CompletedLevels || p.FailedLevels < 0 || p.FailedLevels > p.TotalLevels || p.CurrentPosition < 0 || p.CurrentPosition > p.TotalLevels {
+		return nil
+	}
+	result := *p
+	result.CurrentTitle = publicText(result.CurrentTitle, "")
+	return &result
 }

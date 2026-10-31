@@ -36,14 +36,27 @@ type Request struct {
 	HomeworkID     int64  `json:"homework_id"`
 	Game           string `json:"game,omitempty"`
 	Mode           string `json:"mode"`
+	Scope          string `json:"scope,omitempty"`
 	IdempotencyKey string `json:"idempotency_key,omitempty"`
 }
 
 type Event struct {
-	Phase   string    `json:"phase"`
-	Kind    string    `json:"kind,omitempty"`
-	Message string    `json:"message"`
-	At      time.Time `json:"at"`
+	Phase    string         `json:"phase"`
+	Kind     string         `json:"kind,omitempty"`
+	Message  string         `json:"message"`
+	At       time.Time      `json:"at"`
+	Progress *BatchProgress `json:"progress,omitempty"`
+}
+
+// BatchProgress contains public counters only. Completed includes already-full
+// levels skipped by this run; Skipped is a subset of Completed.
+type BatchProgress struct {
+	TotalLevels     int    `json:"total_levels"`
+	CompletedLevels int    `json:"completed_levels"`
+	SkippedLevels   int    `json:"skipped_levels"`
+	FailedLevels    int    `json:"failed_levels"`
+	CurrentPosition int    `json:"current_position,omitempty"`
+	CurrentTitle    string `json:"current_title,omitempty"`
 }
 
 type Job struct {
@@ -60,6 +73,7 @@ type Job struct {
 	Message    string          `json:"message,omitempty"`
 	Result     json.RawMessage `json:"result,omitempty"`
 	Events     []Event         `json:"events,omitempty"`
+	Progress   *BatchProgress  `json:"progress,omitempty"`
 }
 
 type Outcome struct {

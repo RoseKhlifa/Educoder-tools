@@ -33,11 +33,24 @@ type Request struct {
 	Owner, Course, Game, IdempotencyKey string
 	HomeworkID                          int64
 	Mode                                solver.Mode
+	// BudgetMicroUSD optionally caps this invocation. Batch callers use it to
+	// pass the remaining shared budget into each child run.
+	BudgetMicroUSD int64
 }
 type Progress struct {
-	Phase   string `json:"phase"`
-	Kind    string `json:"kind"`
-	Message string `json:"message"`
+	Phase   string         `json:"phase"`
+	Kind    string         `json:"kind"`
+	Message string         `json:"message"`
+	Batch   *BatchProgress `json:"batch,omitempty"`
+}
+
+type BatchProgress struct {
+	TotalLevels     int    `json:"total_levels"`
+	CompletedLevels int    `json:"completed_levels"`
+	SkippedLevels   int    `json:"skipped_levels"`
+	FailedLevels    int    `json:"failed_levels"`
+	CurrentPosition int    `json:"current_position,omitempty"`
+	CurrentTitle    string `json:"current_title,omitempty"`
 }
 type Result struct {
 	Status       string         `json:"status"`
@@ -135,7 +148,7 @@ func (s *Service) Run(ctx context.Context, client *educoder.Client, req Request,
 	defer cancel()
 	emit := func(phase, kind, message string) {
 		if report != nil {
-			report(Progress{phase, kind, message})
+			report(Progress{Phase: phase, Kind: kind, Message: message})
 		}
 	}
 	emit("loading", "", "正在读取题目类型")
@@ -161,13 +174,13 @@ func (s *Service) Run(ctx context.Context, client *educoder.Client, req Request,
 	defer unlock()
 	switch task.Kind() {
 	case educoder.TaskKindProgramming:
-		r, e := s.programming.RunClient(ctx, client, solver.Request{Owner: req.Owner, Course: req.Course, HomeworkID: req.HomeworkID, Game: req.Game, Mode: req.Mode, IdempotencyKey: req.IdempotencyKey, OnProgress: func(st solver.Stage) { emit(st.Phase, "programming", st.Message) }})
+		r, e := s.programming.RunClient(ctx, client, solver.Request{Owner: req.Owner, Course: req.Course, HomeworkID: req.HomeworkID, Game: req.Game, Mode: req.Mode, IdempotencyKey: req.IdempotencyKey, BudgetMicroUSD: req.BudgetMicroUSD, OnProgress: func(st solver.Stage) { emit(st.Phase, "programming", st.Message) }})
 		if r == nil {
 			return nil, e
 		}
 		return &Result{Status: r.Status, Kind: "programming", RunID: r.RunID, CandidateID: r.CandidateID, Source: r.Source, ModelCalls: r.ModelCalls, CostMicroUSD: r.CostMicroUSD, Programming: publicProgramming(r), Diagnostics: r.Diagnostics}, e
 	case educoder.TaskKindChoice:
-		return s.runObjective(ctx, client, req, func(phase, message string) { emit(phase, "objective", message) })
+		return s.runObjective(ctx, client, req, func(phase, message string) { emit(phase, "objective", message) }, req.BudgetMicroUSD)
 	default:
 		return nil, errors.New("unsupported task kind")
 	}
@@ -208,7 +221,10 @@ func (s *Service) persistObjective(ctx context.Context, req Request, r *Result, 
 	}
 	return s.store.PutRun(ctx, questionbank.RunRecord{ID: r.RunID, Owner: ownerHash(req.Owner), IdempotencyKey: req.IdempotencyKey, Status: r.Status, Data: raw, CreatedAt: created, UpdatedAt: time.Now().UTC()})
 }
-func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req Request, emit func(string, string)) (r *Result, err error) {
+func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req Request, emit func(string, string), budget int64) (r *Result, err error) {
+	if budget <= 0 {
+		budget = s.cfg.BudgetMicroUSD
+	}
 	if req.Mode == solver.ModeSelfTest {
 		return nil, errors.New("objective tasks support generate_only or submit")
 	}
@@ -290,7 +306,7 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 				r.Status = "budget_unavailable"
 				return r, e
 			}
-			if estimate.CostMicroUSD <= 0 || r.CostMicroUSD+estimate.CostMicroUSD > s.cfg.BudgetMicroUSD {
+			if estimate.CostMicroUSD <= 0 || r.CostMicroUSD+estimate.CostMicroUSD > budget {
 				r.Status = "budget_exhausted"
 				return r, nil
 			}
@@ -323,7 +339,7 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 				r.Status = "usage_persistence_failed"
 				return r, usageErr
 			}
-			if r.CostMicroUSD > s.cfg.BudgetMicroUSD {
+			if r.CostMicroUSD > budget {
 				r.Status = "budget_exhausted"
 				return r, nil
 			}

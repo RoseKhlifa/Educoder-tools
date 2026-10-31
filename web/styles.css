@@ -146,3 +146,11 @@ button:disabled { cursor: default; }
 .task-description h4 { margin: 0 0 8px; color: #536075; font-size: 12px; }
 .task-description p { margin: 0; color: #687488; font-size: 13px; line-height: 1.75; white-space: pre-wrap; }
 @media (max-width: 620px) { .topbar { height: 56px; }.topbar-inner { padding: 0 16px; }.brand-lockup strong { font-size: 16px; }.brand-lockup span:not(.brand-mark) { display: none; }.topnav { display: none; }.user-name { display: none; }.workspace { display: block; min-height: calc(100vh - 56px); }.sidebar-wrap { display: none; }.main-content { padding: 20px 16px 50px; }.mobile-context { display: flex; align-items: center; gap: 8px; margin-bottom: 23px; color: #516079; font-size: 13px; font-weight: 600; }.mobile-back { border: 0; padding: 0; color: var(--blue); background: transparent; font-size: 25px; line-height: 1; }.section-heading h2 { font-size: 21px; }.course-list { grid-template-columns: 1fr; gap: 8px; }.course-card { min-height: 63px; }.task-heading { align-items: flex-start; flex-direction: column; gap: 14px; }.search-box { width: 100%; }.homework-row { grid-template-columns: 27px minmax(0, 1fr); gap: 9px 12px; padding: 15px 0; }.homework-main { padding: 0; }.homework-row .status-pill { grid-column: 2; justify-self: start; }.homework-action { grid-column: 2; width: 100%; }.homework-meta { flex-wrap: wrap; gap: 4px 12px; }.task-drawer { padding: 25px 20px; }.drawer-head { padding-bottom: 22px; }.task-title { font-size: 20px; }.auth-panel { width: min(100% - 36px, 380px); }.auth-copy { margin: 72px 0 27px; }.auth-copy h1 { font-size: 32px; } }
+
+.job-homework .status-pill { white-space: normal; line-height: 1.5; }
+.homework-levels { margin-top: 13px; color: #738198; font-size: 12px; line-height: 1.75; }
+.homework-levels summary { color: #536887; cursor: pointer; }
+.homework-levels ol { list-style: none; padding: 0; margin: 8px 0 0; }
+.homework-levels li { display: grid; gap: 3px; padding: 8px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.homework-levels strong { font-size: 11px; font-weight: 500; color: #536887; }
+@media (max-width: 620px) { .job-homework .job-card-top { flex-wrap: wrap; } }

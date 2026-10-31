@@ -75,6 +75,7 @@ export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancele
 export interface JobRequest {
   course: string;
   homework_id: number;
+  scope?: 'homework' | 'current';
   game?: string;
   mode: JobMode;
   idempotency_key?: string;
@@ -111,8 +112,17 @@ export interface AnswerJob {
   finished_at?: string;
   error_code?: string;
   message?: string;
+  progress?: HomeworkProgress;
   result?: Record<string, unknown>;
-  events?: Array<{ phase: string; kind?: string; message: string; at: string }>;
+  events?: Array<{ phase: string; kind?: string; message: string; at: string; progress?: HomeworkProgress }>;
+}
+export interface HomeworkProgress {
+  total_levels?: number;
+  completed_levels?: number;
+  skipped_levels?: number;
+  failed_levels?: number;
+  current_position?: number;
+  current_title?: string;
 }
 export interface JobCapacity {
   workers: number;

@@ -180,8 +180,39 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 		if !ok {
 			return jobs.Outcome{Status: jobs.Failed, ErrorCode: "CLIENT_UNSUPPORTED", Message: "当前会话尚未支持答题执行"}, errors.New("unsupported task client")
 		}
+		if req.Scope == "homework" {
+			batch, err := service.RunHomework(ctx, protocol, taskservice.Request{Owner: owner, Course: req.Course, HomeworkID: req.HomeworkID, Mode: solver.ModeSubmit, IdempotencyKey: req.IdempotencyKey}, func(progress taskservice.Progress) {
+				e := jobs.Event{Phase: progress.Phase, Kind: progress.Kind, Message: progress.Message}
+				if progress.Batch != nil {
+					e.Progress = &jobs.BatchProgress{TotalLevels: progress.Batch.TotalLevels, CompletedLevels: progress.Batch.CompletedLevels, SkippedLevels: progress.Batch.SkippedLevels, FailedLevels: progress.Batch.FailedLevels, CurrentPosition: progress.Batch.CurrentPosition, CurrentTitle: progress.Batch.CurrentTitle}
+				}
+				report(e)
+			})
+			if batch == nil {
+				return jobs.Outcome{}, err
+			}
+			raw, _ := json.Marshal(batch)
+			status := jobs.Failed
+			if batch.Status == "passed" {
+				status = jobs.Succeeded
+			} else if batch.Status == "uncertain" || batch.Status == "verification_unconfirmed" {
+				status = jobs.Uncertain
+			} else if batch.Status == "canceled" {
+				status = jobs.Canceled
+			}
+			out := jobs.Outcome{Status: status, Result: raw, Message: "整份作业处理完成"}
+			if err != nil {
+				out.ErrorCode = "HOMEWORK_BATCH_FAILED"
+				out.Message = "整份作业在中途停止，已保留已完成关卡"
+			}
+			return out, err
+		}
 		result, err := service.Run(ctx, protocol, taskservice.Request{Owner: owner, Course: req.Course, HomeworkID: req.HomeworkID, Game: req.Game, Mode: solver.Mode(req.Mode), IdempotencyKey: req.IdempotencyKey}, func(progress taskservice.Progress) {
-			report(jobs.Event{Phase: progress.Phase, Kind: progress.Kind, Message: progress.Message})
+			e := jobs.Event{Phase: progress.Phase, Kind: progress.Kind, Message: progress.Message}
+			if progress.Batch != nil {
+				e.Progress = &jobs.BatchProgress{TotalLevels: progress.Batch.TotalLevels, CompletedLevels: progress.Batch.CompletedLevels, SkippedLevels: progress.Batch.SkippedLevels, FailedLevels: progress.Batch.FailedLevels, CurrentPosition: progress.Batch.CurrentPosition, CurrentTitle: progress.Batch.CurrentTitle}
+			}
+			report(e)
 		})
 		out := jobs.Outcome{Status: jobs.Failed, ErrorCode: "EXECUTION_FAILED", Message: "任务执行未完成，请查看进度"}
 		if result != nil {
@@ -281,6 +312,10 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, requestID st
 		}
 		if req.Mode == "collect_verified" {
 			s.writeError(w, requestID, http.StatusBadRequest, "INVALID_REQUEST", "请使用只读采集接口")
+			return
+		}
+		if req.Scope == "homework" && (req.Mode != "submit" || req.Game != "") {
+			s.writeError(w, requestID, http.StatusBadRequest, "INVALID_REQUEST", "整份作业任务需要 submit 模式且不指定当前关卡")
 			return
 		}
 		header := r.Header.Get("Idempotency-Key")

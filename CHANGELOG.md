@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.23 — 2026-10-31
+
+- Complete all selected homework levels from one asynchronous action
+
 ## 0.1.22 — 2026-10-31
 
 - Resolve existing completed games through read-only runtime rosters and verify hidden-result full-score answer sheets

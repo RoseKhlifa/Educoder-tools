@@ -373,6 +373,7 @@ func (m *Manager) report(r *execution, e Event) {
 	e.Phase = publicLabel(e.Phase, "working")
 	e.Kind = publicLabel(e.Kind, "")
 	e.Message = publicText(e.Message, "Job is working")
+	e.Progress = publicProgress(e.Progress)
 	e.At = time.Now().UTC()
 	r.Phase = e.Phase
 	if e.Kind != "" {
@@ -380,6 +381,9 @@ func (m *Manager) report(r *execution, e Event) {
 	}
 	r.Message = e.Message
 	r.UpdatedAt = e.At
+	if e.Progress != nil {
+		r.Progress = cloneProgress(e.Progress)
+	}
 	r.mutating = r.mutating || mutatingPhase(e.Phase)
 	r.Events = append(r.Events, e)
 	if len(r.Events) > m.cfg.EventLimit {
