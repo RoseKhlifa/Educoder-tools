@@ -45,6 +45,11 @@ func TestCollectionHTTPUsesOnlyExistingReadRoutes(t *testing.T) {
 					}
 				case "/api/homework_commons/1/shixun_challenge_data.json":
 					json.NewEncoder(w).Encode(map[string]any{"data": f.progress})
+				case "/api/shixun_homeworks/1/header_info.json":
+					// Discovery can report an unavailable runtime and still use
+					// this test's prior known target. New runtime mapping is tested
+					// independently with a fresh bank and real locator responses.
+					w.Write([]byte(`{"data":{"homework_id":1}}`))
 				case "/api/tasks/G.json":
 					if r.URL.Query().Get("homework_common_id") != "1" {
 						t.Error("missing scope")

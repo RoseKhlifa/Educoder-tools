@@ -109,6 +109,10 @@ type Homework struct {
 	EndTime   any               `json:"end_time"`
 	EndDate   any               `json:"end_date"`
 	Operation []json.RawMessage `json:"task_operation,omitempty"`
+	// This identifies the student's existing runtime, never a game. Collection
+	// resolves it through the observed read-only myshixun challenges endpoint.
+	MyShixunIdentifier string `json:"myshixun_identifier,omitempty"`
+	StudentWorkID      int64  `json:"student_work_id,omitempty"`
 }
 
 type Task struct {

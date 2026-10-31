@@ -39,16 +39,21 @@ type CollectionReader interface {
 }
 
 type CollectionSummary struct {
-	Courses      int            `json:"courses"`
-	Homeworks    int            `json:"homeworks"`
-	Levels       int            `json:"levels"`
-	Collected    int            `json:"collected"`
-	Duplicates   int            `json:"duplicates"`
-	Skipped      int            `json:"skipped"`
-	Unconfirmed  int            `json:"unconfirmed"`
-	Failed       int            `json:"failed"`
-	LimitReached bool           `json:"limit_reached"`
-	Reasons      map[string]int `json:"reasons"`
+	Courses                int            `json:"courses"`
+	Homeworks              int            `json:"homeworks"`
+	Levels                 int            `json:"levels"`
+	Collected              int            `json:"collected"`
+	Duplicates             int            `json:"duplicates"`
+	Skipped                int            `json:"skipped"`
+	Unconfirmed            int            `json:"unconfirmed"`
+	Failed                 int            `json:"failed"`
+	LimitReached           bool           `json:"limit_reached"`
+	Reasons                map[string]int `json:"reasons"`
+	FullScoreLevels        int            `json:"full_score_levels"`
+	LocatedLevels          int            `json:"located_levels"`
+	ObjectiveAnswersRead   int            `json:"objective_answers_read"`
+	ObjectiveQuestionsRead int            `json:"objective_questions_read"`
+	ProgrammingFilesRead   int            `json:"programming_files_read"`
 }
 
 func (s *CollectionSummary) skip(reason string, unconfirmed bool) {
@@ -186,7 +191,30 @@ func (h *Collector) Scan(ctx context.Context, c CollectionReader, owner string, 
 							summary.skip("no_confirmed_full_score", false)
 							continue
 						}
+						summary.FullScoreLevels += fullCount
 						var targets []questionbank.CollectionTarget
+						located := map[string]educoder.CollectionLocator{}
+						// Existing-runtime discovery is an optional read-only protocol
+						// capability, separate from saved local solver seeds.
+						if resolver, ok := c.(interface {
+							CollectionLocate(context.Context, string, educoder.Homework, *educoder.HomeworkProgress) (educoder.CollectionLocationResult, error)
+						}); ok {
+							result, resolveErr := resolver.CollectionLocate(ctx, courseID, hw, progress)
+							if resolveErr != nil {
+								if errors.Is(resolveErr, educoder.ErrCollectionLimit) || ctx.Err() != nil {
+									return summary, resolveErr
+								}
+								summary.Reasons["readonly_locator_read_failed"]++
+							} else {
+								for reason, n := range result.Reasons {
+									summary.Reasons[reason] += n
+								}
+								for _, target := range result.Targets {
+									located[target.Game] = target
+									targets = append(targets, questionbank.CollectionTarget{Course: courseID, HomeworkID: hw.ID, Game: target.Game, ChallengeID: target.ChallengeID, Shixun: hw.ShixunIdentifier})
+								}
+							}
+						}
 						for _, s := range seeds {
 							if s.Course == courseID && s.HomeworkID == hw.ID && (s.Shixun == "" || s.Shixun == hw.ShixunIdentifier) {
 								targets = append(targets, s)
@@ -235,11 +263,16 @@ func (h *Collector) Scan(ctx context.Context, c CollectionReader, owner string, 
 									summary.skip("target_identity_mismatch", true)
 									break
 								}
+								if expected, ok := located[game]; ok && (task.MyShixun.Identifier != expected.MyShixunIdentifier || task.Challenge.ID != expected.ChallengeID || task.Challenge.Position != expected.Position || task.Challenge.Subject != expected.Name) {
+									summary.skip("runtime_game_challenge_identity_mismatch", true)
+									break
+								}
 								p, ok := levels[task.Challenge.ID]
 								if !ok || !p.HasFullScore() {
 									summary.skip("target_not_confirmed_full_score", true)
 									break
 								}
+								summary.LocatedLevels++
 								// A fresh score read brackets answer capture. No editor,
 								// submission or runtime creation endpoint is called.
 								e = h.collectLevel(ctx, c, owner, task, p, &summary)
@@ -330,6 +363,10 @@ func collectionOperationGames(raw []json.RawMessage, course string, hw int64) []
 }
 
 func (h *Collector) collectLevel(ctx context.Context, c CollectionReader, owner string, t *educoder.Task, p educoder.ChallengeProgress, s *CollectionSummary) error {
+	if t == nil || p.ChallengeID != t.Challenge.ID || !p.HasFullScore() {
+		s.skip("target_not_confirmed_full_score", true)
+		return nil
+	}
 	switch t.Kind() {
 	case educoder.TaskKindProgramming:
 		if t.Game.Status != 2 || len(t.TestSets) == 0 {
@@ -348,6 +385,7 @@ func (h *Collector) collectLevel(ctx context.Context, c CollectionReader, owner 
 		if err != nil {
 			return err
 		}
+		s.ProgrammingFilesRead += len(pt.Files)
 		snap, files := collectionCodeSnapshot(t, pt)
 		prepared, err := problem.Prepare(snap)
 		if err != nil {
@@ -384,6 +422,12 @@ func (h *Collector) collectLevel(ctx context.Context, c CollectionReader, owner 
 		s.Duplicates++
 		return nil
 	case educoder.TaskKindChoice:
+		s.ObjectiveQuestionsRead += len(t.Chooses)
+		for _, test := range t.ChooseTestCases.TestSets {
+			if raw, ok := test.ActualOutput.(string); ok && strings.TrimSpace(raw) != "" {
+				s.ObjectiveAnswersRead++
+			}
+		}
 		snapshot, answers, reason := collectionObjective(t)
 		if reason != "" {
 			s.skip(reason, true)
@@ -433,7 +477,7 @@ func (h *Collector) collectLevel(ctx context.Context, c CollectionReader, owner 
 			if err != nil {
 				return err
 			}
-			if err = h.Bank.RecordObjectiveValidation(ctx, id, questionbank.ObjectiveValidation{Passed: true, Confirmed: true, FullScore: true, Score: p.GameScore, MaxScore: p.ChallengeScore, AnswerHash: problem.HashContent(answers[i]), ScopeHash: scope, Feedback: "Read-only collection: exact target full score and matching successful per-question actual answers, confirmed by two task reads."}); err != nil {
+			if err = h.Bank.RecordObjectiveValidation(ctx, id, questionbank.ObjectiveValidation{Passed: true, Confirmed: true, FullScore: true, Score: p.GameScore, MaxScore: p.ChallengeScore, AnswerHash: problem.HashContent(answers[i]), ScopeHash: scope, Feedback: "Read-only collection: exact target full score and complete persisted answer sheet; matching question identities and answers confirmed by two task reads; no explicit conflicting correctness result."}); err != nil {
 				return err
 			}
 			s.Collected++
@@ -498,7 +542,12 @@ func collectionObjective(t *educoder.Task) (answer.ObjectiveSnapshot, []string, 
 	qs := append([]educoder.ChoiceQuestion(nil), t.Chooses...)
 	sort.Slice(qs, func(i, j int) bool { return qs[i].Position < qs[j].Position })
 	tests := t.ChooseTestCases
-	if len(qs) == 0 || tests.Count != len(qs) || tests.Correct == nil || *tests.Correct != len(qs) || len(tests.TestSets) != len(qs) {
+	// Educoder hides correct-count and per-question results when the teacher
+	// disables answer visibility. The persisted complete submitted answer sheet
+	// can still be bound to this exact challenge's independently read full score
+	// in collectLevel. Submitted flags alone NEVER establish correctness.
+	hiddenResults := tests.Correct == nil
+	if len(qs) == 0 || tests.Count != len(qs) || (tests.Correct != nil && *tests.Correct != len(qs)) || (hiddenResults && (!tests.HadSubmit || !tests.HadAllSubmit)) || len(tests.TestSets) != len(qs) {
 		return s, nil, "objective_answer_evidence_missing"
 	}
 	positions := map[int]bool{}
@@ -531,7 +580,7 @@ func collectionObjective(t *educoder.Task) (answer.ObjectiveSnapshot, []string, 
 				continue
 			}
 			found++
-			if test.QuestionName != q.QuestionName || test.QuestionType != q.QuestionType || test.Result == nil || !*test.Result {
+			if test.QuestionName != q.QuestionName || test.QuestionType != q.QuestionType || (test.Result != nil && !*test.Result) || (test.Result == nil && (!tests.HadSubmit || !tests.HadAllSubmit)) {
 				return s, nil, "objective_result_mismatch"
 			}
 			raw, ok := test.ActualOutput.(string)

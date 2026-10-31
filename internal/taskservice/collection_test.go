@@ -147,6 +147,7 @@ func TestCollectionObjectiveRejectsUnprovenOrMismatchedAnswers(t *testing.T) {
 			f.task.ChooseTestCases.Correct = nil
 			f.task.ChooseTestCases.HadAllSubmit = true
 			f.task.ChooseTestCases.HadSubmit = true
+			f.task.ChooseTestCases.TestSets = nil
 		},
 		"wrong_result":      func(f *collectionFixture) { no := false; f.task.ChooseTestCases.TestSets[0].Result = &no },
 		"position_mismatch": func(f *collectionFixture) { f.task.ChooseTestCases.TestSets[0].Position = 2 },

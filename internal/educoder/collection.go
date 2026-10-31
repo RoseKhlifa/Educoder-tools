@@ -59,7 +59,7 @@ func (c *Client) CollectionReader(b CollectionBudget) (*Client, error) {
 func collectionReadPath(p string) bool {
 	s := strings.Split(strings.Trim(p, "/"), "/")
 	if len(s) == 4 && s[0] == "api" {
-		return s[1] == "users" && s[3] == "courses.json" || s[1] == "courses" && s[3] == "homework_commons.json" || s[1] == "homework_commons" && s[3] == "shixun_challenge_data.json" || s[1] == "tasks" && s[3] == "rep_content.json"
+		return s[1] == "users" && s[3] == "courses.json" || s[1] == "courses" && s[3] == "homework_commons.json" || s[1] == "homework_commons" && s[3] == "shixun_challenge_data.json" || s[1] == "tasks" && s[3] == "rep_content.json" || s[1] == "myshixuns" && s[3] == "challenges.json" || s[1] == "shixun_homeworks" && s[3] == "header_info.json"
 	}
 	return len(s) == 3 && s[0] == "api" && s[1] == "tasks" && strings.HasSuffix(s[2], ".json")
 }

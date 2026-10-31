@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.22 — 2026-10-31
+
+- Resolve existing completed games through read-only runtime rosters and verify hidden-result full-score answer sheets
+
 ## 0.1.21 — 2026-10-31
 
 - Explain collection scan coverage and skip reasons without implying answers were imported
