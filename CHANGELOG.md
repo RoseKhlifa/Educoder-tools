@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.24 — 2026-10-31
+
+- Allow whole-homework batches to run within their bounded thirty-minute job timeout
+
 ## 0.1.23 — 2026-10-31
 
 - Complete all selected homework levels from one asynchronous action
