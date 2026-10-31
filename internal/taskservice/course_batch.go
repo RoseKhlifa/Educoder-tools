@@ -143,6 +143,13 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 				return stop(errors.New("homework identity is missing or ambiguous"), "homework_identity_invalid")
 			}
 			seenHomeworks[h.ID] = true
+			// Closed assignments remain visible on Educoder for history, but
+			// cannot be scheduled by this service. Filter them before the plan is
+			// counted so an all-closed scope is a valid zero-work request and does
+			// not consume model calls or enter a runtime.
+			if h.IsClosed(time.Now()) {
+				continue
+			}
 			plan = append(plan, courseHomeworkPlan{c, h})
 			if len(plan) > serviceMaxHomeworks {
 				return stop(errors.New("service homework count exceeds limit"), "homework_limit")
@@ -168,6 +175,15 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 		current = ServiceProgress{CurrentCourse: p.course.Identifier, CurrentHomeworkID: p.hw.ID, CurrentTitle: p.hw.Name}
 		emit("loading", "正在处理作业", nil)
 		h := &out.Homeworks[i]
+		// A request can be queued before the deadline and begin afterwards.
+		// Recheck the locally supplied deadline immediately before any progress
+		// read, runtime entry, model call, or mutation.
+		if p.hw.IsClosed(time.Now()) {
+			h.Status, h.ReasonCode = "needs_service", "deadline_passed"
+			out.NeedsServiceHomeworks++
+			emit("service_pending", "这份作业已超过截止时间，已停止安排", nil)
+			continue
+		}
 		if !p.hw.IsShixun || !courseIdentifier.MatchString(p.hw.ShixunIdentifier) {
 			h.Status, h.ReasonCode = "needs_service", "unsupported_homework"
 			out.NeedsServiceHomeworks++
@@ -232,6 +248,9 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 	current = ServiceProgress{}
 	if out.CompletedHomeworks == out.TotalHomeworks && out.NeedsServiceHomeworks == 0 {
 		out.Status = "passed"
+		if out.TotalHomeworks == 0 {
+			out.ReasonCode = "no_active_homework"
+		}
 	} else {
 		out.Status, out.ReasonCode = "needs_service", "service_required"
 	}

@@ -98,3 +98,6 @@ python scripts/check-private-data.py
 每个完成的小改动增加 patch、更新 CHANGELOG、通过相关测试和隐私检查，再创建 commit、annotated tag，并通过 SSH 推送到 `git@github.com:RoseKhlifa/Educoder-tools.git`。不修改已发布标签，不 force-push。
 
 服务监听 11454，部署主机通过本机 `ssh main` 连接；`touge.mom` 的 HTTPS 反代由用户在 1Panel 管理。本项目不创建 Nginx/OpenResty 配置。
+
+
+截止状态：用户端作业列表只展示仍可安排的作业。服务端优先使用头歌返回的 `已截止 / 已结束 / closed / ended` 状态，并按 `end_time / deadline / end_date` 的上海时间兜底判断；缺少日期不当作截止。补交作业只有在上游明确给出有效延长截止时间时才保留。`course` / `all` 任务在规划和每份作业开始前都会复核截止状态，已截止作业不会进入运行实例、模型调用或提交；执行中跨过截止时间时停止后续关卡。历史题库采集仍读取原始列表，以保留已完成作业的核验记录。

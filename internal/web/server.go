@@ -450,6 +450,7 @@ func (s *Server) handleHomeworks(w http.ResponseWriter, r *http.Request, request
 		s.upstreamError(w, requestID)
 		return
 	}
+	homeworks = educoder.OpenHomeworks(homeworks, time.Now())
 	result := make([]homeworkDTO, 0, len(homeworks))
 	for _, homework := range homeworks {
 		result = append(result, toHomeworkDTO(homework))
@@ -473,6 +474,10 @@ func (s *Server) handleEnter(w http.ResponseWriter, r *http.Request, requestID, 
 		return
 	}
 	task, err := session.Client.Enter(r.Context(), course, homeworkID, r.URL.Query().Get("shixun"))
+	if errors.Is(err, educoder.ErrHomeworkClosed) {
+		s.writeError(w, requestID, http.StatusGone, "HOMEWORK_CLOSED", "这份作业已截止，无法安排服务")
+		return
+	}
 	if err != nil || task == nil {
 		s.upstreamError(w, requestID)
 		return

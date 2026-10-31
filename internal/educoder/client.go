@@ -105,10 +105,17 @@ type Homework struct {
 	// Educoder has returned deadline values under several names and as either
 	// strings or Unix timestamps. Keep the raw JSON value until the web DTO
 	// normalizes it so one unexpected type cannot discard the whole task list.
-	Deadline  any               `json:"deadline"`
-	EndTime   any               `json:"end_time"`
-	EndDate   any               `json:"end_date"`
-	Operation []json.RawMessage `json:"task_operation,omitempty"`
+	Deadline any `json:"deadline"`
+	EndTime  any `json:"end_time"`
+	EndDate  any `json:"end_date"`
+	// AllowLate is true for assignments that remain submittable after the
+	// ordinary deadline. LateTime/LateEndTime are the upstream extension
+	// deadline when that policy is configured. Keep these as raw values because
+	// Educoder has returned both date strings and Unix timestamps.
+	AllowLate   bool              `json:"allow_late"`
+	LateTime    any               `json:"late_time"`
+	LateEndTime any               `json:"late_end_time"`
+	Operation   []json.RawMessage `json:"task_operation,omitempty"`
 	// This identifies the student's existing runtime, never a game. Collection
 	// resolves it through the observed read-only myshixun challenges endpoint.
 	MyShixunIdentifier string `json:"myshixun_identifier,omitempty"`
@@ -462,6 +469,9 @@ func (c *Client) Enter(ctx context.Context, course string, homeworkID int64, shi
 	for _, hw := range homeworks {
 		if hw.ID == homeworkID {
 			found = true
+			if hw.IsClosed(time.Now()) {
+				return nil, ErrHomeworkClosed
+			}
 			if !hw.IsShixun || hw.ShixunIdentifier == "" {
 				return nil, errors.New("选择的任务不是 HAR 覆盖的实训任务类型")
 			}

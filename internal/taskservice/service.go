@@ -156,6 +156,29 @@ func (s *Service) Run(ctx context.Context, client *educoder.Client, req Request,
 	emit("loading", "", "正在读取题目类型")
 	var task *educoder.Task
 	var err error
+	if req.Game == "" && req.Mode == solver.ModeSubmit {
+		// Enter may create the student's runtime. Resolve the assignment's
+		// availability before that call when a direct request did not provide a
+		// pre-resolved game identifier.
+		homeworks, e := client.Homeworks(ctx, req.Course, "")
+		if e != nil {
+			return nil, e
+		}
+		var selected *educoder.Homework
+		for i := range homeworks {
+			if homeworks[i].ID == req.HomeworkID {
+				item := homeworks[i]
+				selected = &item
+				break
+			}
+		}
+		if selected == nil {
+			return nil, fmt.Errorf("课堂中没有作业 %d", req.HomeworkID)
+		}
+		if selected.IsClosed(time.Now()) {
+			return &Result{Status: "deadline_passed", Kind: "service", Diagnostics: []string{"deadline_passed"}}, nil
+		}
+	}
 	if req.Game == "" {
 		task, err = client.Enter(ctx, req.Course, req.HomeworkID, "")
 	} else {
@@ -176,6 +199,29 @@ func (s *Service) Run(ctx context.Context, client *educoder.Client, req Request,
 	defer unlock()
 	switch task.Kind() {
 	case educoder.TaskKindProgramming:
+		if req.Mode == solver.ModeSubmit {
+			// A direct single-level programming request bypasses RunHomework.
+			// Recheck the assignment history before invoking the solver, which is
+			// the first point at which a model call or write can occur.
+			homeworks, e := client.Homeworks(ctx, req.Course, "")
+			if e != nil {
+				return nil, e
+			}
+			var selected *educoder.Homework
+			for i := range homeworks {
+				if homeworks[i].ID == req.HomeworkID {
+					item := homeworks[i]
+					selected = &item
+					break
+				}
+			}
+			if selected == nil {
+				return nil, fmt.Errorf("课堂中没有作业 %d", req.HomeworkID)
+			}
+			if selected.IsClosed(time.Now()) {
+				return &Result{Status: "deadline_passed", Kind: "programming", Diagnostics: []string{"deadline_passed"}}, nil
+			}
+		}
 		r, e := s.programming.RunClient(ctx, client, solver.Request{Owner: req.Owner, Course: req.Course, HomeworkID: req.HomeworkID, Game: req.Game, Mode: req.Mode, IdempotencyKey: req.IdempotencyKey, BudgetMicroUSD: req.BudgetMicroUSD, OnProgress: func(st solver.Stage) { emit(st.Phase, "programming", st.Message) }})
 		if r == nil {
 			return nil, e

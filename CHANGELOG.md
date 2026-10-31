@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.36 - 2026-10-31
+
+- Exclude expired homework from active service lists and execution
+
 ## 0.1.35 - 2026-10-31
 
 - Handle URL-safe self-test frames and failed hidden-test evaluation feedback

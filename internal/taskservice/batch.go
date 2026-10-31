@@ -87,6 +87,12 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 	if hw == nil {
 		return nil, fmt.Errorf("课堂中没有作业 %d", req.HomeworkID)
 	}
+	// The assignment can still be present in the upstream history list after
+	// its deadline. Do this check before roster resolution or Enter so a direct
+	// homework request cannot create a runtime or reach a mutating operation.
+	if hw.IsClosed(time.Now()) {
+		return &BatchResult{Kind: "homework", Scope: "homework", Status: "deadline_passed", ReasonCode: "deadline_passed"}, nil
+	}
 	if !hw.IsShixun || hw.ShixunIdentifier == "" {
 		out.Status = "unsupported_roster"
 		return out, errors.New("selected homework is not a shixun")
@@ -165,6 +171,14 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 			out.Status = "canceled"
 			out.Diagnostics = append(out.Diagnostics, err.Error())
 			return out, err
+		}
+		// A long-running batch may cross the deadline between levels. The local
+		// deadline is authoritative for admission; stop before loading the next
+		// task or issuing another model/write request.
+		if hw.IsClosed(time.Now()) {
+			out.Status = "deadline_passed"
+			out.ReasonCode = "deadline_passed"
+			return out, nil
 		}
 		// Skip decisions are rechecked immediately before each mutation.
 		fresh, e := client.HomeworkProgress(ctx, req.Course, req.HomeworkID)
