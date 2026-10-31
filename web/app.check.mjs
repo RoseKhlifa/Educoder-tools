@@ -52,6 +52,7 @@ const homeworks = [{ id: 20, name: '作业一', status: ['未完成'] }];
 const task = { kind: 'programming', courseIdentifier: 'COURSE_A', homeworkId: 20, game: { identifier: 'game-1' }, challenge: { subject: '<题目一>' }, shixun: { name: '实训一' }, url: 'https://www.educoder.net/tasks/game-1' };
 const capacity = { workers: 4, queue_size: 100, queued: 0, running: 0, per_owner_pending: 5, model_concurrency: 2, model_configured: true };
 const answerJob = (next = {}) => ({ id: 'job-1', status: 'queued', phase: 'queued', kind: 'programming', request: { course: 'COURSE_A', homework_id: 20, game: 'game-1', mode: 'generate_only' }, created_at: '2026-10-31T00:00:00Z', updated_at: '2026-10-31T00:00:00Z', ...next });
+const collectionJob = (next = {}) => answerJob({ kind: 'collection', phase: 'collecting', request: { course: '', homework_id: 0, mode: 'collect_verified' }, ...next });
 const settle = async () => { for (let i = 0; i < 10; i++) await new Promise(resolve => setImmediate(resolve)); };
 const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
 let appVersion = 0;
@@ -343,5 +344,85 @@ await test('compiled workbench UI behavior', async t => {
     await settle();
     assert.equal(page.requests.filter(item => item.url === '/api/jobs' && item.options.method !== 'POST').length, 2);
     assert.doesNotMatch(page.html(), /旧账号任务/);
+  });
+  await t.test('login collection distinguishes a completed scan from successful answer collection and explains skipped records', async () => {
+    const job = collectionJob({ status: 'succeeded', message: '已采集 0，重复 0，跳过 68，未确认 56，失败 0', result: { collected: 0, courses: 5, duplicates: 0, failed: 0, homeworks: 68, levels: 0, limit_reached: false, reasons: { no_confirmed_full_score: 12, no_readonly_game_locator: 56 }, skipped: 68, unconfirmed: 56 } });
+    const page = await app({ '/api/jobs': () => ok({ jobs: [job], capacity }) });
+    assert.match(page.html(), /<strong>已通过任务采集<\/strong>/);
+    assert.match(page.html(), /登录后自动扫描/);
+    assert.match(page.html(), /status-attention">扫描结束，未新增答案/);
+    assert.match(page.html(), /采集扫描已结束/);
+    assert.match(page.html(), /已扫描课堂 5 · 作业 68 · 关卡读取尝试 0/);
+    assert.match(page.html(), /<dt>新增答案<\/dt><dd>0<\/dd>/);
+    assert.match(page.html(), /<dt>跳过<\/dt><dd>68<\/dd>/);
+    assert.match(page.html(), /未确认 56 条（包含在跳过中）/);
+    assert.match(page.html(), /未能读取任何关卡，尚未获取到可入库的题目与答案/);
+    assert.match(page.html(), /未取得可核验的满分记录：12 项/);
+    assert.match(page.html(), /未取得只读关卡入口：56 项/);
+    assert.doesNotMatch(page.html(), /作业 0|collect_verified|no_readonly_game_locator|no_confirmed_full_score|>collecting<|流程已完成|已采集 0，重复/);
+    assert.equal(page.timers.size, 0);
+  });
+  await t.test('collection reports positive partial results and scan limits without model costs or raw fields', async () => {
+    const job = collectionJob({ status: 'succeeded', result: { collected: 3, duplicates: 2, skipped: 1, failed: 1, courses: 1, homeworks: 10, levels: 4, limit_reached: true, model_calls: 999, cost_micro_usd: 999, raw_credentials: 'must-stay-private', reasons: { request_byte_or_time_limit: 1 } } });
+    const page = await app({ '/api/jobs': () => ok({ jobs: [job], capacity }) });
+    assert.match(page.html(), /扫描结束，新增 3 条答案/);
+    assert.match(page.html(), /<dt>题库已有<\/dt><dd>2<\/dd>/);
+    assert.match(page.html(), /<dt>读取或入库失败<\/dt><dd>1<\/dd>/);
+    assert.match(page.html(), /已达到本次扫描上限，以上仅为部分结果，尚未遍历全部任务/);
+    assert.match(page.html(), /达到请求流量或扫描时长上限：1 项/);
+    assert.doesNotMatch(page.html(), /模型调用|模型费用|must-stay-private|未能读取任何关卡|未确认 0 条/);
+  });
+  await t.test('queued and running collection is polled and canceled as a read-only scan, not a submission', async () => {
+    let job = collectionJob({ status: 'queued', phase: 'queued' });
+    const page = await app({ '/api/jobs': () => ok({ jobs: [job], capacity }), '/api/jobs/job-1/cancel': () => {
+      job = { ...job, status: 'canceled', message: 'raw-cancel-message' };
+      return ok(job);
+    } });
+    assert.match(page.html(), /等待扫描/);
+    assert.match(page.html(), /等待后台扫描/);
+    assert.match(page.html(), /统计尚未返回/);
+    assert.doesNotMatch(page.html(), /<dt>新增答案<\/dt><dd>0/);
+    job = { ...job, status: 'running', phase: 'collecting' };
+    await page.tick();
+    assert.match(page.html(), /扫描中/);
+    assert.match(page.html(), /核验已通过任务/);
+    assert.match(page.html(), /停止扫描/);
+    page.get('[data-homework="20"]').dispatch('click');
+    await settle();
+    assert.equal(page.document.querySelector('[data-job-mode="collect_verified"]'), null);
+    page.get('[data-cancel-job="job-1"]').dispatch('click');
+    await settle();
+    assert.match(page.html(), /扫描已停止/);
+    assert.match(page.html(), /后续扫描已停止；已存入本地题库的记录会保留/);
+    assert.doesNotMatch(page.html(), /已送达平台|提交不会撤回|上游可能已受理|raw-cancel-message/);
+    assert.equal(page.timers.size, 0);
+    assert.equal(page.requests.filter(item => item.url.endsWith('/cancel')).length, 1);
+  });
+  await t.test('restarted or failed collection states retain partial counts and do not imply answer submission', async () => {
+    for (const [status, text] of [['interrupted', '扫描已中断'], ['failed', '扫描未完成'], ['uncertain', '扫描结果待确认']]) {
+      const page = await app({ '/api/jobs': () => ok({ jobs: [collectionJob({ status, result: { collected: 1, skipped: 2 } })], capacity }) });
+      assert.ok(page.html().includes(text));
+      assert.match(page.html(), /<dt>新增答案<\/dt><dd>1<\/dd>/);
+      assert.match(page.html(), /采集扫描已结束/);
+      assert.doesNotMatch(page.html(), /上游可能已受理|请核对平台状态，再手动创建|保存或提交不会撤回|未能读取任何关卡|作业 0/);
+      assert.equal(page.timers.size, 0);
+    }
+  });
+  await t.test('collection only displays allowlisted summaries and maps unknown reasons without exposing keys or messages', async () => {
+    const page = await app({ '/api/jobs': () => ok({ jobs: [collectionJob({ id: '<scan-id>', status: 'succeeded', message: '<img src=x onerror=alert(1)>raw-secret-message', events: [{ phase: 'collecting', message: 'raw-event-secret' }], result: { reasons: { '<img src=x onerror=alert(1)>': 2, secret_token: 3, constructor: 1, editor_changed: 1, invalid: -4, nonnumber: '2' }, raw_credentials: 'hidden-cookie-value' } })], capacity }) });
+    assert.match(page.html(), /data-job-id="&lt;scan-id&gt;"/);
+    assert.match(page.html(), /扫描已结束，统计待获取/);
+    assert.match(page.html(), /统计尚未返回/);
+    assert.match(page.html(), /两次读取的编辑器内容发生变化：1 项/);
+    assert.match(page.html(), /其他未能确认或读取的记录：6 项/);
+    assert.doesNotMatch(page.html(), /<img src=x|onerror|secret_token|constructor|raw-secret-message|raw-event-secret|hidden-cookie-value|新增答案<\/dt><dd>0|未新增答案/);
+  });
+  await t.test('collection distinguishes actual zero counters from missing or malformed statistics', async () => {
+    for (const result of [undefined, {}, { collected: '0', levels: -1, courses: null, homeworks: 1.5, skipped: false, failed: Infinity }]) {
+      const page = await app({ '/api/jobs': () => ok({ jobs: [collectionJob({ status: 'succeeded', result })], capacity }) });
+      assert.match(page.html(), /扫描已结束，统计待获取/);
+      assert.match(page.html(), /统计尚未返回/);
+      assert.doesNotMatch(page.html(), /新增答案<\/dt><dd>0|未能读取任何关卡|已扫描课堂 0|未新增答案/);
+    }
   });
 });

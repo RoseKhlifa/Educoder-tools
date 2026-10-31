@@ -122,6 +122,14 @@ button:disabled { cursor: default; }
 .job-phase { margin: 13px 0 0; display: flex; align-items: center; gap: 7px; color: #5473af; font-size: 12px; }
 .job-message, .job-result, .job-note { margin: 9px 0 0; color: #738198; font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
 .job-note { color: #9a6b2f; }
+.job-collection .status-pill { white-space: normal; line-height: 1.5; }
+.collection-counts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 15px 0 0; padding: 12px; border-radius: 4px; background: #f7f9fc; }
+.collection-counts dt { color: #8590a2; font-size: 11px; line-height: 1.5; }
+.collection-counts dd { margin: 5px 0 0; color: #44516a; font-size: 17px; font-variant-numeric: tabular-nums; }
+.collection-details { margin-top: 13px; color: #738198; font-size: 12px; line-height: 1.75; }
+.collection-details summary { color: #536887; cursor: pointer; }
+.collection-reasons { padding-left: 18px; margin: 7px 0 0; overflow-wrap: anywhere; }
+@media (max-width: 620px) { .collection-counts { grid-template-columns: repeat(2, minmax(0, 1fr)); }.job-collection .job-card-top { flex-wrap: wrap; } }
 .status-attention { color: #a56c28; background: #fff4e2; }
 .job-cancel { margin-top: 13px; font-size: 12px; }
 .jobs-alert { margin-top: 15px; }

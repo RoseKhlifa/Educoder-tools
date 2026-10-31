@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.21 — 2026-10-31
+
+- Explain collection scan coverage and skip reasons without implying answers were imported
+
 ## 0.1.20 — 2026-10-31
 
 - Collect proven completed answers after login using bounded owner-isolated read-only jobs

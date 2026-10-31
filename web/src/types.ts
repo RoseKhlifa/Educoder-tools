@@ -79,12 +79,32 @@ export interface JobRequest {
   mode: JobMode;
   idempotency_key?: string;
 }
+// Login-triggered collection is a read-only job, not an answer execution mode.
+export interface CollectionJobRequest {
+  mode: 'collect_verified';
+  course?: '';
+  homework_id?: 0;
+  game?: '';
+  idempotency_key?: string;
+}
+export interface CollectionSummary {
+  courses?: number;
+  homeworks?: number;
+  levels?: number;
+  collected?: number;
+  duplicates?: number;
+  skipped?: number;
+  unconfirmed?: number;
+  failed?: number;
+  limit_reached?: boolean;
+  reasons?: Record<string, number>;
+}
 export interface AnswerJob {
   id: string;
   status: JobStatus;
   phase: string;
   kind: string;
-  request: JobRequest;
+  request: JobRequest | CollectionJobRequest;
   created_at: string;
   updated_at: string;
   started_at?: string;

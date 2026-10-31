@@ -79,4 +79,15 @@ await test('browser API uses the Go workbench contract', async t => {
     globalThis.fetch = async () => new Response(JSON.stringify({ error: { code: 'JOB_NOT_FOUND', message: '任务不存在' } }), { status: 404 });
     await assert.rejects(new BrowserApi().job('foreign-job'), error => error.code === 'JOB_NOT_FOUND' && !error.isSessionExpired);
   });
+  await t.test('login-triggered collection history retains read-only mode and structured counters without creating an answer request', async () => {
+    const requests = [];
+    const job = { id: 'scan-1', status: 'succeeded', phase: 'collecting', request: { mode: 'collect_verified' }, result: { collected: 0, skipped: 68, unconfirmed: 56, levels: 0, reasons: { no_readonly_game_locator: 56, no_confirmed_full_score: 12 } } };
+    globalThis.fetch = async (url, options) => { requests.push({ url, options }); return envelope({ jobs: [job], capacity: { model_configured: true } }); };
+    const result = await new BrowserApi().jobs();
+    assert.deepEqual(result.jobs[0], job);
+    assert.equal(result.jobs[0].result.duplicates, undefined);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].url, '/api/jobs');
+    assert.notEqual(requests[0].options.method, 'POST');
+  });
 });
