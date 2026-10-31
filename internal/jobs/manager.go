@@ -124,6 +124,9 @@ func (m *Manager) Submit(ctx context.Context, owner string, req Request, exec Ex
 	if req.Game == "" {
 		kind = "homework"
 	}
+	if req.Scope == "course" || req.Scope == "all" {
+		kind = "service"
+	}
 	if req.Mode == "collect_verified" {
 		kind = "collection"
 	}
@@ -236,6 +239,37 @@ func (m *Manager) removeQueuedLocked(id string) {
 	}
 }
 
+// Broader service jobs share write targets with their child homework jobs.
+// Keep distinct requests distinct in storage and serialize only overlapping
+// executions; returning a different target's job would break idempotency.
+func requestsOverlap(a, b Request) bool {
+	if a.Mode == "collect_verified" || b.Mode == "collect_verified" {
+		return false
+	}
+	if a.Scope == "all" || b.Scope == "all" {
+		return true
+	}
+	if a.Course != b.Course {
+		return false
+	}
+	if a.Scope == "course" || b.Scope == "course" {
+		return true
+	}
+	if a.HomeworkID != b.HomeworkID {
+		return false
+	}
+	return a.Scope == "homework" || b.Scope == "homework" || a.Game == "" || b.Game == "" || a.Game == b.Game
+}
+
+func (m *Manager) overlapsRunningLocked(candidate *execution) bool {
+	for _, other := range m.active {
+		if other.ID != candidate.ID && other.owner == candidate.owner && other.Status == Running && requestsOverlap(candidate.Request, other.Request) {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Manager) claim() (*execution, context.Context, <-chan struct{}) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -249,7 +283,7 @@ func (m *Manager) claim() (*execution, context.Context, <-chan struct{}) {
 			m.queue = append(m.queue[:i], m.queue[i+1:]...)
 			continue
 		}
-		if m.owners[r.owner] >= m.cfg.PerOwnerRunning {
+		if m.owners[r.owner] >= m.cfg.PerOwnerRunning || m.overlapsRunningLocked(r) {
 			i++
 			continue
 		}

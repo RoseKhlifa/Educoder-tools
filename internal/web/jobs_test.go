@@ -155,14 +155,14 @@ func TestHTTPJobsValidateInputsAndModelAvailability(t *testing.T) {
 			t.Fatalf("accepted invalid request: %d %s", r.StatusCode, body)
 		}
 	}
-	// Startup with no model credential remains browseable and reports readiness.
+	// Consumer browsing remains available without exposing provider readiness.
 	app.jobs.modelConfigured = false
 	list := doJSON(t, client, http.MethodGet, server.URL+"/api/jobs", "")
-	if list.StatusCode != http.StatusOK || !strings.Contains(list.Body, `"model_configured":false`) {
+	if list.StatusCode != http.StatusOK || strings.Contains(list.Body, `model_configured`) || strings.Contains(list.Body, `capacity`) {
 		t.Fatal(list.Body)
 	}
 	r := doJSON(t, client, http.MethodPost, server.URL+"/api/jobs", `{"course":"C","homework_id":1,"mode":"submit"}`)
-	if r.StatusCode != http.StatusServiceUnavailable || !strings.Contains(r.Body, "MODEL_NOT_CONFIGURED") {
+	if r.StatusCode != http.StatusServiceUnavailable || !strings.Contains(r.Body, "SERVICE_UNAVAILABLE") || strings.Contains(r.Body, "模型") {
 		t.Fatal(r.Body)
 	}
 }

@@ -1,0 +1,51 @@
+import type { AdminAudit, AdminJob, AdminOverview, AdminUser, AccessCard } from './types.js';
+import { count, dateTime, escapeHtml as e, record } from './ui.js';
+import { jobProgress } from './jobs.js';
+export type AdminPage = 'overview' | 'users' | 'operations' | 'audit' | 'cards';
+export interface AdminState { overview: AdminOverview; users: AdminUser[]; jobs: AdminJob[]; audit: AdminAudit[]; cards: AccessCard[]; loading: boolean; error: boolean }
+const statusLabels: Record<string, string> = { queued: '等待安排', running: '执行中', succeeded: '已完成', failed: '需要处理', uncertain: '待核验', interrupted: '已中断', canceled: '已停止', active: '正常', disabled: '已暂停' };
+function metrics(data: AdminOverview, jobs: AdminJob[]): string {
+  const capacity = record(record(data.capacity).jobs ?? data.capacity);
+  const users = record(data.users);
+  const values: Array<[string, unknown]> = [ ['平台用户', data.total_users ?? users.total_users], ['执行中', data.running_jobs ?? data.running ?? capacity.running], ['等待安排', data.queued_jobs ?? data.queued ?? capacity.queued], ['近期需跟进', data.support_jobs ?? data.failed_jobs ?? data.needs_attention ?? jobs.filter(job => ['failed', 'uncertain', 'interrupted'].includes(job.status)).length] ];
+  return `<div class="admin-metrics">${values.map(([label, value]) => `<div><span>${label}</span><strong>${typeof value === 'number' ? count(value) : '—'}</strong></div>`).join('')}</div>`;
+}
+function adminJobRows(jobs: AdminJob[], limited = false): string {
+  const rows = limited ? jobs.filter(job => ['failed', 'uncertain', 'interrupted'].includes(job.status)).slice(0, 10) : jobs;
+  return `<div class="table-scroll"><table><thead><tr><th>用户 / 作业</th><th>状态</th><th>已完成</th><th>原因</th><th>用量 / 记录费用</th><th>管理</th></tr></thead><tbody>${rows.map(job => {
+    const data = record(job.result);
+    const progress = jobProgress(job);
+    const diagnostics = Array.isArray(data.diagnostics) ? data.diagnostics.filter(item => typeof item === 'string').join('；') : '';
+    const reason = job.message || job.error_code || diagnostics || '—';
+    return `<tr><td><strong>${e(job.request.scope === 'all' ? '全部课程' : job.request.course || '作业')}</strong><small>用户 ${e(job.owner_id ?? job.owner ?? '—')} / ${e(job.id.slice(0, 12))}</small></td><td><span class="badge ${job.status === 'succeeded' ? 'completed' : ['failed', 'uncertain', 'interrupted'].includes(job.status) ? 'support' : 'processing'}">${statusLabels[job.status] ?? '处理中'}</span></td><td>${progress.completed} / ${progress.total || '—'}</td><td class="reason-cell">${e(reason)}</td><td>${count(data.model_calls)} 次<br><small>$${(count(data.cost_micro_usd) / 1000000).toFixed(6)}</small></td><td><button class="text-button" data-admin-job-detail="${e(job.id)}">详情</button>${['queued', 'running'].includes(job.status) ? `<button class="text-button danger" data-admin-cancel="${e(job.id)}">停止</button>` : ''}</td></tr>`;
+  }).join('') || '<tr><td colspan="6"><div class="empty"><h3>暂无任务记录</h3><p>新的用户安排会显示在这里。</p></div></td></tr>'}</tbody></table></div>`;
+}
+export function renderAdmin(page: AdminPage, state: AdminState): string {
+  const titles: Record<AdminPage, string> = { overview: '服务概览', users: '用户管理', operations: '任务运营', audit: '操作审计', cards: '服务卡密' };
+  const intro: Record<AdminPage, string> = { overview: '用户安心交给我们，异常留在这里解决。', users: '统一查看服务状态，管理用户访问权限。', operations: '查看处理原因与用量，跟进尚未完成的服务。', audit: '管理操作与权限变化，都有迹可循。', cards: '管理服务凭证，暂不引入价格或套餐。' };
+  const header = `<div class="page-heading"><div><h1>${titles[page]}</h1><p>${intro[page]}</p></div><button class="button" data-action="admin-refresh" ${state.loading ? 'disabled' : ''}>${state.loading ? '更新中…' : '刷新数据'}</button></div>`;
+  if (state.error) return `${header}<div class="service-notice" role="status">管理数据暂未更新，请稍后刷新。已有任务会继续执行。</div>`;
+  if (page === 'overview') return `${header}${metrics(state.overview, state.jobs)}<section class="panel"><div class="section-heading"><h2>需要跟进的任务</h2><button class="text-button" data-nav="admin-operations">查看全部任务</button></div>${adminJobRows(state.jobs, true)}</section><div class="admin-bottom"><section class="panel"><h2>模型与执行容量</h2><dl class="info-list">${Object.entries({ ...record(record(state.overview.capacity).jobs), ...record(state.overview.capacity) }).filter(([key]) => ['workers', 'model_concurrency', 'running', 'queued', 'model_configured', 'per_owner_running'].includes(key)).map(([key, value]) => `<div><dt>${e(({ workers: '后台任务并发', model_concurrency: '模型并发', running: '正在运行', queued: '等待安排', model_configured: '模型配置', per_owner_running: '单用户并发' } as Record<string, string>)[key])}</dt><dd>${e(typeof value === 'boolean' ? value ? '已配置' : '待配置' : value)}</dd></div>`).join('') || '<div><dt>状态</dt><dd>暂无容量数据</dd></div>'}</dl></section><section class="panel"><h2>模型用量</h2><dl class="info-list">${[['模型调用', count(record(state.overview.usage).model_calls)], ['输入 Token', count(record(state.overview.usage).input_tokens)], ['输出 Token', count(record(state.overview.usage).output_tokens)], ['记录费用（含估算）', '$' + (count(record(state.overview.usage).cost_micro_usd) / 1000000).toFixed(6)], ['已确认费用', '$' + (count(record(state.overview.usage).settled_cost_micro_usd) / 1000000).toFixed(6)], ['待核对调用', count(record(state.overview.usage).unknown_calls)], ['预留费用', '$' + (count(record(state.overview.usage).reserved_micro_usd) / 1000000).toFixed(6)]].map(([label, value]) => `<div><dt>${e(label)}</dt><dd>${e(value)}</dd></div>`).join('')}</dl><h2 class="billing-heading">卡密与收费</h2><p class="muted">卡密规则待定。当前不展示价格、套餐或付款入口，也不向用户展示模型额度。</p><div class="detail-note">服务策略由管理员统一维护。</div></section></div>`;
+  if (page === 'users') return `${header}<section class="panel"><div class="section-heading"><h2>近期登录用户</h2><span class="muted">返回 ${state.users.length} 位，最多 100 位</span></div><div class="table-scroll"><table><thead><tr><th>头歌用户</th><th>角色</th><th>服务状态</th><th>最近登录</th><th>操作</th></tr></thead><tbody>${state.users.map(user => `<tr><td><strong>${e(user.name || user.login || '同学')}</strong><small>头歌 ID ${e(user.upstream_id ?? user.id)}</small></td><td>${user.role === 'admin' ? '管理员' : '用户'}</td><td><span class="badge ${user.status === 'disabled' ? 'support' : 'completed'}">${statusLabels[user.status] ?? '正常'}</span></td><td>${e(dateTime(user.last_login_at ?? user.updated_at))}</td><td>${user.role !== 'admin' ? `<button class="text-button ${user.status === 'disabled' ? '' : 'danger'}" data-user-status="${e(user.id)}" data-next-status="${user.status === 'disabled' ? 'active' : 'disabled'}">${user.status === 'disabled' ? '恢复服务' : '暂停服务'}</button>` : '<span class="muted">服务端授权</span>'}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">暂无用户</div></td></tr>'}</tbody></table></div></section>`;
+  if (page === 'cards') return `${header}<section class="panel"><div class="section-heading"><div><h2>最近卡密记录</h2><p class="muted">新建的卡密仅显示一次，请妥善交付给用户。</p></div><button class="button primary" data-action="create-card">新建卡密</button></div><div class="table-scroll"><table><thead><tr><th>备注</th><th>状态</th><th>绑定用户</th><th>创建时间</th><th>管理</th></tr></thead><tbody>${state.cards.map(card => `<tr><td>${e(card.label || '服务卡密')}<small>${e(card.masked_code || '')}</small></td><td>${e(({ active: '可使用', used: '已使用', revoked: '已停用', expired: '已过期' } as Record<string, string>)[card.status ?? 'active'] ?? '可使用')}</td><td>${e(card.bound_user_id ?? '未绑定')}</td><td>${e(dateTime(card.created_at))}</td><td>${card.status !== 'revoked' ? `<button class="text-button danger" data-revoke-card="${e(card.id)}">停用</button>` : '—'}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">暂无卡密记录</div></td></tr>'}</tbody></table></div></section>`;
+  if (page === 'operations') return `${header}<section class="panel"><div class="section-heading"><h2>最近任务</h2><span class="muted">最多 100 条记录</span></div>${adminJobRows(state.jobs)}</section>`;
+  return `${header}<section class="panel"><div class="section-heading"><h2>最近管理操作</h2><span class="muted">最多 100 条记录</span></div><div class="table-scroll"><table><thead><tr><th>时间</th><th>操作人</th><th>操作</th><th>目标</th><th>结果</th></tr></thead><tbody>${state.audit.map(row => `<tr><td>${e(dateTime(row.created_at))}</td><td>${e(row.actor_id ?? '系统')}</td><td>${e(row.action || '—')}</td><td>${e(row.target_id ?? '—')}</td><td>${e(row.outcome || '已记录')}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">暂无管理操作记录</div></td></tr>'}</tbody></table></div></section>`;
+}
+function renderAdminDiagnostics(data: Record<string, unknown>): string {
+  const diagnostics = Array.isArray(data.diagnostics) ? data.diagnostics.filter((item): item is string => typeof item === 'string') : [];
+  return diagnostics.length ? `<ul class="operator-diagnostics">${diagnostics.map(item => `<li>${e(item)}</li>`).join('')}</ul>` : '';
+}
+function renderAdminSteps(data: Record<string, unknown>, depth = 0): string {
+  if (depth > 4) return '';
+  const children = Array.isArray(data.homeworks) ? data.homeworks : Array.isArray(data.levels) ? data.levels : [];
+  return children.length ? `<ol class="operator-steps">${children.map(value => {
+    const item = record(value);
+    const nested = record(item.result);
+    const reason = item.reason_code ?? nested.reason_code;
+    return `<li><div class="operator-step-head"><strong>${e(item.title || item.subject || '执行步骤')}</strong><span class="badge">${e(statusLabels[String(item.status)] ?? item.status ?? '尚未执行')}</span></div>${reason ? `<p class="operator-reason">原因代码：${e(reason)}</p>` : ''}${renderAdminDiagnostics(item)}${renderAdminDiagnostics(nested)}${renderAdminSteps(Object.keys(nested).length ? nested : item, depth + 1)}</li>`;
+  }).join('')}</ol>` : '';
+}
+export function renderAdminJobDetail(job: AdminJob): string {
+  const data = record(job.result);
+  return `<h2>任务执行详情</h2><p class="subtext">任务 ${e(job.id)}</p><dl class="info-list"><div><dt>用户</dt><dd>${e(job.owner_id ?? job.owner ?? '—')}</dd></div><div><dt>状态</dt><dd>${e(statusLabels[job.status] ?? job.status)}</dd></div><div><dt>阶段</dt><dd>${e(job.phase)}</dd></div><div><dt>停止原因</dt><dd>${e(data.reason_code || job.error_code || job.message || '—')}</dd></div><div><dt>模型调用</dt><dd>${count(data.model_calls)}</dd></div><div><dt>记录费用（含估算）</dt><dd>$${(count(data.cost_micro_usd) / 1000000).toFixed(6)}</dd></div></dl>${renderAdminDiagnostics(data)}${renderAdminSteps(data)}`;
+}

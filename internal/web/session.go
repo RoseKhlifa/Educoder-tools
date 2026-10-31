@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"educoder-cli/internal/educoder"
+	"educoder-cli/internal/platform"
 )
 
 // Session is the server-side state associated with one browser session. The
@@ -18,6 +19,7 @@ type Session struct {
 	User      educoder.User
 	ExpiresAt time.Time
 	AvatarKey string
+	Principal platform.User
 }
 
 // SessionStore keeps sessions in memory. A mutex protects both reads and
@@ -41,6 +43,10 @@ func (s *SessionStore) Create(client EducoderClient, user educoder.User) (string
 }
 
 func (s *SessionStore) createWithAvatar(client EducoderClient, user educoder.User, avatarKey string) (string, error) {
+	return s.createPrincipal(client, user, avatarKey, platform.User{})
+}
+
+func (s *SessionStore) createPrincipal(client EducoderClient, user educoder.User, avatarKey string, principal platform.User) (string, error) {
 	if client == nil {
 		return "", errors.New("nil client")
 	}
@@ -51,9 +57,37 @@ func (s *SessionStore) createWithAvatar(client EducoderClient, user educoder.Use
 	}
 	id := base64.RawURLEncoding.EncodeToString(b)
 	s.mu.Lock()
-	s.sessions[id] = Session{Client: client, User: user, ExpiresAt: s.now().Add(s.ttl), AvatarKey: avatarKey}
+	s.sessions[id] = Session{Client: client, User: user, ExpiresAt: s.now().Add(s.ttl), AvatarKey: avatarKey, Principal: principal}
 	s.mu.Unlock()
 	return id, nil
+}
+
+// DeleteUser revokes all browser sessions for a disabled platform user.
+func (s *SessionStore) DeleteUser(userID string) {
+	if userID == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, session := range s.sessions {
+		if session.Principal.ID == userID {
+			delete(s.sessions, id)
+		}
+	}
+}
+
+func (s *SessionStore) UserIDs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	seen := map[string]bool{}
+	ids := []string{}
+	for _, session := range s.sessions {
+		if id := session.Principal.ID; id != "" && !seen[id] {
+			seen[id] = true
+			ids = append(ids, id)
+		}
+	}
+	return ids
 }
 
 func (s *SessionStore) Get(id string) (Session, bool) {

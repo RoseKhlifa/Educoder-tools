@@ -60,6 +60,10 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
+	budget := batchBudgetMicroUSD
+	if req.BudgetMicroUSD > 0 && req.BudgetMicroUSD < budget {
+		budget = req.BudgetMicroUSD
+	}
 	out := &BatchResult{Kind: "homework", Scope: "homework", Status: "running"}
 	emit := func(p BatchProgress, phase, msg string) {
 		if report != nil {
@@ -187,7 +191,7 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 		if e != nil {
 			return out, e
 		}
-		remaining := batchBudgetMicroUSD - out.CostMicroUSD - out.ReservedMicroUSD
+		remaining := budget - out.CostMicroUSD - out.ReservedMicroUSD
 		if remaining <= 0 {
 			out.Status = "budget_exhausted"
 			out.FailedLevels++

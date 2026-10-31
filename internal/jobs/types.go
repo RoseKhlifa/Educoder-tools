@@ -51,12 +51,19 @@ type Event struct {
 // BatchProgress contains public counters only. Completed includes already-full
 // levels skipped by this run; Skipped is a subset of Completed.
 type BatchProgress struct {
-	TotalLevels     int    `json:"total_levels"`
-	CompletedLevels int    `json:"completed_levels"`
-	SkippedLevels   int    `json:"skipped_levels"`
-	FailedLevels    int    `json:"failed_levels"`
-	CurrentPosition int    `json:"current_position,omitempty"`
-	CurrentTitle    string `json:"current_title,omitempty"`
+	TotalHomeworks        int    `json:"total_homeworks,omitempty"`
+	CompletedHomeworks    int    `json:"completed_homeworks,omitempty"`
+	SkippedHomeworks      int    `json:"skipped_homeworks,omitempty"`
+	NeedsServiceHomeworks int    `json:"needs_service_homeworks,omitempty"`
+	CurrentCourse         string `json:"current_course,omitempty"`
+	CurrentHomeworkID     int64  `json:"current_homework_id,omitempty"`
+	CurrentHomeworkTitle  string `json:"current_homework_title,omitempty"`
+	TotalLevels           int    `json:"total_levels"`
+	CompletedLevels       int    `json:"completed_levels"`
+	SkippedLevels         int    `json:"skipped_levels"`
+	FailedLevels          int    `json:"failed_levels"`
+	CurrentPosition       int    `json:"current_position,omitempty"`
+	CurrentTitle          string `json:"current_title,omitempty"`
 }
 
 type Job struct {

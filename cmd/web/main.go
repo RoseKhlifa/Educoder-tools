@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	buildinfo "educoder-cli"
+	"educoder-cli/internal/platform"
 	"educoder-cli/internal/web"
 )
 
@@ -27,6 +29,12 @@ func run() error {
 		return err
 	}
 	app := web.NewServer(cfg)
+	identities, err := platform.Open(filepath.Join(cfg.DataDir, "platform.sqlite"), platform.Options{AdminUserIDs: cfg.PlatformAdminUserIDs, AccessCardRequired: cfg.AccessCardRequired})
+	if err != nil {
+		return errors.New("open platform identity store failed")
+	}
+	defer identities.Close()
+	app.AttachPlatform(identities)
 	jobRuntime, err := web.NewJobRuntime(cfg)
 	if err != nil {
 		return err

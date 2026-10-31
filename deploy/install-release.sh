@@ -27,13 +27,20 @@ chmod 0400 -- "$DEEPSEEK_SECRET_FILE"
 
 # Build before replacing the live container. A failed build leaves it untouched.
 export APP_VERSION="$version" VCS_REF="$commit" WEB_COOKIE_SECURE=true
-docker compose --project-name educoder-tools build
-docker compose --project-name educoder-tools up -d --no-build
+# Operator settings live outside immutable release archives, so a later update
+# does not silently remove the numeric administrator allowlist or card policy.
+compose_args=(--project-name educoder-tools)
+service_config=/opt/educoder-tools/config/service.env
+if [[ -f "$service_config" ]]; then
+  compose_args+=(--env-file "$service_config")
+fi
+docker compose "${compose_args[@]}" build
+docker compose "${compose_args[@]}" up -d --no-build
 for attempt in $(seq 1 30); do
   if curl --fail --silent --max-time 3 http://127.0.0.1:11454/healthz > /tmp/educoder-tools-health.json; then
     if python3 -c 'import json,sys; d=json.load(open("/tmp/educoder-tools-health.json")); sys.exit(0 if d.get("status")=="ok" and d.get("version")==sys.argv[1] and d.get("commit")==sys.argv[2] else 1)' "$version" "$commit"; then
       printf 'DEPLOYED_VERSION=%s\nDEPLOYED_COMMIT=%s\n' "$version" "$commit"
-      docker compose --project-name educoder-tools ps
+      docker compose "${compose_args[@]}" ps
       exit 0
     fi
   fi

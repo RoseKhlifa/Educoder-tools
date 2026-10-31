@@ -22,6 +22,10 @@ export interface User {
   name: string;
   id?: number;
   avatarUrl?: string;
+  role?: 'admin' | 'user';
+  permissions?: string[];
+  service_access?: boolean | string;
+  status?: string;
 }
 
 export interface Course {
@@ -71,11 +75,11 @@ export interface EnteredTask {
 export type View = 'login' | 'courses' | 'homeworks';
 
 export type JobMode = 'generate_only' | 'selftest' | 'submit';
-export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled' | 'uncertain' | 'interrupted';
+export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled' | 'uncertain' | 'interrupted' | 'waiting' | 'processing' | 'support' | 'completed';
 export interface JobRequest {
-  course: string;
-  homework_id: number;
-  scope?: 'homework' | 'current';
+  course?: string;
+  homework_id?: number;
+  scope?: 'homework' | 'current' | 'course' | 'all';
   game?: string;
   mode: JobMode;
   idempotency_key?: string;
@@ -83,6 +87,7 @@ export interface JobRequest {
 // Login-triggered collection is a read-only job, not an answer execution mode.
 export interface CollectionJobRequest {
   mode: 'collect_verified';
+  scope?: never;
   course?: '';
   homework_id?: 0;
   game?: '';
@@ -117,6 +122,9 @@ export interface AnswerJob {
   events?: Array<{ phase: string; kind?: string; message: string; at: string; progress?: HomeworkProgress }>;
 }
 export interface HomeworkProgress {
+  service_status?: string;
+  total_homeworks?: number;
+  completed_homeworks?: number;
   total_levels?: number;
   completed_levels?: number;
   skipped_levels?: number;
@@ -134,7 +142,29 @@ export interface JobCapacity {
   model_concurrency: number;
   model_configured: boolean;
 }
-export interface JobList { jobs: AnswerJob[]; capacity: JobCapacity }
+export interface JobList { jobs: AnswerJob[]; capacity?: JobCapacity }
+
+export interface AdminUser {
+  id: string | number;
+  upstream_id?: number;
+  name: string;
+  login: string;
+  role?: string;
+  status: string;
+  last_login_at?: string;
+  updated_at?: string;
+}
+export interface AdminAudit {
+  id?: number;
+  actor_id?: number | string;
+  action?: string;
+  target_id?: string | number;
+  created_at?: string;
+  outcome?: string;
+}
+export interface AccessCard { id: string; masked_code?: string; label?: string; status?: string; bound_user_id?: string | number; reusable?: boolean; created_at?: string; expires_at?: string }
+export interface AdminJob extends AnswerJob { owner_id?: string | number; owner?: string }
+export type AdminOverview = Record<string, unknown>;
 
 export interface AppState {
   view: View;

@@ -16,13 +16,13 @@
 
 因此扫描成功只表示扫描结束，不表示已成功获取或入库历史答案。未确认及 reasons 会如实保留只读定位和答案证据的缺口。
 
-工作台为这类任务单独显示“已通过任务采集”，展示扫描课堂、作业、关卡读取尝试，以及新增、重复、跳过、失败和中文原因。没有新增时显示“扫描结束，未新增答案”；关卡读取尝试为 0 时明确提示尚未获取到可入库的题目与答案。未确认是跳过记录的子集，不与跳过重复相加。原始任务 mode 和空作业编号不作为展示标题。
+当前服务用户端不再显示早期调试工作台的采集统计与原因。自动采集是内部只读优化，管理员通过管理任务接口读取扫描课堂、作业、关卡读取尝试，以及新增、重复、跳过、失败和原因。未新增不代表失败，也不能展示成成功获取了答案；未确认是跳过记录的子集，不与跳过重复相加。普通用户任务列表过滤采集任务。
 
 ## 队列和接口
 
-同一账号同日登录使用 UTC 日期键 `collection-v1-YYYY-MM-DD`；并发/重复登录复用 job。待执行的同账号同采集目标也会合并。`GET /api/collections` 列出本账号最近任务中的采集记录；`POST /api/collections` 接受空 body 或 `{}`，通过标准 `Idempotency-Key` 头显式创建新重试，不接受外部账号、目标或答案参数。
+同一账号同日登录使用 UTC 日期键 `collection-v1-YYYY-MM-DD`；并发/重复登录复用 job。待执行的同账号同采集目标也会合并。`GET /api/collections` 列出本账号最近采集记录的裁剪摘要；`POST /api/collections` 接受空 body 或 `{}`，通过标准 `Idempotency-Key` 头显式创建新重试，不接受外部账号、目标或答案参数。
 
-`GET /api/jobs/{id}` 返回状态、事件和统计，`POST /api/jobs/{id}/cancel` 取消。其他 owner 读取和取消返回 404。任务数据库只存公开参数、事件和统计，客户端和 Cookie 留在内存闭包。重启把未完成采集标记 interrupted，不自动重放。密码、运行密钥、WebSocket URL、签名 URL 不进入 job 或题库。
+当前 `GET /api/jobs/{id}` 返回经过裁剪的本账号服务摘要，不返回原始事件、采集原因和内部统计；管理员通过 `/api/admin/jobs/{id}` 读取详细结果。`POST /api/jobs/{id}/cancel` 请求取消。其他 owner 读取和取消返回 404。任务数据库只存公开参数、事件和统计，客户端和 Cookie 留在内存闭包。重启把未完成采集标记 interrupted，不自动重放。密码、运行密钥、WebSocket URL、签名 URL 不进入 job 或题库。
 
 统计包含 courses/homeworks/levels、collected、duplicates、skipped、unconfirmed、failed、limit_reached 和聚合 reasons。collected/duplicates 按答案条目计（代码为完整文件解答、客观题为单题）；跳过/失败按上下文计，可能是课堂、作业或关卡；unconfirmed 为 skipped 的子集。重复单题不反复追加验证，原有候选不覆盖。
 

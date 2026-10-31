@@ -24,10 +24,15 @@ type CollectionTarget struct {
 
 var collectionID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,100}$`)
 
+// New platform owners use the stable local identity, while historical callers
+// use a login digest. Keep both namespaces exact; collection evidence below
+// must continue hashing this raw owner exactly once like solver_runs.
+var collectionOwner = regexp.MustCompile(`^(?:[a-f0-9]{64}|platform:[a-f0-9]{32})$`)
+
 // RememberCollectionTarget is invoked only after a normal authenticated task
-// read, never from browser-supplied challenge IDs. Owner is already hashed.
+// read, never from browser-supplied challenge IDs. Owner is server-derived.
 func (s *Store) RememberCollectionTarget(ctx context.Context, owner string, t CollectionTarget) error {
-	if !objectiveSHA256Pattern.MatchString(owner) || !collectionID.MatchString(t.Course) || !collectionID.MatchString(t.Game) || t.HomeworkID < 1 || t.ChallengeID < 1 || !collectionID.MatchString(t.Shixun) {
+	if !collectionOwner.MatchString(owner) || !collectionID.MatchString(t.Course) || !collectionID.MatchString(t.Game) || t.HomeworkID < 1 || t.ChallengeID < 1 || !collectionID.MatchString(t.Shixun) {
 		return errors.New("invalid collection target")
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO collection_targets(owner,course,homework_id,game,challenge_id,shixun) VALUES(?,?,?,?,?,?) ON CONFLICT(owner,course,homework_id,game) DO UPDATE SET challenge_id=excluded.challenge_id,shixun=excluded.shixun`, owner, t.Course, t.HomeworkID, t.Game, t.ChallengeID, t.Shixun)
@@ -35,7 +40,7 @@ func (s *Store) RememberCollectionTarget(ctx context.Context, owner string, t Co
 }
 
 func (s *Store) CollectionTargets(ctx context.Context, owner string, limit int) ([]CollectionTarget, error) {
-	if !objectiveSHA256Pattern.MatchString(owner) || limit < 1 || limit > 500 {
+	if !collectionOwner.MatchString(owner) || limit < 1 || limit > 500 {
 		return nil, errors.New("invalid target query")
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT course,homework_id,game,challenge_id,shixun FROM collection_targets WHERE owner=? ORDER BY course,homework_id,game LIMIT ?`, owner, limit)
@@ -85,7 +90,7 @@ func (s *Store) CollectionTargets(ctx context.Context, owner string, limit int) 
 // The observed upstream GET does not expose a submitted-source revision, so
 // external history without this bridge remains explicitly uncollectable.
 func (s *Store) HasCollectionCodeEvidence(ctx context.Context, owner string, t CollectionTarget, ref Ref, hash string) (bool, error) {
-	if !objectiveSHA256Pattern.MatchString(owner) || !objectiveSHA256Pattern.MatchString(hash) {
+	if !collectionOwner.MatchString(owner) || !objectiveSHA256Pattern.MatchString(hash) {
 		return false, errors.New("invalid collection evidence query")
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT id,data_json FROM solver_runs WHERE owner=? AND status='passed' ORDER BY updated_at DESC LIMIT 500`, problem.HashContent(owner))

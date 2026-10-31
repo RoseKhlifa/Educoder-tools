@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.32 鈥?2026-10-31
+
+- A服务界面、头歌平台身份隔离、管理端与课程批处理
+
 ## 0.1.31 — 2026-10-31
 
 - Supply objective image bytes, reject repeated failed answers, and refresh module graph caches

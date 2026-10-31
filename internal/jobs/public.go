@@ -35,14 +35,25 @@ func normalize(req Request) (Request, string, string, error) {
 	if req.Scope == "current" {
 		req.Scope = ""
 	}
-	if req.Scope != "" && req.Scope != "homework" {
+	if req.Scope != "" && req.Scope != "homework" && req.Scope != "course" && req.Scope != "all" {
 		return req, "", "", fail("invalid_request", "Unknown execution scope")
 	}
 	if req.Scope == "homework" && (req.Mode != "submit" || req.Game != "") {
 		return req, "", "", fail("invalid_request", "Whole-homework jobs require submit mode and no current game")
 	}
-	if !collect && (!identifier.MatchString(req.Course) || req.HomeworkID < 1 || (req.Game != "" && !identifier.MatchString(req.Game))) {
-		return req, "", "", fail("invalid_request", "A valid course, homework_id and optional game are required")
+	switch req.Scope {
+	case "course":
+		if req.Mode != "submit" || !identifier.MatchString(req.Course) || req.HomeworkID != 0 || req.Game != "" {
+			return req, "", "", fail("invalid_request", "Whole-course jobs require a course, submit mode and no homework or game")
+		}
+	case "all":
+		if req.Mode != "submit" || req.Course != "" || req.HomeworkID != 0 || req.Game != "" {
+			return req, "", "", fail("invalid_request", "Account-wide jobs require submit mode and no supplied target")
+		}
+	default:
+		if !collect && (!identifier.MatchString(req.Course) || req.HomeworkID < 1 || (req.Game != "" && !identifier.MatchString(req.Game))) {
+			return req, "", "", fail("invalid_request", "A valid course, homework_id and optional game are required")
+		}
 	}
 	if !collect && req.Mode != "generate_only" && req.Mode != "selftest" && req.Mode != "submit" {
 		return req, "", "", fail("invalid_request", "Unknown execution mode")
@@ -184,10 +195,17 @@ func cloneProgress(p *BatchProgress) *BatchProgress {
 }
 
 func publicProgress(p *BatchProgress) *BatchProgress {
-	if p == nil || p.TotalLevels < 1 || p.TotalLevels > 100 || p.CompletedLevels < 0 || p.CompletedLevels > p.TotalLevels || p.SkippedLevels < 0 || p.SkippedLevels > p.CompletedLevels || p.FailedLevels < 0 || p.FailedLevels > p.TotalLevels || p.CurrentPosition < 0 || p.CurrentPosition > p.TotalLevels {
+	if p == nil || p.TotalLevels < 0 || p.TotalLevels > 100 || p.CompletedLevels < 0 || p.CompletedLevels > p.TotalLevels || p.SkippedLevels < 0 || p.SkippedLevels > p.CompletedLevels || p.FailedLevels < 0 || p.FailedLevels > p.TotalLevels || p.CurrentPosition < 0 || p.CurrentPosition > 500 {
+		return nil
+	}
+	if p.TotalHomeworks < 0 || p.TotalHomeworks > 100 || p.CompletedHomeworks < 0 || p.CompletedHomeworks > p.TotalHomeworks || p.SkippedHomeworks < 0 || p.SkippedHomeworks > p.CompletedHomeworks || p.NeedsServiceHomeworks < 0 || p.CompletedHomeworks+p.NeedsServiceHomeworks > p.TotalHomeworks || (p.TotalLevels == 0 && p.TotalHomeworks == 0) || p.CurrentHomeworkID < 0 {
 		return nil
 	}
 	result := *p
 	result.CurrentTitle = publicText(result.CurrentTitle, "")
+	result.CurrentHomeworkTitle = publicText(result.CurrentHomeworkTitle, "")
+	if result.CurrentCourse != "" && !identifier.MatchString(result.CurrentCourse) {
+		result.CurrentCourse = ""
+	}
 	return &result
 }

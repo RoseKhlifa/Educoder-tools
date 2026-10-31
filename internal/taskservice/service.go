@@ -38,10 +38,11 @@ type Request struct {
 	BudgetMicroUSD int64
 }
 type Progress struct {
-	Phase   string         `json:"phase"`
-	Kind    string         `json:"kind"`
-	Message string         `json:"message"`
-	Batch   *BatchProgress `json:"batch,omitempty"`
+	Phase   string           `json:"phase"`
+	Kind    string           `json:"kind"`
+	Message string           `json:"message"`
+	Batch   *BatchProgress   `json:"batch,omitempty"`
+	Service *ServiceProgress `json:"service,omitempty"`
 }
 
 type BatchProgress struct {

@@ -1,32 +1,52 @@
 # 当前架构与迁移决定
 
-当前使用手写工作台、Go 协议与业务后端。浏览器 TypeScript 编译成小型 ES modules，Go 同时托管页面、会话及应用 API。
+当前唯一 Web 服务为 `cmd/web`，同时托管 A 方向用户端、管理端和应用 API。浏览器 TypeScript 编译为 ES modules；Go 维护全部协议、身份、执行、AI 与题库逻辑。
 
-## 唯一服务链路
+## 身份与租户边界
 
-cmd/web → internal/web → internal/educoder → Educoder API。
+`internal/platform` 只接受上游成功登录后返回的正整数用户 ID 建档。平台用户 ID 和个人 `tenant_id` 由服务端生成，登录名与姓名可变；没有单独注册和本站密码。每个个人账号对应一个数据分区，当前没有组织成员、共享课堂或跨租户协作功能。
 
-每个登录会话持有独立 Go 客户端，上游 Cookie 留在服务端内存。浏览器读取 /api/auth/me、/api/courses、/homeworks 和 /enter 的应用 DTO。Go CLI 直接复用同一协议包。
+会话保存平台身份与独立的 Go 协议客户端。每个 API 请求重新核对平台用户状态、角色和准入权限。任务 owner 由已验证平台身份产生，再由任务存储内部哈希处理；客户端不能指定 owner、租户或管理员身份。旧登录名 hash 的任务不自动迁移或归属。
 
-## 已清理的旧方案
+角色分为 `user` 与 `admin`。`PLATFORM_ADMIN_USER_IDS` 用经核验的头歌数字 ID 引导管理员，教师身份不授予平台管理权。卡密默认关闭，开启时只承担服务准入；支付、套餐和周期额度不在当前实现中。
 
-- typescript/：Node/TypeScript 协议库、CLI、HAR 重放工具。
-- resource-reuse/：原站编译资源、图片、下载和替换工具、旧网关示例。
-- cmd/reuse 与 internal/compat：原站 UI 入口和页面接口兼容层。
-- 重复的 Node 协议配置和旧启动脚本。
+## 进程内异步执行
 
-上述内容已经从当前源码和运行镜像删除，Git 历史与服务器上一发布目录保留恢复能力。
+```text
+web/src → internal/web
+          ├─ internal/platform → platform.sqlite
+          ├─ internal/jobs → jobs.sqlite
+          └─ internal/taskservice
+               ├─ RunCourses：单课堂或全部活动课堂的作业编排
+               ├─ RunHomework：选中作业全部关卡
+               ├─ internal/solver / answer / questionbank
+               └─ internal/educoder → Educoder API
+```
 
-## 模块边界
+HTTP 接口立即返回任务标识，有界 worker 在同一个 Go 进程里执行，不运行 CLI 子进程。全站并发、单账号并发和模型并发独立配置。相同目标保持幂等；`all`、`course`、`homework` 的包含关系在调度时避免同账号重叠执行，最内层运行实例和 game 写入另有目标锁。
 
-internal/educoder 保留 Go 登录、课堂、作业、任务、代码读取、保存、自测、提交和状态查询。签名请求辅助方法仍可用于头像资料等 Go 功能，不会启动旧 UI 服务。
+单作业内按顺序校验并执行关卡，遇到不确定结果时停止继续写入该作业；课程任务记录需要服务人员处理的作业，并继续其他独立作业。状态投影分为用户摘要与管理员诊断。模型成本、自测反馈和内部原因不透传到普通用户端。
 
-internal/solver、answer、problem 和 questionbank 保持独立，当前由 Go CLI 使用。网页 AI 运行入口现在通过 internal/jobs 和 internal/taskservice 接入：HTTP 返回 job ID，Go worker 在进程内异步执行；没有 CLI 子进程。题库和 jobs 数据放在 /data 独立 SQLite，模型密钥使用 Docker secret。已发布的 v0.1.10 选择题协议和 objective CLI 一并保留，选择题题库仍待扩展；UI 迁移不修改对应源文件。
+上游密码、Cookie、运行密钥和模型密钥不写入任务记录；数据库保留身份、幂等键、进度、题库证据和费用台账。任务重启恢复只修正状态，不恢复内存闭包或自动重放写入。
 
-工作台复用早期的蓝色导航、课堂列表、任务列表和详情抽屉。官方实训链接明确在外部站点打开，当前没有代码编辑器或 AI 控制面板。
+## Go 模块边界
 
-## 构建部署
+- `internal/web`：应用 API、用户与管理员 DTO、会话、来源校验和静态托管。
+- `internal/platform`：平台身份、角色、卡密摘要和安全审计。
+- `internal/jobs`：持久任务记录、队列、有界并发、幂等与取消。
+- `internal/taskservice`：课程、作业及单关应用编排；只读已通过答案采集。
+- `internal/educoder`：唯一协议客户端，处理登录、课堂、作业、题目、保存、提交与结果查询。
+- `internal/solver`、`answer`、`problem`、`questionbank`：代码求解、客观题模型调用、快照指纹、候选与验证证据、使用台账。
+- `internal/avatar`：固定官方来源头像读取与内存缓存。
 
-Node.js 用于浏览器编译和测试。多阶段镜像运行时仅包含 Go 与 HTML/CSS/JS。端口仍为 11454，服务器为 ssh main，域名反代由用户在 1Panel 管理。
+客观题使用独立候选和验证表，图片以真实字节参与模型输入，以内容哈希绑定题库；不会把客观题答案保存进编程源码表。CLI 作为维护工具复用这些 Go 模块，不是 Web 的执行入口。
 
-命令与环境变量以根 README 和 deploy/README.md 为准；CHANGELOG 中旧名称属于历史版本记录。
+## 已移除与当前未实现
+
+已从当前源码和镜像移除 `typescript/` 协议库、HAR 重放工具、`resource-reuse/` 编译 UI 与图片、`cmd/reuse`、`internal/compat` 和旧网关方案。Git 历史与旧发布目录保留恢复能力。
+
+当前是单实例、单机 SQLite 和内存会话。没有跨节点调度、共享会话、组织级租户、支付结算、付费套餐、周期额度或自动化客服修复承诺。管理员能检查内部诊断、处理账号和任务；任何结果未知的上游提交仍须先核验，不能以“服务人员处理”代替实际已通过状态。
+
+## 部署
+
+多阶段镜像只在构建阶段使用 Node.js，运行时是 Go 与静态页面。应用监听 11454，数据在 `/data` 持久卷，模型密钥以 Docker secret 挂载。`ssh main` 管理部署，用户自行维护 1Panel 反代。详细配置见 [平台与运维](PLATFORM.md) 和 [部署说明](../deploy/README.md)。

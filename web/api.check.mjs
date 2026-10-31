@@ -90,4 +90,23 @@ await test('browser API uses the Go workbench contract', async t => {
     assert.equal(requests[0].url, '/api/jobs');
     assert.notEqual(requests[0].options.method, 'POST');
   });
+  await t.test('local role comes from the server platform identity and card is a request-body credential', async () => {
+    let request;
+    globalThis.fetch = async (url, options) => { request = { url, options }; return envelope({ user: { id: 91, name: '同学', role: 'admin' }, platform: { id: 'local-uuid', role: 'user', status: 'active' } }); };
+    const api = new BrowserApi();
+    const user = await api.login('demo', 'test-password', '  example-card  ');
+    assert.equal(user.role, 'user');
+    assert.deepEqual(JSON.parse(request.options.body), { login: 'demo', password: 'test-password', access_code: 'example-card' });
+    assert.doesNotMatch(request.url, /example-card|test-password/);
+  });
+  await t.test('administrator user IDs stay opaque strings and mutation permission errors are not session expiry', async () => {
+    let request;
+    globalThis.fetch = async (url, options) => { request = { url, options }; return envelope({}); };
+    await new BrowserApi().adminUserStatus('platform-user/opaque', 'disabled');
+    assert.equal(request.url, '/api/admin/users/platform-user%2Fopaque/status');
+    assert.deepEqual(JSON.parse(request.options.body), { status: 'disabled' });
+    globalThis.fetch = async () => new Response(JSON.stringify({ error: { code: 'ADMIN_REQUIRED', message: '无权限' } }), { status: 403 });
+    await assert.rejects(new BrowserApi().adminOverview(), error => !error.isSessionExpired && error.status === 403);
+  });
+
 });

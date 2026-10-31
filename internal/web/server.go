@@ -19,27 +19,30 @@ import (
 	buildinfo "educoder-cli"
 	"educoder-cli/internal/avatar"
 	"educoder-cli/internal/educoder"
+	"educoder-cli/internal/platform"
 )
 
 const sessionCookieName = "educoder_web_session"
 
 type Config struct {
-	HTTPAddr           string
-	WebOrigin          string
-	APIBaseURL         string
-	SessionTTL         time.Duration
-	StaticDir          string
-	CookieSecure       bool
-	DataDir            string
-	JobWorkers         int
-	JobQueueSize       int
-	JobPerOwner        int
-	JobPerOwnerRunning int
-	JobTimeout         time.Duration
-	ModelConcurrency   int
-	ModelTimeout       time.Duration
-	ModelAPIKeyFile    string
-	ModelBaseURL       string
+	HTTPAddr             string
+	WebOrigin            string
+	APIBaseURL           string
+	SessionTTL           time.Duration
+	StaticDir            string
+	CookieSecure         bool
+	DataDir              string
+	JobWorkers           int
+	JobQueueSize         int
+	JobPerOwner          int
+	JobPerOwnerRunning   int
+	JobTimeout           time.Duration
+	ModelConcurrency     int
+	ModelTimeout         time.Duration
+	ModelAPIKeyFile      string
+	ModelBaseURL         string
+	PlatformAdminUserIDs []int64
+	AccessCardRequired   bool
 }
 
 func DefaultConfig() Config {
@@ -80,18 +83,23 @@ func LoadConfig() (Config, error) {
 	if err := loadJobConfig(&cfg); err != nil {
 		return Config{}, err
 	}
+	if err := loadPlatformConfig(&cfg); err != nil {
+		return Config{}, err
+	}
 	return cfg, nil
 }
 
 type ClientFactory func(baseURL string) EducoderClient
 
 type Server struct {
-	config  Config
-	store   *SessionStore
-	factory ClientFactory
-	static  http.Handler
-	avatars *avatar.Service
-	jobs    *JobRuntime
+	config      Config
+	store       *SessionStore
+	factory     ClientFactory
+	static      http.Handler
+	avatars     *avatar.Service
+	jobs        *JobRuntime
+	platform    *platform.Store
+	loginLimits *loginLimiter
 }
 
 func NewServer(config Config) *Server {
@@ -117,7 +125,7 @@ func NewServerWithFactory(config Config, factory ClientFactory) *Server {
 	if factory == nil {
 		factory = func(baseURL string) EducoderClient { return educoder.New(baseURL) }
 	}
-	s := &Server{config: config, store: NewSessionStore(config.SessionTTL), factory: factory, avatars: avatar.New()}
+	s := &Server{config: config, store: NewSessionStore(config.SessionTTL), factory: factory, avatars: avatar.New(), loginLimits: newLoginLimiter()}
 	s.static = newStaticHandler(config.StaticDir)
 	return s
 }
@@ -131,6 +139,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Request-Id", requestID)
 	w.Header().Set("X-App-Version", buildinfo.Current())
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("X-Frame-Options", "DENY")
+	w.Header().Set("Referrer-Policy", "no-referrer")
+	w.Header().Set("Content-Security-Policy", "frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
 	if r.URL.Path == "/healthz" || r.URL.Path == "/version" {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
@@ -178,7 +189,12 @@ func (s *Server) cors(w http.ResponseWriter, r *http.Request, requestID string) 
 		return true
 	}
 	parsed, err := url.Parse(origin)
-	allowed := err == nil && validOrigin(origin) && (strings.EqualFold(parsed.Host, r.Host) || origin == s.config.WebOrigin)
+	allowed := err == nil && validOrigin(origin)
+	if s.config.WebOrigin != "" {
+		allowed = allowed && origin == s.config.WebOrigin
+	} else {
+		allowed = allowed && strings.EqualFold(parsed.Host, r.Host)
+	}
 	if !allowed {
 		s.writeError(w, requestID, http.StatusForbidden, "ORIGIN_NOT_ALLOWED", "请求来源不匹配")
 		return false
@@ -197,6 +213,22 @@ func validOrigin(origin string) bool {
 }
 
 func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request, requestID string) {
+	if strings.HasPrefix(r.URL.Path, "/api/admin/") {
+		s.handleAdmin(w, r, requestID)
+		return
+	}
+	if r.URL.Path == "/api/auth/config" {
+		if r.Method != http.MethodGet {
+			s.methodError(w, requestID)
+			return
+		}
+		required := s.config.AccessCardRequired
+		if s.platform != nil {
+			required = s.platform.AccessCardRequired()
+		}
+		s.writeJSON(w, requestID, http.StatusOK, map[string]bool{"access_card_required": required})
+		return
+	}
 	if r.URL.Path == "/api/jobs" || strings.HasPrefix(r.URL.Path, "/api/jobs/") {
 		s.handleJobs(w, r, requestID)
 		return
@@ -284,34 +316,52 @@ func splitPath(path string) []string {
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, requestID string) {
 	var input struct {
-		Login    string `json:"login"`
-		Password string `json:"password"`
+		Login      string `json:"login"`
+		Password   string `json:"password"`
+		AccessCode string `json:"access_code"`
 	}
-	if err := decodeJSON(r, &input); err != nil || strings.TrimSpace(input.Login) == "" || input.Password == "" {
+	if !s.loginLimits.allow("source:"+loginSource(r), 120) {
+		s.loginRateError(w, requestID)
+		return
+	}
+	if err := decodeJSON(r, &input); err != nil || strings.TrimSpace(input.Login) == "" || input.Password == "" || len(input.Login) > 256 || len(input.Password) > 4096 || len(input.AccessCode) > 256 {
 		s.writeError(w, requestID, http.StatusBadRequest, "INVALID_REQUEST", "请输入账号和密码")
+		return
+	}
+	if !s.loginLimits.allow(loginAccountKey(input.Login), 12) {
+		s.loginRateError(w, requestID)
 		return
 	}
 	client := s.factory(s.config.APIBaseURL)
 	ctx := r.Context()
 	user, err := client.Login(ctx, strings.TrimSpace(input.Login), input.Password)
 	input.Password = ""
-	if err != nil || user == nil || user.Login == "" {
+	if err != nil || user == nil || user.Login == "" || (s.platform != nil && user.UserID <= 0) {
 		s.writeError(w, requestID, http.StatusUnauthorized, "AUTH_FAILED", "登录失败，请检查账号或密码")
 		return
+	}
+	var principal platform.User
+	if s.platform != nil {
+		principal, err = s.platform.UpsertLogin(ctx, platform.Identity{UpstreamID: user.UserID, Login: user.Login, Name: user.Name}, input.AccessCode)
+		input.AccessCode = ""
+		if err != nil {
+			s.platformLoginError(w, requestID, err)
+			return
+		}
 	}
 	if old, err := r.Cookie(sessionCookieName); err == nil {
 		s.store.Delete(old.Value)
 	}
 	// Store only the public user fields returned by the upstream client.
-	sessionID, err := s.store.createWithAvatar(client, *user, resolveAvatarKey(r.Context(), client, *user))
+	sessionID, err := s.store.createPrincipal(client, *user, resolveAvatarKey(r.Context(), client, *user), principal)
 	if err != nil {
 		s.writeError(w, requestID, http.StatusInternalServerError, "SESSION_CREATE_FAILED", "创建会话失败")
 		return
 	}
 	s.setSessionCookie(w, sessionID)
-	response := map[string]any{"user": toUserDTO(*user)}
+	response := map[string]any{"user": toUserDTO(*user), "platform": principalDTO(principal)}
 	if s.jobs != nil && s.jobs.collect != nil {
-		response["collection"] = s.enqueueCollection(r.Context(), client, accountJobOwner(user.Login), "")
+		s.enqueueCollection(r.Context(), client, sessionJobOwner(Session{User: *user, Principal: principal}), "")
 	}
 	s.writeJSON(w, requestID, http.StatusOK, response)
 }
@@ -352,7 +402,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, requestID stri
 		s.authError(w, requestID)
 		return
 	}
-	s.writeJSON(w, requestID, http.StatusOK, map[string]any{"user": toUserDTO(session.User)})
+	s.writeJSON(w, requestID, http.StatusOK, map[string]any{"user": toUserDTO(session.User), "platform": principalDTO(session.Principal)})
 }
 
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request, requestID string) {
@@ -428,7 +478,7 @@ func (s *Server) handleEnter(w http.ResponseWriter, r *http.Request, requestID, 
 		return
 	}
 	if s.jobs != nil && s.jobs.bank != nil {
-		_ = s.jobs.bank.RememberCollectionTarget(r.Context(), accountJobOwner(session.User.Login), collectionTarget(task))
+		_ = s.jobs.bank.RememberCollectionTarget(r.Context(), sessionJobOwner(session), collectionTarget(task))
 	}
 	s.writeJSON(w, requestID, http.StatusOK, toTaskDTO(*task))
 }
@@ -438,7 +488,28 @@ func (s *Server) sessionFromRequest(r *http.Request) (Session, bool) {
 	if err != nil {
 		return Session{}, false
 	}
-	return s.store.Get(cookie.Value)
+	session, ok := s.store.Get(cookie.Value)
+	if !ok {
+		return Session{}, false
+	}
+	if s.platform != nil {
+		if session.Principal.ID == "" {
+			s.store.Delete(cookie.Value)
+			return Session{}, false
+		}
+		principal, err := s.platform.LookupUser(r.Context(), session.Principal.ID)
+		if err != nil || principal.Status != "active" {
+			s.store.Delete(cookie.Value)
+			return Session{}, false
+		}
+		allowed, err := s.platform.CanAccess(r.Context(), principal)
+		if err != nil || !allowed {
+			s.store.Delete(cookie.Value)
+			return Session{}, false
+		}
+		session.Principal = principal
+	}
+	return session, true
 }
 
 func (s *Server) setSessionCookie(w http.ResponseWriter, id string) {

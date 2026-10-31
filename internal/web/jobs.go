@@ -154,6 +154,10 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 			defer func() { <-scanSlot }()
 		case <-ctx.Done():
 			return jobs.Outcome{}, ctx.Err()
+		default:
+			// Background collection must never occupy answer workers while
+			// waiting on its separate upstream-scan limit.
+			return jobs.Outcome{Status: jobs.Succeeded, Result: json.RawMessage(`{"status":"skipped","reason_code":"collector_busy"}`), Message: "其他采集正在进行，本次后台采集已跳过"}, nil
 		}
 		protocol, ok := client.(*educoder.Client)
 		if !ok {
@@ -183,6 +187,22 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 		protocol, ok := client.(*educoder.Client)
 		if !ok {
 			return jobs.Outcome{Status: jobs.Failed, ErrorCode: "CLIENT_UNSUPPORTED", Message: "当前会话尚未支持答题执行"}, errors.New("unsupported task client")
+		}
+		if req.Scope == "course" || req.Scope == "all" {
+			result, err := service.RunCourses(ctx, protocol, taskservice.Request{Owner: owner, Course: req.Course, Mode: solver.ModeSubmit, IdempotencyKey: req.IdempotencyKey}, func(p taskservice.Progress) {
+				e := jobs.Event{Phase: p.Phase, Kind: p.Kind, Message: p.Message}
+				if p.Service != nil {
+					v := p.Service
+					e.Progress = &jobs.BatchProgress{TotalHomeworks: v.TotalHomeworks, CompletedHomeworks: v.CompletedHomeworks, SkippedHomeworks: v.SkippedHomeworks, NeedsServiceHomeworks: v.NeedsServiceHomeworks, CurrentCourse: v.CurrentCourse, CurrentHomeworkID: v.CurrentHomeworkID, CurrentHomeworkTitle: v.CurrentTitle}
+					if v.Batch != nil {
+						b := v.Batch
+						e.Progress.TotalLevels, e.Progress.CompletedLevels, e.Progress.SkippedLevels, e.Progress.FailedLevels = b.TotalLevels, b.CompletedLevels, b.SkippedLevels, b.FailedLevels
+						e.Progress.CurrentTitle, e.Progress.CurrentPosition = b.CurrentTitle, b.CurrentPosition
+					}
+				}
+				report(e)
+			})
+			return courseOutcome(result, err)
 		}
 		if req.Scope == "homework" {
 			batch, err := service.RunHomework(ctx, protocol, taskservice.Request{Owner: owner, Course: req.Course, HomeworkID: req.HomeworkID, Mode: solver.ModeSubmit, IdempotencyKey: req.IdempotencyKey}, func(progress taskservice.Progress) {
@@ -224,6 +244,24 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 		return out, err
 	}
 	return runtime, nil
+}
+
+func courseOutcome(result *taskservice.CourseBatchResult, err error) (jobs.Outcome, error) {
+	if result == nil {
+		return jobs.Outcome{}, err
+	}
+	raw, _ := json.Marshal(result)
+	out := jobs.Outcome{Status: jobs.Failed, Result: raw, ErrorCode: "SERVICE_REQUIRED", Message: "部分作业需要服务人员处理"}
+	if result.Status == "passed" && err == nil && result.CompletedHomeworks == result.TotalHomeworks && result.NeedsServiceHomeworks == 0 {
+		out.Status, out.ErrorCode, out.Message = jobs.Succeeded, "", "全部作业已完成"
+	} else if result.Status == "canceled" {
+		out.Status, out.ErrorCode, out.Message = jobs.Canceled, "", "本次处理已停止"
+	} else {
+		// Child results retain the precise uncertainty and diagnostic evidence.
+		// A mixed service batch is an operator handoff, never an implicit replay.
+		return out, nil
+	}
+	return out, err
 }
 
 func homeworkOutcome(batch *taskservice.BatchResult, err error) (jobs.Outcome, error) {
@@ -279,11 +317,11 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, requestID st
 		s.authError(w, requestID)
 		return
 	}
-	owner := accountJobOwner(session.User.Login)
+	owner := sessionJobOwner(session)
 	parts := splitPath(r.URL.Path)
 	if len(parts) == 2 && r.Method == http.MethodGet {
 		if s.jobs == nil {
-			s.writeJSON(w, requestID, http.StatusOK, map[string]any{"jobs": []jobs.Job{}, "capacity": map[string]any{"workers": 0, "queue_size": 0, "queued": 0, "running": 0, "per_owner_pending": 0, "per_owner_running": 0, "model_concurrency": 0, "model_configured": false}})
+			s.writeJSON(w, requestID, http.StatusOK, map[string]any{"jobs": []consumerJob{}})
 			return
 		}
 		list, err := s.jobs.manager.List(r.Context(), owner, 50)
@@ -291,21 +329,13 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, requestID st
 			s.jobError(w, requestID, err)
 			return
 		}
-		if list == nil {
-			list = []jobs.Job{}
+		public := []consumerJob{}
+		for _, job := range list {
+			if job.Request.Mode == "submit" {
+				public = append(public, toConsumerJob(job))
+			}
 		}
-		s.writeJSON(w, requestID, http.StatusOK, struct {
-			Jobs     []jobs.Job `json:"jobs"`
-			Capacity struct {
-				jobs.Stats
-				ModelConcurrency int  `json:"model_concurrency"`
-				ModelConfigured  bool `json:"model_configured"`
-			} `json:"capacity"`
-		}{Jobs: list, Capacity: struct {
-			jobs.Stats
-			ModelConcurrency int  `json:"model_concurrency"`
-			ModelConfigured  bool `json:"model_configured"`
-		}{s.jobs.manager.Stats(), s.jobs.modelConcurrency, s.jobs.modelConfigured}})
+		s.writeJSON(w, requestID, http.StatusOK, map[string]any{"jobs": public})
 		return
 	}
 	if s.jobs == nil {
@@ -314,7 +344,7 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, requestID st
 	}
 	if len(parts) == 2 && r.Method == http.MethodPost {
 		if !s.jobs.modelConfigured {
-			s.writeError(w, requestID, http.StatusServiceUnavailable, "MODEL_NOT_CONFIGURED", "服务器尚未配置模型服务")
+			s.writeError(w, requestID, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "服务暂时不可用，管理员正在处理，请稍后再试")
 			return
 		}
 		var req jobs.Request
@@ -325,6 +355,15 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, requestID st
 		if req.Mode == "collect_verified" {
 			s.writeError(w, requestID, http.StatusBadRequest, "INVALID_REQUEST", "请使用只读采集接口")
 			return
+		}
+		if s.platform != nil {
+			if req.Mode == "submit" && req.Scope == "" && req.HomeworkID > 0 {
+				req.Scope, req.Game = "homework", ""
+			}
+			if req.Mode != "submit" || (req.Scope != "homework" && req.Scope != "course" && req.Scope != "all") {
+				s.writeError(w, requestID, http.StatusBadRequest, "INVALID_REQUEST", "请选择需要完成的课程或作业")
+				return
+			}
 		}
 		if req.Scope == "homework" && (req.Mode != "submit" || req.Game != "") {
 			s.writeError(w, requestID, http.StatusBadRequest, "INVALID_REQUEST", "整份作业任务需要 submit 模式且不指定当前关卡")
@@ -341,7 +380,9 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, requestID st
 		// The executor captures only this authenticated client. No account,
 		// cookie or execution key enters the durable job request.
 		job, reused, err := s.jobs.manager.Submit(r.Context(), owner, req, func(ctx context.Context, request jobs.Request, report func(jobs.Event)) (jobs.Outcome, error) {
-			return s.jobs.run(ctx, session.Client, owner, request, report)
+			return s.runAuthorized(ctx, owner, func(ctx context.Context) (jobs.Outcome, error) {
+				return s.jobs.run(ctx, session.Client, owner, request, report)
+			})
 		})
 		if err != nil {
 			s.jobError(w, requestID, err)
@@ -351,7 +392,7 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, requestID st
 		if reused {
 			w.Header().Set("X-Job-Reused", "true")
 		}
-		s.writeJSON(w, requestID, http.StatusAccepted, job)
+		s.writeJSON(w, requestID, http.StatusAccepted, toConsumerJob(job))
 		return
 	}
 	if len(parts) == 3 && r.Method == http.MethodGet {
@@ -360,7 +401,7 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, requestID st
 			s.jobError(w, requestID, err)
 			return
 		}
-		s.writeJSON(w, requestID, http.StatusOK, job)
+		s.writeJSON(w, requestID, http.StatusOK, toConsumerJob(job))
 		return
 	}
 	if len(parts) == 4 && parts[3] == "cancel" && r.Method == http.MethodPost {
@@ -369,7 +410,7 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, requestID st
 			s.jobError(w, requestID, err)
 			return
 		}
-		s.writeJSON(w, requestID, http.StatusOK, job)
+		s.writeJSON(w, requestID, http.StatusOK, toConsumerJob(job))
 		return
 	}
 	s.writeError(w, requestID, http.StatusNotFound, "NOT_FOUND", "任务接口不存在")

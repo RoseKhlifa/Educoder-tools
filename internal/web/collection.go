@@ -22,7 +22,7 @@ func (s *Server) enqueueCollection(ctx context.Context, client EducoderClient, o
 		key = "collection-v1-" + time.Now().UTC().Format("2006-01-02")
 	}
 	job, reused, err := s.jobs.manager.Submit(ctx, owner, jobs.Request{Mode: "collect_verified", IdempotencyKey: key}, func(ctx context.Context, _ jobs.Request, report func(jobs.Event)) (jobs.Outcome, error) {
-		return s.jobs.collect(ctx, client, owner, report)
+		return s.runAuthorized(ctx, owner, func(ctx context.Context) (jobs.Outcome, error) { return s.jobs.collect(ctx, client, owner, report) })
 	})
 	if err != nil {
 		return map[string]any{"queued": false, "error_code": jobs.Code(err)}
@@ -43,7 +43,7 @@ func (s *Server) handleCollection(w http.ResponseWriter, r *http.Request, reques
 		s.writeError(w, requestID, 503, "COLLECTION_UNAVAILABLE", "只读采集服务尚未启动")
 		return
 	}
-	owner := accountJobOwner(session.User.Login)
+	owner := sessionJobOwner(session)
 	switch r.Method {
 	case http.MethodGet:
 		list, err := s.jobs.manager.List(r.Context(), owner, 100)
@@ -51,10 +51,10 @@ func (s *Server) handleCollection(w http.ResponseWriter, r *http.Request, reques
 			s.jobError(w, requestID, err)
 			return
 		}
-		out := []jobs.Job{}
+		out := []consumerJob{}
 		for _, j := range list {
 			if j.Request.Mode == "collect_verified" {
-				out = append(out, j)
+				out = append(out, toConsumerJob(j))
 			}
 		}
 		s.writeJSON(w, requestID, 200, map[string]any{"jobs": out})
@@ -70,7 +70,7 @@ func (s *Server) handleCollection(w http.ResponseWriter, r *http.Request, reques
 		}
 		result := s.enqueueCollection(r.Context(), session.Client, owner, r.Header.Get("Idempotency-Key"))
 		if result["queued"] == false {
-			s.writeJSON(w, requestID, http.StatusTooManyRequests, result)
+			s.writeError(w, requestID, http.StatusServiceUnavailable,"SERVICE_UNAVAILABLE","服务人员正在处理，请稍后再试")
 			return
 		}
 		w.Header().Set("Location", "/api/jobs/"+result["job_id"].(string))
