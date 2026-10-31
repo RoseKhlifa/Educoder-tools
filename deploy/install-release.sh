@@ -26,6 +26,14 @@ fi
 chmod 0400 -- "$DEEPSEEK_SECRET_FILE"
 
 # Build before replacing the live container. A failed build leaves it untouched.
+python3 - <<'PY'
+import os, sys
+disk = os.statvfs('/opt/educoder-tools')
+available = disk.f_bavail * disk.f_frsize
+if available < 1024 ** 3:
+    sys.exit('Deployment stopped: less than 1 GiB available to the application filesystem.')
+print('DISK_PREFLIGHT=PASS')
+PY
 export APP_VERSION="$version" VCS_REF="$commit" WEB_COOKIE_SECURE=true
 # Operator settings live outside immutable release archives, so a later update
 # does not silently remove the numeric administrator allowlist or card policy.
@@ -35,6 +43,9 @@ if [[ -f "$service_config" ]]; then
   compose_args+=(--env-file "$service_config")
 fi
 docker compose "${compose_args[@]}" build
+# Probe the actual data mount as the image's unprivileged user before replacing
+# the live service. Root's reserved disk blocks do not make SQLite writable.
+docker compose "${compose_args[@]}" run --rm --no-deps --entrypoint sh app -ec 'probe="$(mktemp /data/.deploy-write.XXXXXX)"; rm -f -- "$probe"'
 docker compose "${compose_args[@]}" up -d --no-build
 for attempt in $(seq 1 30); do
   if curl --fail --silent --max-time 3 http://127.0.0.1:11454/healthz > /tmp/educoder-tools-health.json; then

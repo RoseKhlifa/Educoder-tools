@@ -91,3 +91,5 @@ curl --fail http://127.0.0.1:11454/healthz
 `VERSION` 是版本来源。完成的小改动增加 patch、更新 CHANGELOG、执行 Go 与浏览器检查、隐私审计，再创建 commit、annotated tag 并通过 SSH 原子推送。根 `scripts/release.ps1` 支持基于最新主线的独立工作区发布，不能夹带其他会话未完成工作或运行隐私文件。
 
 服务器持久配置使用 `/opt/educoder-tools/config/service.env`（仅服务器保存，权限 0600）；安装脚本自动作为 Compose env-file 读取，使后续版本更新保留 `PLATFORM_ADMIN_USER_IDS / WEB_ORIGIN / ACCESS_CARD_REQUIRED`。模型密钥继续使用单独 secret 文件。
+
+部署脚本在构建前要求至少 1 GiB 非特权用户可用空间；构建后用镜像内应用用户检查实际 `/data` 挂载可写，再替换在线容器。检查失败会停止切换。Docker 构建缓存需要另行维护，根用户保留块不能作为应用可用空间。

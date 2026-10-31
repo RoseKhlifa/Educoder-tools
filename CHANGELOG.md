@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.34 - 2026-10-31
+
+- Check non-root disk space and data writes before service replacement
+
 ## 0.1.33 - 2026-10-31
 
 - Fix release changelog encoding across Windows shells
