@@ -150,6 +150,7 @@ func (s *Service) Run(ctx context.Context, client *educoder.Client, req Request,
 		return nil, err
 	}
 	req.Game = task.Game.Identifier
+	_ = s.store.RememberCollectionTarget(ctx, req.Owner, questionbank.CollectionTarget{Course: req.Course, HomeworkID: req.HomeworkID, Game: req.Game, ChallengeID: task.Challenge.ID, Shixun: task.Shixun.Identifier})
 	// A target lock spans all mutating operations; separate accounts and tasks
 	// retain concurrency, while one account cannot overwrite its own editor.
 	key := req.Owner + "|" + fmt.Sprint(task.MyShixun.ID) + "|" + req.Game

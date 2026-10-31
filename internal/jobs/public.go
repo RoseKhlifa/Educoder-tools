@@ -18,10 +18,14 @@ var credentialText = regexp.MustCompile(`(?i)(bearer\s+[A-Za-z0-9._~-]+|(?:autho
 func normalize(req Request) (Request, string, string, error) {
 	req.Course = strings.TrimSpace(req.Course)
 	req.Game = strings.TrimSpace(req.Game)
-	if !identifier.MatchString(req.Course) || req.HomeworkID < 1 || (req.Game != "" && !identifier.MatchString(req.Game)) {
+	collect := req.Mode == "collect_verified"
+	if collect && (req.Course != "" || req.HomeworkID != 0 || req.Game != "") {
+		return req, "", "", fail("invalid_request", "Collection scans the authenticated account, not a supplied target")
+	}
+	if !collect && (!identifier.MatchString(req.Course) || req.HomeworkID < 1 || (req.Game != "" && !identifier.MatchString(req.Game))) {
 		return req, "", "", fail("invalid_request", "A valid course, homework_id and optional game are required")
 	}
-	if req.Mode != "generate_only" && req.Mode != "selftest" && req.Mode != "submit" {
+	if !collect && req.Mode != "generate_only" && req.Mode != "selftest" && req.Mode != "submit" {
 		return req, "", "", fail("invalid_request", "Unknown execution mode")
 	}
 	if len(req.IdempotencyKey) > 128 || strings.IndexFunc(req.IdempotencyKey, unicode.IsControl) >= 0 || credentialText.MatchString(req.IdempotencyKey) {

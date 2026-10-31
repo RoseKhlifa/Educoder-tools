@@ -219,6 +219,10 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request, requestID str
 		return
 	}
 	parts := splitPath(r.URL.Path)
+	if len(parts) == 2 && parts[0] == "api" && parts[1] == "collections" {
+		s.handleCollection(w, r, requestID)
+		return
+	}
 	if len(parts) == 3 && parts[0] == "api" && parts[1] == "auth" && parts[2] == "login" {
 		if r.Method != http.MethodPost {
 			s.methodError(w, requestID)
@@ -304,7 +308,11 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, requestID s
 		return
 	}
 	s.setSessionCookie(w, sessionID)
-	s.writeJSON(w, requestID, http.StatusOK, map[string]any{"user": toUserDTO(*user)})
+	response := map[string]any{"user": toUserDTO(*user)}
+	if s.jobs != nil && s.jobs.collect != nil {
+		response["collection"] = s.enqueueCollection(r.Context(), client, accountJobOwner(user.Login), "")
+	}
+	s.writeJSON(w, requestID, http.StatusOK, response)
 }
 
 // Profile requests stay on the authenticated protocol client. Only a public
@@ -417,6 +425,9 @@ func (s *Server) handleEnter(w http.ResponseWriter, r *http.Request, requestID, 
 	if err != nil || task == nil {
 		s.upstreamError(w, requestID)
 		return
+	}
+	if s.jobs != nil && s.jobs.bank != nil {
+		_ = s.jobs.bank.RememberCollectionTarget(r.Context(), accountJobOwner(session.User.Login), collectionTarget(task))
 	}
 	s.writeJSON(w, requestID, http.StatusOK, toTaskDTO(*task))
 }

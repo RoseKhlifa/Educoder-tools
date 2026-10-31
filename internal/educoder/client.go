@@ -238,6 +238,12 @@ func (c *Client) requestWithStatuses(ctx context.Context, method, path string, q
 		if ctx.Err() != nil {
 			return fmt.Errorf("%s %s: %w", method, path, ctx.Err())
 		}
+		if errors.Is(err, ErrCollectionLimit) {
+			return ErrCollectionLimit
+		}
+		if errors.Is(err, ErrCollectionReadOnly) {
+			return ErrCollectionReadOnly
+		}
 		return fmt.Errorf("%s %s: request failed", method, path)
 	}
 	defer resp.Body.Close()

@@ -124,6 +124,9 @@ func (m *Manager) Submit(ctx context.Context, owner string, req Request, exec Ex
 	if req.Game == "" {
 		kind = "homework"
 	}
+	if req.Mode == "collect_verified" {
+		kind = "collection"
+	}
 	r := &execution{stored: stored{Job: Job{ID: hex.EncodeToString(idbytes[:]), Status: Queued, Phase: Queued, Kind: kind, Request: req, CreatedAt: now, UpdatedAt: now, Message: "Waiting for an available worker"}, owner: owner, payload: payload, target: target}, exec: exec}
 	r.Events = []Event{{Phase: Queued, Message: r.Message, At: now}}
 	if err = insertStore(m.db, &r.stored); err != nil {

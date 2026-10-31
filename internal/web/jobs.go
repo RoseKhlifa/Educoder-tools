@@ -30,6 +30,7 @@ type JobRuntime struct {
 	run              func(context.Context, EducoderClient, string, jobs.Request, func(jobs.Event)) (jobs.Outcome, error)
 	modelConfigured  bool
 	modelConcurrency int
+	collect          func(context.Context, EducoderClient, string, func(jobs.Event)) (jobs.Outcome, error)
 }
 
 func loadJobConfig(cfg *Config) error {
@@ -141,6 +142,39 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 	}
 	service := taskservice.New(bank, provider, taskservice.Config{ModelConcurrency: cfg.ModelConcurrency, Timeout: cfg.JobTimeout})
 	runtime := &JobRuntime{manager: manager, bank: bank, modelConfigured: key != "", modelConcurrency: cfg.ModelConcurrency}
+	collector := &taskservice.Collector{Bank: bank, Limits: taskservice.DefaultCollectionLimits()}
+	scanSlot := make(chan struct{}, 1)
+	runtime.collect = func(ctx context.Context, client EducoderClient, owner string, report func(jobs.Event)) (jobs.Outcome, error) {
+		select {
+		case scanSlot <- struct{}{}:
+			defer func() { <-scanSlot }()
+		case <-ctx.Done():
+			return jobs.Outcome{}, ctx.Err()
+		}
+		protocol, ok := client.(*educoder.Client)
+		if !ok {
+			return jobs.Outcome{Status: jobs.Failed, ErrorCode: "collection_client_unsupported", Message: "当前会话不支持只读采集"}, nil
+		}
+		reader, e := protocol.CollectionReader(educoder.DefaultCollectionBudget())
+		if e != nil {
+			return jobs.Outcome{}, errors.New("collection session unavailable")
+		}
+		report(jobs.Event{Phase: "collecting", Kind: "collection", Message: "正在只读核验已满分任务，不调用模型"})
+		result, e := collector.Scan(ctx, reader, owner, func(summary taskservice.CollectionSummary) {
+			report(jobs.Event{Phase: "collecting", Kind: "collection", Message: taskservice.CollectionMessage(summary)})
+		})
+		raw, _ := json.Marshal(result)
+		out := jobs.Outcome{Status: jobs.Succeeded, Result: raw, Message: taskservice.CollectionMessage(result)}
+		if e != nil {
+			out.Status = jobs.Failed
+			out.ErrorCode = "collection_stopped"
+			out.Message = "采集已停止，已记录统计和跳过原因"
+			// Do not persist upstream error text (which may include an account
+			// path). Public reasons and counters already explain the stopped scan.
+			return out, errors.New("Read-only collection stopped; inspect its summary")
+		}
+		return out, e
+	}
 	runtime.run = func(ctx context.Context, client EducoderClient, owner string, req jobs.Request, report func(jobs.Event)) (jobs.Outcome, error) {
 		protocol, ok := client.(*educoder.Client)
 		if !ok {
@@ -243,6 +277,10 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, requestID st
 		var req jobs.Request
 		if err := decodeJSON(r, &req); err != nil {
 			s.writeError(w, requestID, http.StatusBadRequest, "INVALID_REQUEST", "任务参数无效")
+			return
+		}
+		if req.Mode == "collect_verified" {
+			s.writeError(w, requestID, http.StatusBadRequest, "INVALID_REQUEST", "请使用只读采集接口")
 			return
 		}
 		header := r.Header.Get("Idempotency-Key")

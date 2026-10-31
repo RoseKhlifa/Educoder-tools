@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.20 — 2026-10-31
+
+- Collect proven completed answers after login using bounded owner-isolated read-only jobs
+
 ## 0.1.19 — 2026-10-31
 
 - Expose homework deadlines and complete task detail metadata in the workbench

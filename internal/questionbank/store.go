@@ -96,6 +96,11 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate objective question bank: %w", err)
 	}
+	if _, err = tx.Exec(collectionSchema); err != nil {
+		tx.Rollback()
+		db.Close()
+		return nil, fmt.Errorf("migrate collection targets: %w", err)
+	}
 	if err = tx.Commit(); err != nil {
 		db.Close()
 		return nil, err
