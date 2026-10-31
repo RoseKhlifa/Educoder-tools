@@ -53,7 +53,11 @@ func (a *EducoderAdapter) Load(ctx context.Context, target Target) (LoadedProble
 	}
 	public := make([]problem.PublicTest, 0)
 	for _, test := range t.TestSets {
-		if test.IsPublic {
+		// A hidden/custom-checker task can expose a public placeholder with
+		// both fields empty. That does not provide an observable stdout oracle.
+		// Skip only that empty pair; empty stdin or empty output alone remains a
+		// valid sample, and whitespace is significant data.
+		if test.IsPublic && (test.Input != "" || test.Output != "") {
 			public = append(public, problem.PublicTest{Stdin: test.Input, ExpectedStdout: test.Output})
 		}
 	}

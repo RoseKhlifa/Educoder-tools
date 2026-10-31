@@ -219,7 +219,25 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 			out.Status = terminalBatchStatus(single, runErr)
 			out.ReasonCode = batchFailureReason(single, runErr)
 			out.Levels[i].ReasonCode = out.ReasonCode
-			out.Diagnostics = append(out.Diagnostics, errorText(runErr))
+			appendDiagnostic := func(message string) {
+				if strings.TrimSpace(message) == "" {
+					return
+				}
+				for _, existing := range out.Diagnostics {
+					if existing == message {
+						return
+					}
+				}
+				out.Diagnostics = append(out.Diagnostics, message)
+			}
+			if single != nil {
+				for _, diagnostic := range single.Diagnostics {
+					appendDiagnostic(diagnostic)
+				}
+			}
+			if runErr != nil {
+				appendDiagnostic(runErr.Error())
+			}
 			return out, runErr
 		}
 		out.Levels[i].Score = single.Score
@@ -338,15 +356,22 @@ func batchFailureReason(r *Result, err error) string {
 	if err != nil {
 		diagnostics = append(diagnostics, err.Error())
 	}
+	hasFormalEvaluation := r.Programming != nil && r.Programming.Evaluation != nil
 	for _, diagnostic := range diagnostics {
 		switch {
-		case strings.Contains(diagnostic, "WebSocket 连接失败"):
+		case !hasFormalEvaluation && strings.Contains(diagnostic, "WebSocket 连接失败"):
 			return "selftest_connection_failed"
-		case strings.Contains(diagnostic, "ProcessFinished") || strings.Contains(diagnostic, "自测等待结束"):
+		case !hasFormalEvaluation && (strings.Contains(diagnostic, "ProcessFinished") || strings.Contains(diagnostic, "自测等待结束")):
 			return "selftest_stream_unconfirmed"
 		case strings.Contains(diagnostic, "editor content"):
 			return "editor_changed"
 		}
+	}
+	// Self-test saves and runs code without starting a formal evaluation. Its
+	// unconfirmed stream must not be described as an uncertain submission,
+	// regardless of how the protocol error is worded.
+	if r.Programming != nil && r.Programming.SelfTestStatus == "unknown" && !hasFormalEvaluation {
+		return "selftest_stream_unconfirmed"
 	}
 	switch r.Status {
 	case "model_error", "selftest_failed", "attempts_exhausted", "verification_unconfirmed", "budget_exhausted", "canceled":
@@ -358,10 +383,4 @@ func batchFailureReason(r *Result, err error) string {
 	default:
 		return "execution_failed"
 	}
-}
-func errorText(e error) string {
-	if e == nil {
-		return ""
-	}
-	return e.Error()
 }

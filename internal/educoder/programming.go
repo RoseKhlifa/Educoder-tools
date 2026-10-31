@@ -271,6 +271,44 @@ func PublicOutputMatches(actual, expected string) bool {
 	return normalize(actual) == normalize(expected)
 }
 
+func decodeSelfTestBase64(message []byte) ([]byte, error) {
+	// The task bundle uses js-base64, which accepts the URL-safe alphabet and
+	// unpadded values. Accept ASCII whitespace too, but do not copy its removal
+	// of arbitrary punctuation: that would hide damaged/error frames.
+	normalized := strings.Map(func(r rune) rune {
+		switch r {
+		case ' ', '\t', '\r', '\n', '\v', '\f':
+			return -1
+		case '-':
+			return '+'
+		case '_':
+			return '/'
+		default:
+			return r
+		}
+	}, string(message))
+	decoded, err := base64.StdEncoding.DecodeString(normalized)
+	if err != nil {
+		decoded, err = base64.RawStdEncoding.DecodeString(normalized)
+	}
+	return decoded, err
+}
+
+func selfTestRuntimeError(message []byte) bool {
+	// A runtime can send an explicit JSON error instead of encoded stdout. Do
+	// not feed it to the model as a failed sample, and never echo its payload
+	// (which can include a runtime URL or token) into a persisted diagnostic.
+	var envelope struct {
+		Type  string          `json:"type"`
+		TP    string          `json:"tp"`
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(message, &envelope) != nil {
+		return false
+	}
+	return envelope.Type == "error" || envelope.TP == "error" || len(envelope.Error) > 0 && string(envelope.Error) != "null" && string(envelope.Error) != "false" && string(envelope.Error) != `""`
+}
+
 // SelfTest saves with evaluate=0 and streams one explicit stdin execution.
 // A matching output is an observation, and never triggers a submission.
 func (c *Client) SelfTest(ctx context.Context, t *Task, filePath, content, input string, options SelfTestOptions) (*SelfTestResult, error) {
@@ -324,7 +362,7 @@ func (c *Client) SelfTest(ctx context.Context, t *Task, filePath, content, input
 	result := &SelfTestResult{}
 	var output strings.Builder
 	for {
-		_, message, err := connection.Read(ctx)
+		frameType, message, err := connection.Read(ctx)
 		if err != nil {
 			result.Output = output.String()
 			if ctx.Err() != nil {
@@ -332,14 +370,20 @@ func (c *Client) SelfTest(ctx context.Context, t *Task, filePath, content, input
 			}
 			return result, errors.New("自测流在 ProcessFinished 前关闭或读取失败")
 		}
-		// The published task bundle Base64-decodes O.data before consuming
-		// stdout. This is wire encoding, including on binary message frames.
-		decoded, decodeErr := base64.StdEncoding.DecodeString(string(message))
-		if decodeErr != nil {
-			decoded, decodeErr = base64.RawStdEncoding.DecodeString(string(message))
+		if string(message) == "ProcessFinished" {
+			result.Output = output.String()
+			return result, errors.New("自测收到未编码的结束控制帧")
 		}
+		if selfTestRuntimeError(message) {
+			result.Output = output.String()
+			return result, errors.New("自测运行器返回错误帧")
+		}
+		// Both text and binary messages carry application-level Base64. The
+		// original runtime uses URL-safe Base64 for some stdout values.
+		decoded, decodeErr := decodeSelfTestBase64(message)
 		if decodeErr != nil {
-			return result, errors.New("自测帧不是有效的 Base64 数据")
+			result.Output = output.String()
+			return result, fmt.Errorf("自测 Base64 流包含无效编码帧（类型 %v，%d 字节）", frameType, len(message))
 		}
 		if string(decoded) == "ProcessFinished" {
 			result.Output = output.String()
@@ -451,13 +495,22 @@ func (c *Client) WaitEvaluation(ctx context.Context, t *Task, saved *SavedCode, 
 	query := url.Values{"resubmit": {saved.Resubmit}, "time_out": {"false"}, "port": {strconv.Itoa(saved.evaluationPort)}, "sec_key": {saved.SecKey}, "challenge_id": {strconv.FormatInt(t.Challenge.ID, 10)}, "subject_id": {""}, "homework_common_id": {strconv.FormatInt(t.HomeworkID, 10)}}
 	for {
 		var response EvaluationResult
-		err := c.requestWithStatuses(ctx, http.MethodGet, "/api/tasks/"+t.Game.Identifier+"/game_status.json", query, nil, taskRef(t), &response, 2)
+		err := c.requestWithStatuses(ctx, http.MethodGet, "/api/tasks/"+t.Game.Identifier+"/game_status.json", query, nil, taskRef(t), &response, 0, 2)
 		if err != nil && !errors.Is(err, errResponseNotModified) {
 			return nil, err
 		}
 		if err == nil {
 			if response.RunningCodeStatus != nil && (*response.RunningCodeStatus == 1 || *response.RunningCodeStatus == 2) {
 				// Both are intermediate states in the recording.
+			} else if response.Status != nil && *response.Status == 0 && evaluationHasFailure(response) {
+				// This endpoint uses 0 for an unsuccessful completed evaluation,
+				// including tasks whose test contents are hidden. Keep its feedback
+				// available for a subsequent repair instead of treating it as an API
+				// transport failure. Counts or metadata without a failure verdict
+				// do not establish that this evaluation completed.
+				response.Completed = true
+				response.Passed = false
+				return &response, nil
 			} else if response.Status != nil && *response.Status == 2 {
 				response.Completed = true
 				response.Passed = response.TestSetsCount != nil && *response.TestSetsCount > 0 && *response.TestSetsCount == len(response.TestSets) && response.SetsErrorCount != nil && *response.SetsErrorCount == 0
@@ -479,6 +532,18 @@ func (c *Client) WaitEvaluation(ctx context.Context, t *Task, saved *SavedCode, 
 		case <-timer.C:
 		}
 	}
+}
+
+func evaluationHasFailure(response EvaluationResult) bool {
+	if response.SetsErrorCount != nil && *response.SetsErrorCount > 0 {
+		return true
+	}
+	for _, test := range response.TestSets {
+		if (test.Result != nil && !*test.Result) || (test.CompileSuccess != nil && *test.CompileSuccess == 0) {
+			return true
+		}
+	}
+	return false
 }
 
 // SubmitCode saves once, starts one evaluation, and polls it. Mutations are

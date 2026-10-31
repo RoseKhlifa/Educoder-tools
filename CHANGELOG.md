@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.35 - 2026-10-31
+
+- Handle URL-safe self-test frames and failed hidden-test evaluation feedback
+
 ## 0.1.34 - 2026-10-31
 
 - Check non-root disk space and data writes before service replacement
