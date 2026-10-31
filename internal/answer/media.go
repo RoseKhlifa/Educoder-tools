@@ -37,6 +37,16 @@ type imageReference struct {
 	SHA256           string `json:"sha256"`
 }
 
+// ValidateObjectiveResources checks the same image contract used to construct
+// provider requests without constructing a client or sending a network call.
+func ValidateObjectiveResources(snapshot ObjectiveSnapshot, resources []ImageResource) error {
+	if err := ValidateObjectiveSnapshot(snapshot); err != nil {
+		return err
+	}
+	_, _, err := prepareObjectiveResources(snapshot, resources)
+	return err
+}
+
 type imageURLPart struct {
 	URL string `json:"url"`
 }

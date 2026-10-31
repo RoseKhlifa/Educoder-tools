@@ -253,7 +253,11 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 	if err != nil {
 		return nil, err
 	}
-	snapshot := objectiveSnapshot(choice)
+	emit("loading_resources", "正在读取题干和选项中的图片")
+	snapshot, resources, err := prepareObjectiveResources(ctx, client, choice)
+	if err != nil {
+		return &Result{Kind: "objective", Status: "resource_unavailable"}, err
+	}
 	hash, err := s.store.PutObjectiveSnapshot(ctx, snapshot)
 	if err != nil {
 		return nil, err
@@ -279,6 +283,7 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 	}
 	var previous *answer.ObjectiveCandidate
 	var feedback []answer.Feedback
+	attemptHistory := newObjectiveAttemptHistory(s.cfg.MaxEvaluations)
 	compactOutput := false
 	for attempt := 0; attempt < s.cfg.MaxEvaluations; attempt++ {
 		var c answer.ObjectiveCandidate
@@ -306,13 +311,13 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			// pro profiles can consume the entire 4096-token budget before the
 			// JSON answer is emitted. Leave enough room for a complete candidate.
 			profile.MaxTokens = 8192
-			if compactOutput {
+			if compactOutput || len(resources) > 0 {
 				// Reasoning and answers share the output limit. If a prior
 				// response was truncated, the next response uses the entire
 				// allowance for the compact answer JSON.
 				profile.Thinking, profile.ReasoningEffort = "disabled", ""
 			}
-			pr := answer.ObjectiveRequest{Problem: snapshot, Previous: previous, Feedback: feedback, Profile: profile}
+			pr := answer.ObjectiveRequest{Problem: snapshot, Previous: previous, Feedback: attemptHistory.feedback(feedback), Profile: profile, Resources: resources}
 			estimate, e := s.provider.EstimateObjective(pr)
 			if e != nil {
 				r.Status = "budget_unavailable"
@@ -374,6 +379,14 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			r.Status = "invalid_candidate"
 			return r, e
 		}
+		if attemptHistory.contains(c) {
+			// Generation consumes the existing bounded budget, but a known
+			// failed answer must not consume another platform submission.
+			previous = &c
+			feedback = []answer.Feedback{{Kind: "formal", Message: "模型重复返回了已确认未满分的完整答案，本次没有再次提交；请根据题目和选项重新推理并修正。"}}
+			emit("repairing", "答案与已知未满分尝试重复，已跳过重复提交并继续修复")
+			continue
+		}
 		candidate, e := s.store.AddObjectiveCandidate(ctx, hash, snapshot, c, r.Source)
 		if e != nil {
 			r.Status = "failed"
@@ -415,6 +428,9 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 		if submitted.ScoreCheck != "not_full_score" {
 			r.Status = "verification_unconfirmed"
 			return r, nil
+		}
+		if submitted.ScoreKnown {
+			attemptHistory.remember(c, submitted.Score, submitted.MaxScore, trustedObjectiveQuestionResults(choice, c, submitted)...)
 		}
 		previous = &c
 		feedback = []answer.Feedback{{Kind: "formal", Message: fmt.Sprintf("本关得分 %s / %s，尚未满分，请复核全部题目和选项", submitted.Score, submitted.MaxScore)}}

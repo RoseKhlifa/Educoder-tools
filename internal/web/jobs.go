@@ -242,7 +242,7 @@ func homeworkOutcome(batch *taskservice.BatchResult, err error) (jobs.Outcome, e
 		return out, nil
 	case "canceled":
 		out.Status, out.ErrorCode, out.Message = jobs.Canceled, "", "后续关卡已停止"
-	case "model_error", "selftest_failed", "attempts_exhausted", "invalid_candidate", "budget_exhausted", "budget_unavailable", "unsupported_multifile", "unsupported_roster", "usage_persistence_failed", "verification_persistence_failed":
+	case "model_error", "selftest_failed", "attempts_exhausted", "invalid_candidate", "budget_exhausted", "budget_unavailable", "unsupported_multifile", "unsupported_roster", "usage_persistence_failed", "verification_persistence_failed", "resource_unavailable":
 		// Earlier levels may have submitted successfully. A known failure in
 		// a later generation or confirmed self-test must not be turned into an
 		// unknown submission merely because Manager's mutation flag is sticky.

@@ -10,7 +10,7 @@ export function taskHasPendingJob(state: AppState): boolean {
 const statusLabels: Record<JobStatus, string> = { queued: '排队中', running: '执行中', succeeded: '流程已完成', failed: '执行失败', canceled: '已停止', uncertain: '平台结果待复核', interrupted: '执行已中断' };
 const modes: Record<JobMode, string> = { generate_only: '仅生成答案', selftest: '自测当前关卡', submit: '提交并验证' };
 const phases: Record<string, string> = {
-  queued: '等待执行', starting: '准备任务', snapshot: '读取题目', loading: '读取题目', fetching: '读取题目',
+  queued: '等待执行', starting: '准备任务', snapshot: '读取题目', loading: '读取题目', fetching: '读取题目', loading_resources: '读取题干与选项图片',
   generating: '生成答案', generation: '生成答案', model: '生成答案', validating: '检查答案',
   saving: '保存答案', selftest: '执行自测', testing: '执行自测', repairing: '根据反馈修复',
   submitting: '提交答案', submit: '提交答案', polling: '等待评测', verifying: '复核平台状态',
@@ -23,6 +23,7 @@ const phases: Record<string, string> = {
 // Only these public codes may turn backend details into visible explanations.
 // In particular, never render arbitrary diagnostics, provider output or reason text.
 const failureReasons: Record<string, { summary: string; next: string }> = {
+  objective_image_unavailable: { summary: '题干或选项图片未能完整读取', next: '尚未向模型或平台提交不完整的图题，请重新读取资源后继续。' },
   model_output_truncated: { summary: '模型输出被截断，答案未完整返回', next: '本次自动重新生成已结束，未继续提交不完整答案。' },
   model_response_invalid: { summary: '模型答案格式未通过检查', next: '本次自动重新生成已结束，未继续提交格式错误的答案。' },
   model_rate_limited: { summary: '模型服务触发请求限流', next: '本次限流重试已结束，请稍后继续。' },
@@ -52,6 +53,7 @@ const legacyFailureCodes: Record<string, string> = {
   'model provider network_error': 'model_network_error',
 };
 const progressMessages: Record<string, string> = {
+  '答案与已知未满分尝试重复，已跳过重复提交并继续修复': '模型返回了此前未满分的相同答案，已跳过重复提交，继续复核题目。',
   '模型输出未完成，正在自动重试生成': '模型输出未完成，正在自动重新生成答案。',
   '公开自测未通过，正在根据反馈自动修复': '公开自测未通过，正在根据反馈自动修复。',
   '当前关卡未满分，正在根据得分自动修复': '当前关卡未满分，正在根据得分自动修复。',

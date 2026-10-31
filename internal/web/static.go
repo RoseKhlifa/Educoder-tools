@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -37,11 +39,7 @@ func newStaticHandler(dir string) http.Handler {
 		if err != nil {
 			return
 		}
-		var compressed bytes.Buffer
-		zw := gzip.NewWriter(&compressed)
-		_, _ = zw.Write(body)
-		_ = zw.Close()
-		assets["/"+name] = staticAsset{body: body, gzip: compressed.Bytes(), kind: kind, etag: fmt.Sprintf("%x", sha256.Sum256(body)), modified: info.ModTime()}
+		assets["/"+name] = staticAsset{body: body, kind: kind, modified: info.ModTime()}
 	}
 	load("index.html", "text/html; charset=utf-8")
 	load("styles.css", "text/css; charset=utf-8")
@@ -62,7 +60,207 @@ func newStaticHandler(dir string) http.Handler {
 		}
 		return nil
 	})
+	// Version the complete module graph, not only index.html's entry point.
+	// A dependency change must change its URL even when an intermediary cache
+	// retains an older unversioned jobs.js/api.js. One hash for the original
+	// graph also handles cycles without recursively hashing rewritten imports.
+	moduleNames := make([]string, 0, len(assets))
+	for name := range assets {
+		if publicJS(strings.TrimPrefix(name, "/")) {
+			moduleNames = append(moduleNames, name)
+		}
+	}
+	sort.Strings(moduleNames)
+	graph := sha256.New()
+	for _, name := range moduleNames {
+		_, _ = fmt.Fprintf(graph, "%d:%s:%d:", len(name), name, len(assets[name].body))
+		_, _ = graph.Write(assets[name].body)
+	}
+	revision := fmt.Sprintf("%x", graph.Sum(nil))[:16]
+	for name, asset := range assets {
+		if publicJS(strings.TrimPrefix(name, "/")) {
+			asset.body = versionModuleImports(name, asset.body, assets, revision)
+			// The representation also depends on other files. Its own mtime
+			// cannot validate it after a dependency-only update; use the strong
+			// representation ETag instead of If-Modified-Since.
+			asset.modified = time.Time{}
+		}
+		var compressed bytes.Buffer
+		zw := gzip.NewWriter(&compressed)
+		_, _ = zw.Write(asset.body)
+		_ = zw.Close()
+		asset.gzip = compressed.Bytes()
+		asset.etag = fmt.Sprintf("%x", sha256.Sum256(asset.body))
+		assets[name] = asset
+	}
 	return assets
+}
+
+// moduleToken records source offsets so rewriting changes only literal module
+// specifiers, never surrounding formatting, comments, or ordinary strings.
+type moduleToken struct {
+	text       string
+	start, end int
+	quoted     bool
+}
+
+func moduleTokens(body []byte) []moduleToken {
+	var tokens []moduleToken
+	for i := 0; i < len(body); {
+		start := i
+		switch body[i] {
+		case ' ', '\t', '\r', '\n':
+			i++
+			continue
+		case '/':
+			if i+1 < len(body) && body[i+1] == '/' {
+				for i < len(body) && body[i] != '\n' {
+					i++
+				}
+				continue
+			}
+			if i+1 < len(body) && body[i+1] == '*' {
+				i += 2
+				for i+1 < len(body) && !(body[i] == '*' && body[i+1] == '/') {
+					i++
+				}
+				i = min(i+2, len(body))
+				continue
+			}
+			// Skip regex literals in expression-start positions. In particular,
+			// /import('./x.js')/ must not become an actual module dependency.
+			previous := ""
+			if len(tokens) > 0 {
+				previous = tokens[len(tokens)-1].text
+			}
+			if previous == "" || strings.Contains("=([{,:;!?", previous) || previous == "return" || previous == "throw" || previous == "case" || previous == ">" {
+				i++
+				inClass := false
+				for i < len(body) && body[i] != '\n' && body[i] != '\r' {
+					if body[i] == '\\' {
+						i = min(i+2, len(body))
+						continue
+					}
+					if body[i] == '[' {
+						inClass = true
+					} else if body[i] == ']' {
+						inClass = false
+					} else if body[i] == '/' && !inClass {
+						i++
+						break
+					}
+					i++
+				}
+				tokens = append(tokens, moduleToken{text: "/regex/", start: start, end: i})
+				continue
+			}
+		case '\'', '"', '`':
+			quote := body[i]
+			i++
+			for i < len(body) {
+				if body[i] == '\\' {
+					i = min(i+2, len(body))
+					continue
+				}
+				if body[i] == quote {
+					i++
+					break
+				}
+				i++
+			}
+			tokens = append(tokens, moduleToken{text: string(body[start:i]), start: start, end: i, quoted: quote != '`'})
+			continue
+		}
+		if body[i] == '_' || body[i] == '$' || body[i] >= 'a' && body[i] <= 'z' || body[i] >= 'A' && body[i] <= 'Z' || body[i] >= '0' && body[i] <= '9' {
+			for i < len(body) && (body[i] == '_' || body[i] == '$' || body[i] >= 'a' && body[i] <= 'z' || body[i] >= 'A' && body[i] <= 'Z' || body[i] >= '0' && body[i] <= '9') {
+				i++
+			}
+		} else {
+			i++
+		}
+		tokens = append(tokens, moduleToken{text: string(body[start:i]), start: start, end: i})
+	}
+	return tokens
+}
+
+func versionModuleImports(name string, body []byte, assets staticHandler, revision string) []byte {
+	tokens := moduleTokens(body)
+	specifiers := make(map[int]bool)
+	for i, token := range tokens {
+		if (token.text != "import" && token.text != "export") || i+1 >= len(tokens) || i > 0 && tokens[i-1].text == "." {
+			continue
+		}
+		next := i + 1
+		if token.text == "import" && tokens[next].quoted {
+			specifiers[next] = true // side-effect import
+			continue
+		}
+		if token.text == "import" && tokens[next].text == "(" {
+			if next+2 < len(tokens) && tokens[next+1].quoted && (tokens[next+2].text == ")" || tokens[next+2].text == ",") {
+				specifiers[next+1] = true // literal dynamic import
+			}
+			continue
+		}
+		if token.text == "export" && tokens[next].text != "{" && tokens[next].text != "*" {
+			continue
+		}
+		depth := 0
+		for j := next; j+1 < len(tokens); j++ {
+			switch tokens[j].text {
+			case "{":
+				depth++
+			case "}":
+				depth--
+			}
+			if depth == 0 && tokens[j].text == "from" && tokens[j+1].quoted {
+				specifiers[j+1] = true
+				break
+			}
+			if depth < 0 || depth == 0 && (tokens[j].text == ";" || tokens[j].text == "(" || tokens[j].text == "." || tokens[j].quoted) {
+				break
+			}
+		}
+	}
+	var rewritten bytes.Buffer
+	last := 0
+	for i, token := range tokens {
+		if !specifiers[i] || len(token.text) < 2 || token.text[len(token.text)-1] != token.text[0] {
+			continue
+		}
+		specifier := token.text[1 : len(token.text)-1]
+		if strings.ContainsRune(specifier, '\\') || !(strings.HasPrefix(specifier, "./") || strings.HasPrefix(specifier, "../") || strings.HasPrefix(specifier, "/")) {
+			continue
+		}
+		locator, err := url.Parse(specifier)
+		if err != nil || locator.Scheme != "" || locator.Host != "" || locator.User != nil || !strings.HasSuffix(locator.Path, ".js") {
+			continue
+		}
+		resolved := locator.Path
+		if !strings.HasPrefix(resolved, "/") {
+			resolved = path.Join(path.Dir(name), resolved)
+		}
+		if _, ok := assets[path.Clean(resolved)]; !ok || !publicJS(strings.TrimPrefix(path.Clean(resolved), "/")) {
+			continue
+		}
+		// Keep existing parameters and fragments byte-for-byte. The reserved
+		// cache key is appended without changing application query semantics.
+		fragment := ""
+		if index := strings.IndexByte(specifier, '#'); index >= 0 {
+			fragment, specifier = specifier[index:], specifier[:index]
+		}
+		separator := "?"
+		if strings.Contains(specifier, "?") {
+			separator = "&"
+		}
+		rewritten.Write(body[last : token.start+1])
+		rewritten.WriteString(specifier + separator + "__asset=" + revision + fragment)
+		last = token.end - 1
+	}
+	if last == 0 {
+		return body
+	}
+	rewritten.Write(body[last:])
+	return rewritten.Bytes()
 }
 
 func publicJS(name string) bool {

@@ -289,7 +289,7 @@ func statusOf(r *Result, e error) string {
 func terminalBatchStatus(r *Result, e error) string {
 	if r != nil {
 		switch r.Status {
-		case "uncertain", "verification_unconfirmed", "canceled", "budget_exhausted", "model_error", "selftest_failed", "attempts_exhausted", "invalid_candidate", "unsupported_multifile", "budget_unavailable", "usage_persistence_failed", "verification_persistence_failed":
+		case "uncertain", "verification_unconfirmed", "canceled", "budget_exhausted", "model_error", "selftest_failed", "attempts_exhausted", "invalid_candidate", "unsupported_multifile", "budget_unavailable", "usage_persistence_failed", "verification_persistence_failed", "resource_unavailable":
 			return r.Status
 		}
 	}
@@ -302,6 +302,10 @@ func terminalBatchStatus(r *Result, e error) string {
 // batchFailureReason emits an enum only. Upstream bodies, model responses,
 // source code and execution URLs are never copied into a public reason.
 func batchFailureReason(r *Result, err error) string {
+	var imageErr *educoder.QuestionImageError
+	if errors.As(err, &imageErr) {
+		return "objective_image_unavailable"
+	}
 	var providerErr *answer.Error
 	if errors.As(err, &providerErr) {
 		switch providerErr.Kind {

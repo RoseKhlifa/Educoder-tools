@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.31 — 2026-10-31
+
+- Supply objective image bytes, reject repeated failed answers, and refresh module graph caches
+
 ## 0.1.30 — 2026-10-31
 
 - Allow ten bounded model repairs for persistently non-full objective levels

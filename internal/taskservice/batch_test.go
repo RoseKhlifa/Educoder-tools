@@ -64,7 +64,7 @@ func TestRunHomeworkPreservesKnownChildFailureAndDoesNotStartLaterLevels(t *test
 func gameID(pos int64) int64 { return 100 + pos }
 
 func TestRunHomeworkSkipsVerifiedAndProcessesRemaining(t *testing.T) {
-	scoreCalls := 0
+	submitted := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
@@ -73,8 +73,7 @@ func TestRunHomeworkSkipsVerifiedAndProcessesRemaining(t *testing.T) {
 		case "/api/shixun_homeworks/44/header_info.json":
 			fmt.Fprint(w, `{"data":{"homework_id":44,"work_id":5,"myshixun_identifier":"RUNTIME","shixun_identifier":"SHIXUN","challenges":[{"id":10,"name":"first"},{"id":11,"name":"second"}]}}`)
 		case "/api/homework_commons/44/shixun_challenge_data.json":
-			scoreCalls++
-			if scoreCalls <= 4 {
+			if !submitted {
 				fmt.Fprint(w, `{"data":{"challenge_settings":[{"challenge_id":10,"challenge_name":"first","challenge_score":"10","game_score":"10"},{"challenge_id":11,"challenge_name":"second","challenge_score":"10","game_score":"0"}]}}`)
 			} else {
 				fmt.Fprint(w, `{"data":{"challenge_settings":[{"challenge_id":10,"challenge_name":"first","challenge_score":"10","game_score":"10"},{"challenge_id":11,"challenge_name":"second","challenge_score":"10","game_score":"10"}]}}`)
@@ -86,6 +85,7 @@ func TestRunHomeworkSkipsVerifiedAndProcessesRemaining(t *testing.T) {
 		case "/api/tasks/G2.json":
 			fmt.Fprint(w, batchChoiceJSON("G2", "second", 11, 8, 2))
 		case "/api/tasks/G2/choose_build.json":
+			submitted = true
 			fmt.Fprint(w, `{"status":0,"choose_correct_num":1,"challenge_chooses_count":1}`)
 		default:
 			t.Errorf("unexpected batch route %s", r.URL.Path)

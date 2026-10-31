@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -150,6 +151,144 @@ func TestStaticCompressionRevalidationHeadAndRanges(t *testing.T) {
 	handler.ServeHTTP(plain, plainReq)
 	if plain.Header().Get("Content-Encoding") != "" || plain.Body.String() != body {
 		t.Fatal("gzip;q=0 must preserve identity output")
+	}
+}
+
+func TestStaticModuleGraphVersionsOnlyPublishedLocalDependencies(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "dist", "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	entry := strings.Join([]string{
+		`import { api } from './api.js';`,
+		`import './jobs.js?lang=zh&value=a%2Bb#section';`,
+		`export { job } from "./jobs.js";`,
+		`export * as nested from './nested/extra.js';`,
+		`const lazy = import('./jobs.js');`,
+		`const external = import('https://example.test/jobs.js?existing=1');`,
+		`import '//example.test/jobs.js';`,
+		`import 'package/jobs.js';`,
+		`import './missing.js';`,
+		`import './.private.js';`,
+		`const text = "import './jobs.js'";`,
+		"const template = `import './jobs.js'`;",
+		`const expression = /import\('.\/jobs.js'\)/;`,
+		`// import './jobs.js';`,
+		`/* export * from './jobs.js'; */`,
+		`object.import('./jobs.js');`,
+	}, "\n")
+	for name, body := range map[string]string{
+		"index.html":           `<script type="module" src="/dist/app.js?v=release"></script>`,
+		"dist/app.js":          entry,
+		"dist/api.js":          `export const api = 1;`,
+		"dist/jobs.js":         `export * from './app.js'; export const job = 1;`,
+		"dist/nested/extra.js": `import '../jobs.js'; export * from '/dist/api.js?flag';`,
+		"dist/.private.js":     `const secret = 1;`,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(name)), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := newStaticHandler(dir)
+	get := func(handler http.Handler, target string) *httptest.ResponseRecorder {
+		t.Helper()
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, target, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d", target, w.Code)
+		}
+		return w
+	}
+	index := get(handler, "/")
+	if !strings.Contains(index.Body.String(), `/dist/app.js?v=release`) {
+		t.Fatal("entry point version must be preserved")
+	}
+	response := get(handler, "/dist/app.js?v=release")
+	match := regexp.MustCompile(`__asset=([a-f0-9]{16})`).FindStringSubmatch(response.Body.String())
+	if len(match) != 2 {
+		t.Fatalf("versioned entry point retained unversioned imports: %s", response.Body.String())
+	}
+	revision := match[1]
+	for _, expected := range []string{
+		`from './api.js?__asset=` + revision + `';`,
+		`import './jobs.js?lang=zh&value=a%2Bb&__asset=` + revision + `#section';`,
+		`from "./jobs.js?__asset=` + revision + `";`,
+		`from './nested/extra.js?__asset=` + revision + `';`,
+		`import('./jobs.js?__asset=` + revision + `');`,
+	} {
+		if !strings.Contains(response.Body.String(), expected) {
+			t.Fatalf("missing rewritten import %q in %s", expected, response.Body.String())
+		}
+	}
+	for _, unchanged := range []string{
+		`import('https://example.test/jobs.js?existing=1')`,
+		`import '//example.test/jobs.js';`,
+		`import 'package/jobs.js';`,
+		`import './missing.js';`,
+		`import './.private.js';`,
+		`const text = "import './jobs.js'";`,
+		"const template = `import './jobs.js'`;",
+		`const expression = /import\('.\/jobs.js'\)/;`,
+		`// import './jobs.js';`,
+		`/* export * from './jobs.js'; */`,
+		`object.import('./jobs.js');`,
+	} {
+		if !strings.Contains(response.Body.String(), unchanged) {
+			t.Fatalf("non-module or unpublished specifier changed: %q", unchanged)
+		}
+	}
+	nested := get(handler, "/dist/nested/extra.js?__asset="+revision)
+	if !strings.Contains(nested.Body.String(), `import '../jobs.js?__asset=`+revision) || !strings.Contains(nested.Body.String(), `from '/dist/api.js?flag&__asset=`+revision) {
+		t.Fatalf("nested/root reexports not versioned: %s", nested.Body.String())
+	}
+	jobs := get(handler, "/dist/jobs.js?__asset="+revision)
+	if !strings.Contains(jobs.Body.String(), `from './app.js?__asset=`+revision) {
+		t.Fatal("cyclic import must use the same graph revision")
+	}
+	if duplicate := get(newStaticHandler(dir), "/dist/app.js"); duplicate.Body.String() != response.Body.String() || duplicate.Header().Get("ETag") != response.Header().Get("ETag") {
+		t.Fatal("graph revision changed without a build output change")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "dist", "jobs.js"), []byte(`export const job = 2;`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	updated := get(newStaticHandler(dir), "/dist/app.js?v=release")
+	if updated.Body.String() == response.Body.String() || updated.Header().Get("ETag") == response.Header().Get("ETag") || strings.Contains(updated.Body.String(), "__asset="+revision) {
+		t.Fatal("dependency-only changes must invalidate entry module imports and ETag")
+	}
+	if updated.Header().Get("Last-Modified") != "" {
+		t.Fatal("an entry module's own mtime cannot validate a graph-derived representation")
+	}
+	modifiedSince := httptest.NewRequest(http.MethodGet, "/dist/app.js?v=release", nil)
+	modifiedSince.Header.Set("If-Modified-Since", "Sat, 31 Oct 2026 09:00:00 GMT")
+	graphResponse := httptest.NewRecorder()
+	newStaticHandler(dir).ServeHTTP(graphResponse, modifiedSince)
+	if graphResponse.Code != http.StatusOK || graphResponse.Body.String() != updated.Body.String() {
+		t.Fatal("legacy Last-Modified cache must not hide a dependency-only change")
+	}
+	request := httptest.NewRequest(http.MethodGet, "/dist/app.js?v=release", nil)
+	request.Header.Set("Accept-Encoding", "gzip")
+	compressed := httptest.NewRecorder()
+	handler.ServeHTTP(compressed, request)
+	zr, err := gzip.NewReader(bytes.NewReader(compressed.Body.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := io.ReadAll(zr)
+	_ = zr.Close()
+	if err != nil || !bytes.Equal(decoded, response.Body.Bytes()) || compressed.Header().Get("ETag") == response.Header().Get("ETag") {
+		t.Fatal("gzip/variant ETag must describe the rewritten module graph")
+	}
+	request.Header.Set("If-None-Match", compressed.Header().Get("ETag"))
+	conditional := httptest.NewRecorder()
+	handler.ServeHTTP(conditional, request)
+	if conditional.Code != http.StatusNotModified || conditional.Body.Len() != 0 {
+		t.Fatalf("rewritten gzip conditional response = %d", conditional.Code)
+	}
+	request = httptest.NewRequest(http.MethodGet, "/dist/.private.js?__asset="+revision, nil)
+	private := httptest.NewRecorder()
+	handler.ServeHTTP(private, request)
+	if private.Code != http.StatusNotFound {
+		t.Fatal("module versioning exposed an unpublished file")
 	}
 }
 
