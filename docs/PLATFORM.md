@@ -25,6 +25,7 @@
 | POST | `/api/auth/login` | 校验头歌账号并自动建档；只接受 `login`、`password` |
 | GET | `/api/auth/me` | 返回本人公开头歌资料与平台 `id / tenant_id / role / status` |
 | POST | `/api/auth/logout` | 删除当前站内会话并清 Cookie |
+| GET | `/api/question-bank/summary` | 已登录用户可读的全站已验证题库计数，仅返回客观题、编程题和合计 |
 | GET | `/api/avatar` | 当前用户头像，固定官方来源与内存缓存 |
 | GET | `/api/courses` | 本人课堂，默认 `status=processing` |
 | GET | `/api/courses/:course/homeworks` | 所选课堂作业摘要 |
@@ -57,6 +58,14 @@
 普通用户收到专门投影后的服务摘要，不返回模型次数、成本、预算、内部错误码、原始 events、模型原文或上游响应。需要管理员处理的状态不能被当作已通过；用户无需自行调模型或判断自测错误。具体执行机制见 [async-jobs.md](async-jobs.md)。
 
 课程卡片的作业数是上游课堂作业总数，不代表待完成关卡数。只有打开一门课堂的作业详情时，服务才读取最多 100 份作业的关卡进度，最多 4 个并发读取，并设 12 秒总时限。完整且唯一的进度清单核验成功后返回 `requiredProgressKnown=true`、`requiredChallengeCount`、`finishedRequiredChallengeCount`；必做分母不含选做，全为选做的作业从详情列表排除。进度缺失、不完整、读取失败或超时不会回退到原始总关数猜测完成率，用户看到“安排时核验必做进度”。原始 `challengeCount` / `finishedChallengeCount` 字段仅为兼容保留，不作为必做完成判断。
+
+## 题库概况
+
+用户端左侧栏底部、移动端主内容下方展示题库汇总及服务说明，课程页和完成进度页均保留入口。点击《用户准则》沿用登录页弹窗，关闭后焦点返回对应入口。该区域没有题干、答案、代码、个人任务、模型费用或额度，也不将总量当作课程覆盖率或成绩承诺。
+
+`GET /api/question-bank/summary` 复用当前会话、账号状态与同源校验，只返回 `verified_objective_questions`、`verified_programming_problems`、`total_verified_questions` 三个非负整数。客观题仅统计资源证据完整且存在已核验答案的独立 `question_key`；编程题统计当前仍符合正式完整通过、保存/提交哈希绑定条件的独立 `revision_hash`，同题多候选或执行契约不重复。历史整份客观题批次快照不直接换算成单题数。合计严格等于两项之和。
+
+服务端使用一次只读聚合查询，最多缓存 60 秒；缓存命中也重新核验当前账号。查询预算 3 秒，未配置或读取失败返回 503；真实空库才返回 0。浏览器会话内一分钟最多自动读取一次，并提供手动刷新入口；失败显示“题库概况暂未同步”，不把错误伪装为零。退出账号会清空概况并丢弃过期响应。
 
 ## 管理员与管理 API
 

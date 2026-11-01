@@ -72,3 +72,7 @@ v0.1.20 的生产结果曾读到 68 作业但 0 关卡：56 个满分作业没�
 已检查 HAR 的 homework_commons 列表、header_info、student_works、作业详情和 shixun_challenge_data。列表/详情/header 提供 myshixun 与作业标识，student_works 提供数字 myshixun ID，但都不能直接当 game。公开编译资源中的 `student_works/{work}/query_game_url.json` 为查看学生代码入口，学生本人真实请求返回 API 403，因此未将其加入采集白名单。`myshixuns/{identifier}/challenges.json` 的 GET 服务调用、默认 GET helper 和 runtime 参数来源均已核实，学生请求返回既有 game 列表。没有启用 start/active/reset/version_delete 等有副作用 GET。
 
 真实读取样本和响应保存在忽略目录 `artifacts/collection-locator/`，不提交账号、HAR、响应或数据库。真实课程样本读取12项作业、63个满分关卡，全部63个通过只读清单定位；其中31个代码关卡读到31份当前文件，仍因缺少已提交源码绑定跳过。32个客观题关卡读到324道题目及已提交作答；5关含图片，保持内容证据门槛跳过，其余27关的272个文字题答案已按满分答卷核验写入全新空题库。最终失败数0、未触及限制，已核对数据库272条独立已验证答案和0条编程解答。该样本不是生产截图的68作业账号；不能将其统计冒充该账号重扫结果。完整分项数据见本地采集报告。未调用模型或重新提交、评测。
+
+## 用户端题库数量
+
+用户端题库概况来自已登录只读汇总 `/api/question-bank/summary`。它计量已核验可复用的独立题目，不累加采集尝试、新增与重复计数，不把历史整批客观题快照当作单题数。编程题同一内容版本的多个候选和执行契约只计一次；正式通过被后续失败证据撤销后不计入。汇总只含三项数量，不提供题干、答案、用户身份或费用；具体准入与缓存行为见 [PLATFORM.md](PLATFORM.md)。

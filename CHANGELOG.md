@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.48 - 2026-11-02
+
+- Add verified question bank summary and service notes to the user sidebar
+
 ## 0.1.47 - 2026-11-02
 
 - Retire access cards and add clear login user guidelines with data reuse disclosure

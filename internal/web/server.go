@@ -91,14 +91,15 @@ func LoadConfig() (Config, error) {
 type ClientFactory func(baseURL string) EducoderClient
 
 type Server struct {
-	config      Config
-	store       *SessionStore
-	factory     ClientFactory
-	static      http.Handler
-	avatars     *avatar.Service
-	jobs        *JobRuntime
-	platform    *platform.Store
-	loginLimits *loginLimiter
+	config              Config
+	store               *SessionStore
+	factory             ClientFactory
+	static              http.Handler
+	avatars             *avatar.Service
+	jobs                *JobRuntime
+	platform            *platform.Store
+	loginLimits         *loginLimiter
+	questionBankSummary questionBankSummaryCache
 }
 
 func NewServer(config Config) *Server {
@@ -212,6 +213,10 @@ func validOrigin(origin string) bool {
 }
 
 func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request, requestID string) {
+	if r.URL.Path == "/api/question-bank/summary" {
+		s.handleQuestionBankSummary(w, r, requestID)
+		return
+	}
 	if strings.HasPrefix(r.URL.Path, "/api/admin/") {
 		s.handleAdmin(w, r, requestID)
 		return

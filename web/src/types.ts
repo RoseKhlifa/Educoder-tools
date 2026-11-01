@@ -36,6 +36,12 @@ export interface Course {
   ended?: boolean;
 }
 
+export interface QuestionBankSummary {
+  verified_objective_questions: number;
+  verified_programming_problems: number;
+  total_verified_questions: number;
+}
+
 export interface Homework {
   id: number;
   name: string;

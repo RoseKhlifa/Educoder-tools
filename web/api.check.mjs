@@ -5,6 +5,43 @@ import { ApiRequestError, BrowserApi } from './dist/api.js';
 const envelope = (data, status = 200) => new Response(JSON.stringify({ data, error: null, requestId: 'test-request' }), { status });
 
 await test('browser API uses the Go workbench contract', async t => {
+  await t.test('question-bank summary uses authenticated read-only counts and retains genuine zeroes', async () => {
+    let request;
+    const summary = { verified_objective_questions: 0, verified_programming_problems: 19, total_verified_questions: 19 };
+    globalThis.fetch = async (url, options) => {
+      request = { url, options };
+      return envelope({ ...summary, questions: ['not part of this public contract'], owner: 'private-owner', answers: ['private-answer'] });
+    };
+    assert.deepEqual(await new BrowserApi().questionBankSummary(), summary);
+    assert.equal(request.url, '/api/question-bank/summary');
+    assert.equal(request.options.credentials, 'include');
+    assert.equal(request.options.body, undefined);
+    assert.ok(request.options.method === undefined || request.options.method === 'GET');
+    globalThis.fetch = async () => envelope({ verified_objective_questions: 0, verified_programming_problems: 0, total_verified_questions: 0 });
+    assert.deepEqual(await new BrowserApi().questionBankSummary(), { verified_objective_questions: 0, verified_programming_problems: 0, total_verified_questions: 0 });
+  });
+  await t.test('question-bank summary rejects missing, coerced, negative, fractional, unsafe or inconsistent counts', async () => {
+    const valid = { verified_objective_questions: 2, verified_programming_problems: 3, total_verified_questions: 5 };
+    const invalid = [null, [], {}, { ...valid, verified_objective_questions: undefined },
+      { ...valid, verified_objective_questions: '2' }, { ...valid, verified_programming_problems: null },
+      { ...valid, verified_objective_questions: -1 }, { ...valid, verified_objective_questions: 2.5 },
+      { ...valid, total_verified_questions: Number.MAX_SAFE_INTEGER + 1 },
+      { ...valid, total_verified_questions: 0 },
+      { verified_objective_questions: Number.MAX_SAFE_INTEGER, verified_programming_problems: 1, total_verified_questions: Number.MAX_SAFE_INTEGER },
+    ];
+    for (const value of invalid) {
+      globalThis.fetch = async () => envelope(value);
+      await assert.rejects(new BrowserApi().questionBankSummary(), error => error instanceof ApiRequestError && error.code === 'INVALID_RESPONSE' && !error.isSessionExpired, JSON.stringify(value));
+    }
+  });
+  await t.test('question-bank failures preserve authentication and availability errors instead of showing zero counts', async () => {
+    globalThis.fetch = async () => new Response(JSON.stringify({ data: null, error: { code: 'UNAUTHENTICATED', message: '请先登录' } }), { status: 401 });
+    await assert.rejects(new BrowserApi().questionBankSummary(), error => error instanceof ApiRequestError && error.isSessionExpired);
+    globalThis.fetch = async () => new Response(JSON.stringify({ data: null, error: { code: 'QUESTION_BANK_UNAVAILABLE', message: '题库暂时不可用' } }), { status: 503 });
+    await assert.rejects(new BrowserApi().questionBankSummary(), error => error instanceof ApiRequestError && error.status === 503 && error.code === 'QUESTION_BANK_UNAVAILABLE' && !error.isSessionExpired);
+    globalThis.fetch = async () => new Response('<html>proxy error</html>');
+    await assert.rejects(new BrowserApi().questionBankSummary(), error => error instanceof ApiRequestError && error.code === 'INVALID_RESPONSE');
+  });
   await t.test('exam catalog keeps explicit submission and grade evidence without treating hidden or missing scores as published', async () => {
     let requested;
     globalThis.fetch = async url => { requested = url; return envelope({ items: [

@@ -8,6 +8,7 @@ import type {
   Homework,
   JobList,
   JobRequest,
+  QuestionBankSummary,
   User,
 } from './types.js';
 
@@ -101,6 +102,19 @@ function normalizeCourse(value: unknown): Course {
   };
 }
 
+function normalizeQuestionBankSummary(value: unknown): QuestionBankSummary {
+  const item = asRecord(value);
+  const objective = item.verified_objective_questions;
+  const programming = item.verified_programming_problems;
+  const total = item.total_verified_questions;
+  const validCount = (count: unknown): count is number => typeof count === 'number' && Number.isSafeInteger(count) && count >= 0;
+  if (!validCount(objective) || !validCount(programming) || !validCount(total)
+    || !Number.isSafeInteger(objective + programming) || total !== objective + programming) {
+    throw new ApiRequestError('题库概况暂时不可用，请稍后重试', 200, 'INVALID_RESPONSE');
+  }
+  return { verified_objective_questions: objective, verified_programming_problems: programming, total_verified_questions: total };
+}
+
 function normalizeHomework(value: unknown): Homework {
   const item = asRecord(value);
   const statusValue = item.status;
@@ -182,6 +196,7 @@ export interface EducoderApi {
   me(): Promise<User>;
   logout(): Promise<void>;
   courses(): Promise<Course[]>;
+  questionBankSummary(): Promise<QuestionBankSummary>;
   homeworks(courseIdentifier: string): Promise<Homework[]>;
   exercises(courseIdentifier: string): Promise<{ items: Exercise[]; courseIdentifier?: string }>;
   enter(courseIdentifier: string, homeworkId: number): Promise<EnteredTask>;
@@ -232,6 +247,10 @@ export class BrowserApi implements EducoderApi {
     const payload = asRecord(raw);
     const rows = Array.isArray(raw) ? raw : (Array.isArray(payload.courses) ? payload.courses : Array.isArray(payload.items) ? payload.items : []);
     return rows.map(normalizeCourse).filter(course => course.identifier);
+  }
+
+  async questionBankSummary(): Promise<QuestionBankSummary> {
+    return normalizeQuestionBankSummary(await this.request<unknown>('/api/question-bank/summary'));
   }
 
   async homeworks(courseIdentifier: string): Promise<Homework[]> {

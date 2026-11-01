@@ -3,7 +3,7 @@ import { partitionAdminJobs, renderAdmin, renderAdminJobDetail, type AdminPage, 
 import { currentServiceJobs, jobProgress, jobTitle, pendingJob, renderJobs, renderServiceDetail, serviceJob, serviceLabels, serviceStatus } from './jobs.js';
 import { count, escapeHtml as e, icon } from './ui.js';
 import { renderUserGuidelines } from './guidelines.js';
-import type { AnswerJob, Course, Exercise, Homework, User } from './types.js';
+import type { AnswerJob, Course, Exercise, Homework, User, QuestionBankSummary } from './types.js';
 
 const root = document.querySelector<HTMLDivElement>('#app');
 if (!root) throw new Error('Missing application root');
@@ -13,7 +13,7 @@ const state = {
   user: null as User | null, page: 'courses' as Page, courses: [] as Course[], jobs: [] as AnswerJob[],
   selected: [] as string[], loading: false, signingIn: false, creating: false, notice: '', loginError: '', search: '',
   modal: '' as string, modalKind: '' as '' | 'guidelines', modalAction: null as (() => Promise<void> | void) | null,
-  progressHistoryOpen: false,
+  progressHistoryOpen: false, questionBank: null as QuestionBankSummary | null, bankLoading: false, bankUnavailable: false,
   admin: { overview: {}, users: [], jobs: [], audit: [], loading: false, error: false, jobsView: 'current', jobsKind: 'service' } as AdminState,
 };
 let generation = 0;
@@ -21,6 +21,9 @@ let jobsRevision = 0;
 let coursesRevision = 0;
 let adminRevision = 0;
 let modalRevision = 0;
+let bankRevision = 0;
+let bankLoadedAt = 0;
+let guidelinesSource = 'login';
 let pollTimer: ReturnType<typeof setTimeout> | undefined;
 let previousFocus: HTMLElement | null = null;
 let courseDialog: { course: Course; homeworks: Homework[]; exercises: Exercise[] | null; tab: 'homework' | 'exercise' } | null = null;
@@ -29,8 +32,8 @@ const accessible = (): boolean => state.user?.service_access !== false && state.
 const activeJobs = (): AnswerJob[] => state.jobs.filter(job => serviceJob(job) && pendingJob(job));
 function stopPoll(): void { if (pollTimer !== undefined) clearTimeout(pollTimer); pollTimer = undefined; }
 function resetSession(message = ''): void {
-  generation++; jobsRevision++; coursesRevision++; adminRevision++; modalRevision++; stopPoll(); courseDialog = null;
-  Object.assign(state, { user: null, page: 'courses', courses: [], jobs: [], selected: [], loading: false, signingIn: false, creating: false, notice: '', loginError: message, modal: '', modalKind: '', modalAction: null, search: '', progressHistoryOpen: false, admin: { overview: {}, users: [], jobs: [], audit: [], loading: false, error: false, userSearch: '', userFilter: 'all' } });
+  generation++; jobsRevision++; coursesRevision++; adminRevision++; modalRevision++; bankRevision++; bankLoadedAt = 0; guidelinesSource = 'login'; stopPoll(); courseDialog = null;
+  Object.assign(state, { user: null, page: 'courses', courses: [], jobs: [], selected: [], loading: false, signingIn: false, creating: false, notice: '', loginError: message, modal: '', modalKind: '', modalAction: null, search: '', progressHistoryOpen: false, questionBank: null, bankLoading: false, bankUnavailable: false, admin: { overview: {}, users: [], jobs: [], audit: [], loading: false, error: false, userSearch: '', userFilter: 'all' } });
   render();
 }
 function handleError(error: unknown): boolean {
@@ -38,16 +41,20 @@ function handleError(error: unknown): boolean {
   return false;
 }
 function brandLogo(): string {
-  return '<img class="brand-logo" src="/assets/brand-logo.png?v=0.1.47" alt="头歌妈妈" width="40" height="40" decoding="async">';
+  return '<img class="brand-logo" src="/assets/brand-logo.png?v=0.1.48" alt="头歌妈妈" width="40" height="40" decoding="async">';
 }
 
 function avatar(): string {
   return state.user?.avatarUrl ? `<img class="avatar" src="${e(state.user.avatarUrl)}" alt="个人头像" data-avatar>` : `<span class="avatar">${e(state.user?.name.slice(0, 1) || '同')}</span>`;
 }
 function renderLogin(): string {
-  return `<main id="view-login" class="login login-page"><aside class="login-brand" aria-label="品牌介绍"><div class="brand-mark">${brandLogo()}<div class="mark-text"><strong>头歌妈妈</strong><span>touge.mom</span></div></div><div class="login-brand-copy"><span class="login-kicker">头歌平台服务</span><h1>选好课程，<br>剩下交给我们。</h1><p class="lede">登录你的头歌账号，选择需要完成的课程。每一步进度，回来就能看见。</p><div class="brand-points"><ul><li><span class="dot">1</span><span>选择课程，或一键安排全部未完成作业</span></li><li><span class="dot">2</span><span>后台持续处理，关闭页面也不会中断</span></li><li><span class="dot">3</span><span>随时查看课程与作业完成进度</span></li></ul></div></div><p class="login-foot">你的头歌账号，就是这里的账号。</p></aside><section class="login-panel"><div class="login-panel-inner"><div class="login-kicker">TOUGE.MOM</div><h2>登录头歌妈妈</h2><p class="sub">使用头歌账号进入，无需额外注册。</p><form class="login-card" id="login-form"><div class="field"><label for="login">头歌账号</label><input id="login" name="login" autocomplete="username" placeholder="手机号 / 邮箱 / 学号" required maxlength="120"></div><div class="field"><label for="password">头歌密码</label><input id="password" name="password" type="password" autocomplete="current-password" placeholder="输入头歌密码" required maxlength="512"></div>${state.loginError ? `<div class="form-feedback" role="alert">${e(state.loginError)}</div>` : ''}<button class="btn-primary button primary full" type="submit" ${state.signingIn ? 'disabled' : ''}>${state.signingIn ? '正在登录…' : '登录并进入'}</button></form><p class="login-guidelines">登录前请阅读<button class="guidelines-link" type="button" data-action="user-guidelines">《用户准则》</button>。<span>平台会收集做题数据，用于题目与答案复用。</span></p></div></section></main>`;
+  return `<main id="view-login" class="login login-page"><aside class="login-brand" aria-label="品牌介绍"><div class="brand-mark">${brandLogo()}<div class="mark-text"><strong>头歌妈妈</strong><span>touge.mom</span></div></div><div class="login-brand-copy"><span class="login-kicker">头歌平台服务</span><h1>选好课程，<br>剩下交给我们。</h1><p class="lede">登录你的头歌账号，选择需要完成的课程。每一步进度，回来就能看见。</p><div class="brand-points"><ul><li><span class="dot">1</span><span>选择课程，或一键安排全部未完成作业</span></li><li><span class="dot">2</span><span>后台持续处理，关闭页面也不会中断</span></li><li><span class="dot">3</span><span>随时查看课程与作业完成进度</span></li></ul></div></div><p class="login-foot">你的头歌账号，就是这里的账号。</p></aside><section class="login-panel"><div class="login-panel-inner"><div class="login-kicker">TOUGE.MOM</div><h2>登录头歌妈妈</h2><p class="sub">使用头歌账号进入，无需额外注册。</p><form class="login-card" id="login-form"><div class="field"><label for="login">头歌账号</label><input id="login" name="login" autocomplete="username" placeholder="手机号 / 邮箱 / 学号" required maxlength="120"></div><div class="field"><label for="password">头歌密码</label><input id="password" name="password" type="password" autocomplete="current-password" placeholder="输入头歌密码" required maxlength="512"></div>${state.loginError ? `<div class="form-feedback" role="alert">${e(state.loginError)}</div>` : ''}<button class="btn-primary button primary full" type="submit" ${state.signingIn ? 'disabled' : ''}>${state.signingIn ? '正在登录…' : '登录并进入'}</button></form><p class="login-guidelines">登录前请阅读<button class="guidelines-link" type="button" data-action="user-guidelines" data-guidelines-source="login">《用户准则》</button>。<span>平台会收集做题数据，用于题目与答案复用。</span></p></div></section></main>`;
 }
 function navItem(page: Page, label: string, name: string): string { return `<button class="nav-link nav-item ${state.page === page ? 'active' : ''}" data-nav="${page}" ${state.page === page ? 'aria-current="page"' : ''}>${icon(name)}<span>${label}</span></button>`; }
+function renderQuestionBank(placement: 'sidebar' | 'mobile'): string {
+  const summary = state.questionBank;
+  return `<section class="side-card question-bank-card" aria-label="题库概况"><div class="bank-card-heading"><h3>题库概况</h3><button class="bank-refresh" type="button" data-action="bank-refresh" aria-label="刷新题库概况" ${state.bankLoading ? 'disabled' : ''}>${icon('refresh')}</button></div>${summary ? `<p class="bank-total"><strong>${summary.total_verified_questions.toLocaleString('zh-CN')}</strong><span>道已验证题目</span></p><dl class="bank-counts"><div><dt>客观题</dt><dd>${summary.verified_objective_questions.toLocaleString('zh-CN')}</dd></div><div><dt>编程题</dt><dd>${summary.verified_programming_problems.toLocaleString('zh-CN')}</dd></div></dl><p class="bank-count-note">按题目内容去重，约每分钟更新。</p>` : `<p class="bank-empty" role="status">${state.bankUnavailable ? '题库概况暂未同步' : '正在同步题库概况…'}</p>`}<p class="bank-reuse-note">复用已核验的题目与答案，减少重复计算。题库数量不代表课程覆盖率。</p><div class="bank-service-notice"><p>本站为独立服务；结果以头歌为准，不承诺成绩或完成时限。</p><button class="guidelines-link" type="button" data-action="user-guidelines" data-guidelines-source="${placement}">用户准则与数据说明 ${icon('arrow')}</button></div></section>`;
+}
 function renderShell(): string {
   const admin = state.page.startsWith('admin-') && isAdmin();
   const consumerLinks = `${navItem('courses', '我的课程', 'courses')}${navItem('progress', '完成进度', 'progress')}${isAdmin() ? navItem('admin-overview', '管理后台', 'overview') : ''}`;
@@ -59,7 +66,7 @@ function renderShell(): string {
   const current = currentServiceJobs(state.jobs);
   const active = current.filter(pendingJob).length;
   const completed = current.filter(job => serviceStatus(job) === 'completed').length;
-  return `<div id="view-app" class="app-shell ${admin ? 'admin-app' : 'consumer-app'}"><header class="global-nav topbar ${admin ? 'admin-topbar' : ''}"><div class="top-left"><button class="nav-brand" type="button" data-nav="${admin ? 'admin-overview' : 'courses'}" aria-label="头歌妈妈首页">${brandLogo()}<span class="name">头歌妈妈</span><span class="domain">touge.mom</span></button>${admin ? '<span class="admin-chip">服务管理</span>' : ''}</div><nav class="nav-links" aria-label="${admin ? '管理员导航' : '主导航'}">${links}</nav><div class="nav-user"><span class="connection"><i></i>${admin ? '管理会话' : '头歌已连接'}</span>${avatar()}<span class="user-name">${e(state.user?.name || '同学')}</span><button class="icon-button" data-action="logout" aria-label="退出登录" title="退出登录">${icon('logout')}</button></div></header><div class="mobile-nav">${links}${isAdmin() ? navItem(admin ? 'courses' : 'admin-overview', admin ? '用户端' : '管理后台', admin ? 'courses' : 'overview') : ''}</div><div class="${admin ? 'shell admin-shell' : 'workspace consumer-workspace'}">${admin ? `<aside class="side admin-side" aria-label="管理员导航"><div class="side-label">服务管理</div><nav class="side-nav">${adminSideLinks}</nav><div class="side-foot"><p class="t">服务工作台</p><p>异常与执行记录只在管理端查看，用户端只展示完成进度。</p><button class="btn ghost text-button" data-nav="courses">${icon('courses')}返回用户端</button></div></aside>` : `<aside class="side consumer-side" aria-label="侧栏概况"><div class="side-card"><h3>当前概况</h3><div class="stat-row"><span class="l">我的课程</span><span class="n">${state.courses.length}</span></div><div class="stat-row"><span class="l">已选中</span><span class="n">${selectedCount}</span></div><div class="stat-row"><span class="l">处理中</span><span class="n">${active}</span></div><div class="stat-row"><span class="l">已完成安排</span><span class="n">${completed}</span></div></div><div class="side-card"><h3>服务状态</h3><span class="side-pill"><i></i> 头歌账号已连接</span><p class="side-note">你只需要选择课程并查看进度，其他事情交给服务人员。</p></div><div class="side-card state-legend"><h3>状态图例</h3><div><span class="badge waiting">待安排</span><span class="badge processing">处理中</span><span class="badge completed">已完成</span></div></div></aside>`}<main class="main ${admin ? 'admin-main' : 'consumer-main'}">${state.notice ? `<div class="service-notice" role="status">${e(state.notice)}</div>` : ''}${admin ? renderAdmin(state.page.replace('admin-', '') as AdminPage, state.admin) : state.page === 'courses' ? renderCourses() : renderProgress()}<footer class="page-footer">头歌妈妈 · 把安排交给我们</footer></main></div></div>`;
+  return `<div id="view-app" class="app-shell ${admin ? 'admin-app' : 'consumer-app'}"><header class="global-nav topbar ${admin ? 'admin-topbar' : ''}"><div class="top-left"><button class="nav-brand" type="button" data-nav="${admin ? 'admin-overview' : 'courses'}" aria-label="头歌妈妈首页">${brandLogo()}<span class="name">头歌妈妈</span><span class="domain">touge.mom</span></button>${admin ? '<span class="admin-chip">服务管理</span>' : ''}</div><nav class="nav-links" aria-label="${admin ? '管理员导航' : '主导航'}">${links}</nav><div class="nav-user"><span class="connection"><i></i>${admin ? '管理会话' : '头歌已连接'}</span>${avatar()}<span class="user-name">${e(state.user?.name || '同学')}</span><button class="icon-button" data-action="logout" aria-label="退出登录" title="退出登录">${icon('logout')}</button></div></header><div class="mobile-nav">${links}${isAdmin() ? navItem(admin ? 'courses' : 'admin-overview', admin ? '用户端' : '管理后台', admin ? 'courses' : 'overview') : ''}</div><div class="${admin ? 'shell admin-shell' : 'workspace consumer-workspace'}">${admin ? `<aside class="side admin-side" aria-label="管理员导航"><div class="side-label">服务管理</div><nav class="side-nav">${adminSideLinks}</nav><div class="side-foot"><p class="t">服务工作台</p><p>异常与执行记录只在管理端查看，用户端只展示完成进度。</p><button class="btn ghost text-button" data-nav="courses">${icon('courses')}返回用户端</button></div></aside>` : `<aside class="side consumer-side" aria-label="侧栏概况"><div class="side-card"><h3>当前概况</h3><div class="stat-row"><span class="l">我的课程</span><span class="n">${state.courses.length}</span></div><div class="stat-row"><span class="l">已选中</span><span class="n">${selectedCount}</span></div><div class="stat-row"><span class="l">处理中</span><span class="n">${active}</span></div><div class="stat-row"><span class="l">已完成安排</span><span class="n">${completed}</span></div></div><div class="side-card"><h3>服务状态</h3><span class="side-pill"><i></i> 头歌账号已连接</span><p class="side-note">你只需要选择课程并查看进度，其他事情交给服务人员。</p></div><div class="side-card state-legend"><h3>状态图例</h3><div><span class="badge waiting">待安排</span><span class="badge processing">处理中</span><span class="badge completed">已完成</span></div></div><div class="consumer-side-bottom">${renderQuestionBank('sidebar')}</div></aside>`}<main class="main ${admin ? 'admin-main' : 'consumer-main'}">${state.notice ? `<div class="service-notice" role="status">${e(state.notice)}</div>` : ''}${admin ? renderAdmin(state.page.replace('admin-', '') as AdminPage, state.admin) : state.page === 'courses' ? renderCourses() : renderProgress()}${admin ? '' : `<div class="bank-mobile">${renderQuestionBank('mobile')}</div>`}<footer class="page-footer">头歌妈妈 · 把安排交给我们</footer></main></div></div>`;
 }
 function courseService(course: string): AnswerJob | undefined {
   const matching = currentServiceJobs(state.jobs).filter(job => job.request.scope !== 'exercise' && (job.request.scope === 'all' || job.request.course === course));
@@ -147,12 +154,12 @@ function showModal(content: string, action: (() => Promise<void> | void) | null 
 function closeModal(): void {
   const guidelines = state.modalKind === 'guidelines';
   state.modal = ''; state.modalKind = ''; state.modalAction = null; modalRevision++; courseDialog = null; render();
-  if (guidelines) document.querySelector<HTMLButtonElement>('[data-action="user-guidelines"]')?.focus();
+  if (guidelines) document.querySelector<HTMLButtonElement>(`[data-guidelines-source="${guidelinesSource}"]`)?.focus();
   else if (previousFocus?.isConnected) previousFocus.focus();
 }
 function scheduleJobs(): void {
   stopPoll(); if (!state.user) return;
-  pollTimer = setTimeout(() => { pollTimer = undefined; void loadJobs(); }, activeJobs().length ? 3000 : 15000);
+  pollTimer = setTimeout(() => { pollTimer = undefined; void loadJobs(); void loadQuestionBank(); }, activeJobs().length ? 3000 : 15000);
 }
 async function loadJobs(): Promise<void> {
   if (!state.user) return; const revision = ++jobsRevision; const session = generation;
@@ -165,6 +172,22 @@ async function loadJobs(): Promise<void> {
     if (handleError(error)) return;
   }
   scheduleJobs();
+}
+async function loadQuestionBank(force = false): Promise<void> {
+  if (!state.user || state.bankLoading || !force && bankLoadedAt > 0 && Date.now() - bankLoadedAt < 60000) return;
+  const session = generation; const revision = ++bankRevision;
+  state.bankLoading = true; if (!state.modal) render();
+  try {
+    const summary = await api.questionBankSummary();
+    if (session !== generation || revision !== bankRevision) return;
+    state.questionBank = summary; state.bankUnavailable = false;
+  } catch (error) {
+    if (session !== generation || revision !== bankRevision) return;
+    if (handleError(error)) return;
+    state.questionBank = null; state.bankUnavailable = true;
+  }
+  if (session !== generation || revision !== bankRevision) return;
+  bankLoadedAt = Date.now(); state.bankLoading = false; if (!state.modal) render();
 }
 async function loadCourses(): Promise<void> {
   const revision = ++coursesRevision; const session = generation; state.loading = true; render();
@@ -190,7 +213,7 @@ async function login(event: Event): Promise<void> {
   try {
     const user = await api.login(account, password);
     if (session !== generation) return;
-    state.user = user; state.signingIn = false; render(); void loadJobs(); void loadCourses();
+    state.user = user; state.signingIn = false; render(); void loadJobs(); void loadCourses(); void loadQuestionBank();
   } catch (error) {
     if (session !== generation) return;
     const code = error instanceof ApiRequestError ? error.code : '';
@@ -363,7 +386,8 @@ function bindEvents(): void {
       case 'logout': void logout(); break;
       case 'refresh': void loadCourses(); break;
       case 'jobs-refresh': void loadJobs(); break;
-      case 'user-guidelines': showModal(renderUserGuidelines(), null, 'guidelines'); break;
+      case 'user-guidelines': guidelinesSource = button.dataset.guidelinesSource || 'login'; showModal(renderUserGuidelines(), null, 'guidelines'); break;
+      case 'bank-refresh': void loadQuestionBank(true); break;
       case 'admin-refresh': void loadAdmin(); break;
       case 'start-all': confirmStart(true); break;
       case 'start-selected': confirmStart(false); break;
@@ -394,7 +418,7 @@ document.addEventListener('keydown', event => {
 });
 async function restore(): Promise<void> {
   const session = generation;
-  try { const user = await api.me(); if (session !== generation) return; state.user = user; render(); void loadJobs(); void loadCourses(); }
+  try { const user = await api.me(); if (session !== generation) return; state.user = user; render(); void loadJobs(); void loadCourses(); void loadQuestionBank(); }
   catch { /* Keep the existing login form intact, including fields currently being entered. */ }
 }
 render(); void restore();

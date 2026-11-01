@@ -40,6 +40,7 @@ async function app(overrides={}) {
     if(url==='/api/auth/me'||url==='/api/auth/login')return ok({user,platform:{role:'user',status:'active'}});
     if(url==='/api/auth/logout')return ok({loggedOut:true});
     if(url==='/api/courses')return ok(courses);
+    if(url==='/api/question-bank/summary')return ok({verified_objective_questions:272,verified_programming_problems:8,total_verified_questions:280});
     if(url==='/api/jobs')return options.method==='POST'?ok(job({request:JSON.parse(options.body)})):ok({jobs:[]});
     if(url.endsWith('/homeworks'))return ok([{id:1,name:'测试作业',challengeCount:2,finishedChallengeCount:1,requiredProgressKnown:true,requiredChallengeCount:2,finishedRequiredChallengeCount:1}]);
     if(url.startsWith('/api/admin/'))return ok(url==='/api/admin/overview'?{total_users:3,running_jobs:1,capacity:{model_concurrency:8}}:{items:[]});
@@ -61,6 +62,36 @@ await test('consumer course service and administrator boundary',async t=>{
     assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
   });
 
+  await t.test('the sidebar shows only verified bank totals and keeps the guidelines reachable', async () => {
+    const page=await app();assert.match(page.html(), /题库概况/);assert.match(page.html(), /<strong>280<\/strong>/);
+    assert.match(page.html(), /<dt>客观题<\/dt><dd>272<\/dd>/);assert.match(page.html(), /<dt>编程题<\/dt><dd>8<\/dd>/);
+    assert.match(page.html(), /题库数量不代表课程覆盖率/);assert.match(page.html(), /不承诺成绩或完成时限/);
+    assert.match(page.html(), /class="bank-mobile"/);
+    const bankRequests=()=>page.requests.filter(item=>item.url==='/api/question-bank/summary');
+    assert.equal(bankRequests().length,1);await page.tick();assert.equal(bankRequests().length,1,'normal job polling must not rescan the bank before its refresh interval');
+    page.get('[data-action="bank-refresh"]').dispatch('click');await settle();assert.equal(bankRequests().length,2);
+    for(const source of ['sidebar','mobile']) {
+      page.get(`[data-guidelines-source="${source}"]`).dispatch('click');assert.match(page.html(), /平台会收集用户做题数据/);
+      page.document.listeners.get('keydown')({key:'Escape'});assert.doesNotMatch(page.html(), /role="dialog"/);
+      assert.equal(page.document.activeElement,page.get(`[data-guidelines-source="${source}"]`));
+    }
+    assert.equal(page.requests.some(item=>item.options.method==='POST'),false);
+  });
+  await t.test('unavailable or invalid bank counts never become a fabricated zero', async () => {
+    for(const response of [()=>failure(503,'QUESTION_BANK_UNAVAILABLE','private-bank-details'),()=>ok({verified_objective_questions:-1,verified_programming_problems:0,total_verified_questions:0})]) {
+      const page=await app({'/api/question-bank/summary':response});
+      const bank=page.html().split('aria-label="题库概况"')[1].split('</section>')[0];
+      assert.match(bank,/题库概况暂未同步/);assert.doesNotMatch(bank,/bank-total|private-bank-details/);
+    }
+    const empty=await app({'/api/question-bank/summary':()=>ok({verified_objective_questions:0,verified_programming_problems:0,total_verified_questions:0})});
+    assert.match(empty.html(), /bank-total"><strong>0<\/strong>/);assert.doesNotMatch(empty.html(), /题库概况暂未同步/);
+  });
+  await t.test('a bank response after logout never restores private account UI', async () => {
+    const late=deferred();const page=await app({'/api/question-bank/summary':()=>late.promise});
+    page.get('[data-action="logout"]').dispatch('click');late.resolve(ok({verified_objective_questions:900,verified_programming_problems:1,total_verified_questions:901}));await settle();
+    assert.match(page.html(), /id="login-form"/);assert.doesNotMatch(page.html(), /题库概况|901|课堂甲/);
+    assert.equal(page.timers.size,0);
+  });
   await t.test('loads only own courses and service progress, with no automatic task entry or admin request',async()=>{
     const page=await app();assert.match(page.html(),/课堂甲|课堂乙/);assert.match(page.html(),/&lt;测试同学&gt;/);assert.match(page.html(),/一键完成全部未完成作业/);assert.doesNotMatch(page.html(),/API额度|模型|Token|管理后台|自测|修复次数/);assert.equal(page.requests.some(item=>item.url.startsWith('/api/admin')||item.url.endsWith('/enter')),false);
     page.get('[data-avatar]').dispatch('error');assert.doesNotMatch(page.html(),/data-avatar/);
