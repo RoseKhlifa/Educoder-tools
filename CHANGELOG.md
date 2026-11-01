@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.46 - 2026-11-02
+
+- Make brand logo background transparent and remove white UI backplate
+
 ## 0.1.45 - 2026-11-01
 
 - Use supplied Touge Mom logo in login, user, admin and browser icons

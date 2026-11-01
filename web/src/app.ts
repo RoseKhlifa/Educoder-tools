@@ -37,7 +37,7 @@ function handleError(error: unknown): boolean {
   return false;
 }
 function brandLogo(): string {
-  return '<img class="brand-logo" src="/assets/brand-logo.png?v=0.1.45" alt="头歌妈妈" width="40" height="40" decoding="async">';
+  return '<img class="brand-logo" src="/assets/brand-logo.png?v=0.1.46" alt="头歌妈妈" width="40" height="40" decoding="async">';
 }
 
 function avatar(): string {

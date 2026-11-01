@@ -52,7 +52,7 @@ async function app(overrides={}) {
 await test('consumer course service and administrator boundary',async t=>{
   await t.test('the supplied first-party brand logo is shared by login, user and admin headers', async () => {
     const loginPage = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x') });
-    assert.match(loginPage.html(), /class="brand-logo" src="\/assets\/brand-logo\.png\?v=0\.1\.45" alt="头歌妈妈"/);
+    assert.match(loginPage.html(), /class="brand-logo" src="\/assets\/brand-logo\.png\?v=\d+\.\d+\.\d+" alt="头歌妈妈"/);
     assert.doesNotMatch(loginPage.html(), /class="mark-seal"/);
     const page = await app({ '/api/auth/me': () => ok({ user, platform: { role: 'admin', status: 'active' } }) });
     assert.match(page.html(), /class="brand-logo" src="\/assets\/brand-logo\.png/);

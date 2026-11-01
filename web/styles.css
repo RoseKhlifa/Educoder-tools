@@ -1642,7 +1642,7 @@ td { border-color:var(--line); }
 }
 
 /* One first-party brand asset across login, consumer and administration shells. */
-.brand-logo { display:block; object-fit:contain; flex:none; width:40px; height:40px; border-radius:9px; background:#fff; }
-.login-brand .brand-logo { width:56px; height:56px; border-radius:12px; }
+.brand-logo { display:block; object-fit:contain; flex:none; width:40px; height:40px; border-radius:0; background:transparent; }
+.login-brand .brand-logo { width:56px; height:56px; border-radius:0; }
 .global-nav .brand-logo { width:36px; height:36px; }
 @media (max-width:640px) { .global-nav .brand-logo { width:32px; height:32px; } .login-brand .brand-logo { width:44px; height:44px; } }
