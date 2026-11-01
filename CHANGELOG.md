@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.45 - 2026-11-01
+
+- Use supplied Touge Mom logo in login, user, admin and browser icons
+
 ## 0.1.44 - 2026-11-01
 
 - Adopt warm paper template UI for consumer and admin workspaces

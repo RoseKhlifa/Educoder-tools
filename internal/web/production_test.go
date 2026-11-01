@@ -100,6 +100,76 @@ func TestStaticHostPublishesOnlyBuildOutputs(t *testing.T) {
 	}
 }
 
+func TestStaticBrandLogoIsExplicitPublicAsset(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "assets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A compact PNG fixture includes binary bytes so encoding and compression
+	// assertions verify the resource body, not just a successful status code.
+	logo := []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x01\xff\x00brand-logo")
+	for name, body := range map[string][]byte{
+		"brand-logo.png": logo,
+		"private.png":    []byte("unrelated image must not leak"),
+		"recording.har":  []byte("recording must not leak"),
+		".env":           []byte("configuration must not leak"),
+	} {
+		if err := os.WriteFile(filepath.Join(dir, "assets", name), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := newStaticHandler(dir)
+	get := httptest.NewRecorder()
+	handler.ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/assets/brand-logo.png", nil))
+	if get.Code != http.StatusOK || get.Header().Get("Content-Type") != "image/png" || !bytes.Equal(get.Body.Bytes(), logo) {
+		t.Fatalf("public logo: status=%d type=%q body=%q", get.Code, get.Header().Get("Content-Type"), get.Body.Bytes())
+	}
+	etag := get.Header().Get("ETag")
+	if etag == "" || get.Header().Get("Cache-Control") != "no-cache" {
+		t.Fatalf("logo revalidation headers: %v", get.Header())
+	}
+	head := httptest.NewRecorder()
+	handler.ServeHTTP(head, httptest.NewRequest(http.MethodHead, "/assets/brand-logo.png", nil))
+	if head.Code != http.StatusOK || head.Body.Len() != 0 || head.Header().Get("Content-Type") != "image/png" || head.Header().Get("ETag") != etag || head.Header().Get("Content-Length") != get.Header().Get("Content-Length") {
+		t.Fatalf("logo HEAD: status=%d headers=%v bytes=%d", head.Code, head.Header(), head.Body.Len())
+	}
+	conditionalRequest := httptest.NewRequest(http.MethodGet, "/assets/brand-logo.png", nil)
+	conditionalRequest.Header.Set("If-None-Match", etag)
+	conditional := httptest.NewRecorder()
+	handler.ServeHTTP(conditional, conditionalRequest)
+	if conditional.Code != http.StatusNotModified || conditional.Body.Len() != 0 {
+		t.Fatalf("logo conditional GET: %d %q", conditional.Code, conditional.Body.Bytes())
+	}
+	compressedRequest := httptest.NewRequest(http.MethodGet, "/assets/brand-logo.png", nil)
+	compressedRequest.Header.Set("Accept-Encoding", "gzip")
+	compressed := httptest.NewRecorder()
+	handler.ServeHTTP(compressed, compressedRequest)
+	if compressed.Code != http.StatusOK || compressed.Header().Get("Content-Encoding") != "gzip" || compressed.Header().Get("Content-Type") != "image/png" {
+		t.Fatalf("compressed logo: status=%d headers=%v", compressed.Code, compressed.Header())
+	}
+	zr, err := gzip.NewReader(compressed.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := zr.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(decoded, logo) {
+		t.Fatalf("logo gzip changed binary content: %q", decoded)
+	}
+	for _, target := range []string{"/assets/", "/assets/private.png", "/assets/recording.har", "/assets/.env", "/assets/../assets/brand-logo.png", "/assets%5cbrand-logo.png"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))
+		if response.Code != http.StatusNotFound {
+			t.Fatalf("private or invalid asset %s returned %d", target, response.Code)
+		}
+	}
+}
+
 func TestStaticCompressionRevalidationHeadAndRanges(t *testing.T) {
 	dir := t.TempDir()
 	body := strings.Repeat("console.log('workbench');\n", 64)

@@ -43,6 +43,9 @@ func newStaticHandler(dir string) http.Handler {
 	}
 	load("index.html", "text/html; charset=utf-8")
 	load("styles.css", "text/css; charset=utf-8")
+	// Brand artwork is an explicit public asset, not a general assets directory.
+	// Unrelated files (including accidental recordings or credentials) stay private.
+	load("assets/brand-logo.png", "image/png")
 	dist := filepath.Join(dir, "dist")
 	// WalkDir never follows symlinks, including a dist symlink. This prevents
 	// accidentally packaging or serving files outside the public build tree.

@@ -22,6 +22,8 @@
 !web/
 !web/index.html
 !web/styles.css
+!web/assets/
+!web/assets/brand-logo.png
 !web/src/
 !web/src/**
 **/*_test.go

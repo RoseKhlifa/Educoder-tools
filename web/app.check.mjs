@@ -50,6 +50,18 @@ async function app(overrides={}) {
   return {requests,timers,document,html:()=>document.html,get(selector){const element=document.querySelector(selector);assert.ok(element,`Missing ${selector}`);return element;},async tick(){const tasks=[...timers.entries()];for(const[id,timer]of tasks){timers.delete(id);timer.handler();}await settle();}};
 }
 await test('consumer course service and administrator boundary',async t=>{
+  await t.test('the supplied first-party brand logo is shared by login, user and admin headers', async () => {
+    const loginPage = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x') });
+    assert.match(loginPage.html(), /class="brand-logo" src="\/assets\/brand-logo\.png\?v=0\.1\.45" alt="头歌妈妈"/);
+    assert.doesNotMatch(loginPage.html(), /class="mark-seal"/);
+    const page = await app({ '/api/auth/me': () => ok({ user, platform: { role: 'admin', status: 'active' } }) });
+    assert.match(page.html(), /class="brand-logo" src="\/assets\/brand-logo\.png/);
+    page.get('[data-nav="admin-overview"]').dispatch('click'); await settle();
+    assert.match(page.html(), /class="brand-logo" src="\/assets\/brand-logo\.png/);
+    assert.doesNotMatch(page.html(), /class="mark-seal"/);
+    assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
+  });
+
   await t.test('loads only own courses and service progress, with no automatic task entry or admin request',async()=>{
     const page=await app();assert.match(page.html(),/课堂甲|课堂乙/);assert.match(page.html(),/&lt;测试同学&gt;/);assert.match(page.html(),/一键完成全部未完成作业/);assert.doesNotMatch(page.html(),/API额度|模型|Token|管理后台|自测|修复次数/);assert.equal(page.requests.some(item=>item.url.startsWith('/api/admin')||item.url.endsWith('/enter')),false);
     page.get('[data-avatar]').dispatch('error');assert.doesNotMatch(page.html(),/data-avatar/);
