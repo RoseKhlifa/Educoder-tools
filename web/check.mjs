@@ -17,3 +17,4 @@ assert.equal(/https?:\/\/|@import|url\(/.test(`${html}\n${css}`), false, 'shell 
 console.log('web service static checks: PASS');
 await import('./api.check.mjs');
 await import('./app.check.mjs');
+await import('./admin.check.mjs');

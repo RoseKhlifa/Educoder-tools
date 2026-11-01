@@ -104,6 +104,15 @@ CREATE TABLE IF NOT EXISTS access_card_redemptions (
  redeemed_at TEXT NOT NULL, PRIMARY KEY(card_id,user_id)
 );
 CREATE INDEX IF NOT EXISTS platform_audit_created ON platform_audit(created_at);
+CREATE TABLE IF NOT EXISTS job_course_labels (
+ course_identifier TEXT PRIMARY KEY, name TEXT NOT NULL,
+ updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS job_homework_labels (
+ course_identifier TEXT NOT NULL, homework_id INTEGER NOT NULL CHECK(homework_id>0),
+ name TEXT NOT NULL, updated_at TEXT NOT NULL,
+ PRIMARY KEY(course_identifier,homework_id)
+);
 `
 
 func Open(path string, options Options) (*Store, error) {

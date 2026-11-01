@@ -51,7 +51,12 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, requestID s
 					return
 				}
 			}
-			s.writeJSON(w, requestID, 200, map[string]any{"items": items, "limit": 100})
+			views, err := s.adminJobResponses(r.Context(), items)
+			if err != nil {
+				s.adminError(w, requestID, err)
+				return
+			}
+			s.writeJSON(w, requestID, 200, map[string]any{"items": views, "limit": 100})
 		case "overview", "usage":
 			users, err := s.platform.Stats(r.Context())
 			if err != nil {
@@ -174,7 +179,12 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, requestID s
 			s.jobError(w, requestID, err)
 			return
 		}
-		s.writeJSON(w, requestID, 200, job)
+		views, err := s.adminJobResponses(r.Context(), []jobs.AdminRecord{job})
+		if err != nil {
+			s.adminError(w, requestID, err)
+			return
+		}
+		s.writeJSON(w, requestID, 200, views[0])
 		return
 	}
 	if len(parts) == 5 && parts[2] == "jobs" && parts[4] == "cancel" && r.Method == http.MethodPost {
@@ -196,7 +206,12 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, requestID s
 			s.jobError(w, requestID, err)
 			return
 		}
-		s.writeJSON(w, requestID, 200, jobs.AdminRecord{Job: canceled, OwnerID: job.OwnerID})
+		views, err := s.adminJobResponses(r.Context(), []jobs.AdminRecord{{Job: canceled, OwnerID: job.OwnerID}})
+		if err != nil {
+			s.adminError(w, requestID, err)
+			return
+		}
+		s.writeJSON(w, requestID, 200, views[0])
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/api/admin/") {

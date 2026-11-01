@@ -3,7 +3,79 @@ import { count, dateTime, escapeHtml as e, record } from './ui.js';
 import { jobProgress } from './jobs.js';
 export type AdminPage = 'overview' | 'users' | 'operations' | 'audit' | 'cards';
 export interface AdminState { overview: AdminOverview; users: AdminUser[]; jobs: AdminJob[]; audit: AdminAudit[]; cards: AccessCard[]; loading: boolean; error: boolean }
-const statusLabels: Record<string, string> = { queued: '等待安排', running: '执行中', succeeded: '已完成', failed: '需要处理', uncertain: '待核验', interrupted: '已中断', canceled: '已停止', active: '正常', disabled: '已暂停' };
+const statusLabels: Record<string, string> = { queued: '等待安排', running: '执行中', succeeded: '已完成', failed: '需要处理', uncertain: '待核验', interrupted: '已中断', canceled: '已停止', active: '正常', disabled: '已暂停', passed: '已通过', completed: '已完成', skipped: '已满分，已跳过', skipped_optional: '选做，已跳过', planned: '尚未开始', needs_service: '需要跟进', verification_unconfirmed: '待核验', processing: '执行中', support: '需要跟进', waiting: '等待安排', deadline_passed: '已截止' };
+const phaseLabels: Record<string, string> = { starting: '准备执行', preflight: '核对关卡清单', verified: '已核验当前结果', service_pending: '等待服务人员跟进', queued: '等待安排', loading: '读取课程与作业', loading_resources: '读取题目图片', preparing: '准备执行', collecting: '采集已验证题目', bank_lookup: '查询题库答案', bank_saved: '保存已验证答案', generating: '生成答案', answering: '生成答案', solving: '处理题目', validating: '校验答案格式', saving: '保存代码', selftesting: '执行自测', selftest: '执行自测', submitting: '提交答案', evaluating: '等待评测', polling: '读取评测结果', verifying: '核验完成状态', reconciling: '核对提交结果', repairing: '根据反馈修复', completed: '执行结束', failed: '执行结束，等待处理', canceled: '已停止', processing: '执行中', running: '执行中' };
+const reasonLabels: Record<string, string> = {
+  model_error: '模型服务调用失败', model_timeout: '模型响应超时', model_network_error: '模型服务连接失败', collection_stopped: '只读题库采集已停止，请查看采集统计和跳过原因', service_restarted: '服务重启中断了任务，需要核对已完成结果',
+  verification_unconfirmed: '头歌返回的完成或分值信息不足，尚未核验通过', submission_uncertain: '提交结果尚未确认，需要先读取头歌结果', attempts_exhausted: '已达到本次修复次数，仍未通过', budget_exhausted: '已达到本次任务费用上限', budget_unavailable: '执行预算暂不可用', selftest_failed: '代码自测未通过', selftest_connection_failed: '自测连接失败', selftest_stream_unconfirmed: '自测输出未完整确认', invalid_candidate: '生成的答案未满足提交要求', invalid_output_json: '模型返回内容格式不正确', model_response_invalid: '模型返回内容格式不正确', model_output_truncated: '模型返回内容被截断', model_rate_limited: '模型请求受到频率限制', execution_failed: '执行未完成，需要检查原始响应', unsupported_multifile: '当前作业的多文件结构尚未支持', unsupported_roster: '关卡清单不完整，暂停执行', unsupported_homework: '当前作业类型尚未支持', usage_persistence_failed: '执行用量保存失败', verification_persistence_failed: '完成核验结果保存失败', course_sync_failed: '课程列表读取失败', homework_sync_failed: '作业列表读取失败', course_identity_invalid: '课程标识不完整，暂停执行', homework_identity_invalid: '作业标识不完整，暂停执行', course_limit: '课程数量达到本次任务上限', homework_limit: '作业数量达到本次任务上限', deadline_passed: '作业已经截止', no_required_levels: '没有需要执行的必做关卡', collection_failed: '题库采集未完成，请检查采集明细', collect_failed: '题库采集未完成，请检查采集明细', request_byte_or_time_limit: '题库采集达到读取量或时间上限', limit_reached: '题库采集达到本次上限', service_required: '存在尚未完成的作业，需跟进', canceled: '管理员或用户已停止执行', interrupted: '服务重启中断了执行，需要核对已完成结果',
+};
+const text = (value: unknown): string => typeof value === 'string' ? value.trim() : '';
+const isAttention = (value: Record<string, unknown>): boolean => ['failed', 'uncertain', 'needs_service', 'verification_unconfirmed', 'interrupted', 'support'].includes(text(value.status)) || !!text(value.reason_code) && !['passed', 'skipped', 'completed', 'skipped_optional', 'deadline_passed'].includes(text(value.status));
+function resultChildren(value: Record<string, unknown>): Record<string, unknown>[] {
+  return (Array.isArray(value.homeworks) ? value.homeworks : Array.isArray(value.levels) ? value.levels : []).map(record);
+}
+function deepestIssue(data: Record<string, unknown>, depth = 0): Record<string, unknown> {
+  if (depth > 5) return data;
+  for (const child of resultChildren(data)) {
+    const nested = record(child.result);
+    if (isAttention(child) || isAttention(nested)) return deepestIssue({ ...child, ...nested }, depth + 1);
+  }
+  return data;
+}
+function readableReason(job: AdminJob): string {
+  const summary = job.context?.summary;
+  const contextCode = text(summary?.reason_code).toLowerCase();
+  if (contextCode === 'verification_unconfirmed' && Number(job.context?.level?.score) === 0 && Number(job.context?.level?.max_score) === 0 && text(job.context?.level?.max_score)) return '零分值关卡待核验，当前得分与满分均为 0';
+  if (contextCode && contextCode !== 'service_required' && reasonLabels[contextCode]) return reasonLabels[contextCode];
+  const supplied = text(summary?.reason || summary?.message);
+  if (supplied && (!contextCode || contextCode !== 'service_required')) return reasonLabels[supplied.toLowerCase()] || (/\p{Script=Han}/u.test(supplied) ? supplied : '执行未完成，请展开技术记录查看原始原因');
+  const issue = deepestIssue(record(job.result));
+  if (!text(issue.reason_code) && /\p{Script=Han}/u.test(job.message ?? '') && !/部分作业|整份作业尚未|需要服务人员处理/.test(job.message ?? '')) return job.message!;
+  const code = (text(issue.reason_code) || text(job.error_code)).toLowerCase();
+  if (reasonLabels[code]) return reasonLabels[code];
+  const diagnostics = Array.isArray(issue.diagnostics) ? issue.diagnostics.map(text).find(item => /\p{Script=Han}/u.test(item)) : '';
+  if (diagnostics) return diagnostics;
+  if (['succeeded', 'completed'].includes(job.status)) return job.request.mode === 'collect_verified' ? '已完成本次只读采集' : '必做内容已完成并核验';
+  if (['queued', 'waiting'].includes(job.status)) return '等待后台安排';
+  if (['running', 'processing'].includes(job.status)) return '后台正在执行';
+  if (job.status === 'canceled') return '本次执行已停止';
+  if (job.request.mode === 'collect_verified') return '题库采集未完成，请检查采集明细';
+  return /\p{Script=Han}/u.test(job.message ?? '') ? job.message! : '执行未完成，请展开技术记录查看原始原因';
+}
+function jobContext(job: AdminJob) {
+  const data = record(job.result), progress = record(job.progress), context = job.context;
+  const homeworks = resultChildren(data);
+  const currentHomework = homeworks.find(item => isAttention(item) || isAttention(record(item.result))) ?? homeworks.find(item => item.homework_id === progress.current_homework_id);
+  const batch = record(currentHomework?.result);
+  const issue = deepestIssue(batch);
+  return {
+    user: context?.user?.name || context?.user?.login || '用户名称待补充',
+    course: context?.course?.name || text(currentHomework?.course_name) || '课程名称待补充',
+    homework: context?.homework?.name || text(currentHomework?.title) || text(data.title) || '作业名称待补充',
+    level: context?.level?.title || text(issue.title) || text(batch.current_title) || text(progress.current_title),
+    position: context?.level?.position || count(issue.position) || count(batch.current_position) || count(progress.current_position),
+    attention: context?.summary?.attention_homeworks ?? homeworks.filter(item => isAttention(item) || isAttention(record(item.result))).map(item => ({ id: count(item.homework_id), name: text(item.title), course_name: text(item.course_name) })),
+    batch,
+  };
+}
+function progressLabel(job: AdminJob): string {
+  if (job.context?.summary?.progress_label) return job.context.summary.progress_label;
+  const data = record(job.result);
+  if (job.request.mode === 'collect_verified') {
+    const summary = record(data.collection ?? data.summary ?? data);
+    return `已采集 ${count(summary.collected)} 题 · 重复 ${count(summary.duplicates)} · 跳过 ${count(summary.skipped)}`;
+  }
+  const progress = jobProgress(job);
+  return progress.total ? `${progress.completed} / ${progress.total} ${progress.unit === '关' ? '个关卡' : progress.unit}` : '进度尚未获取';
+}
+function homeworkLabel(job: AdminJob, context: ReturnType<typeof jobContext>): string {
+  if (context.homework !== '作业名称待补充') return context.homework;
+  if (job.request.scope === 'course' || job.request.scope === 'all') {
+    if (['queued', 'waiting', 'running', 'processing'].includes(job.status)) return '等待同步作业';
+    return job.request.scope === 'all' ? '所有课程必做作业' : '课程全部必做作业';
+  }
+  return '作业名称未留存';
+}
 function metrics(data: AdminOverview, jobs: AdminJob[]): string {
   const capacity = record(record(data.capacity).jobs ?? data.capacity);
   const users = record(data.users);
@@ -12,13 +84,15 @@ function metrics(data: AdminOverview, jobs: AdminJob[]): string {
 }
 function adminJobRows(jobs: AdminJob[], limited = false): string {
   const rows = limited ? jobs.filter(job => ['failed', 'uncertain', 'interrupted'].includes(job.status)).slice(0, 10) : jobs;
-  return `<div class="table-scroll"><table><thead><tr><th>用户 / 作业</th><th>状态</th><th>已完成</th><th>原因</th><th>用量 / 记录费用</th><th>管理</th></tr></thead><tbody>${rows.map(job => {
+  return `<div class="table-scroll"><table class="admin-jobs-table"><thead><tr><th>用户</th><th>课程 / 任务范围</th><th>作业 / 当前关卡</th><th>状态 / 完成进度</th><th>具体原因</th><th>模型 / 记录费用</th><th>管理</th></tr></thead><tbody>${rows.map(job => {
     const data = record(job.result);
-    const progress = jobProgress(job);
-    const diagnostics = Array.isArray(data.diagnostics) ? data.diagnostics.filter(item => typeof item === 'string').join('；') : '';
-    const reason = job.message || job.error_code || diagnostics || '—';
-    return `<tr><td><strong>${e(job.request.scope === 'all' ? '全部课程' : job.request.course || '作业')}</strong><small>用户 ${e(job.owner_id ?? job.owner ?? '—')} / ${e(job.id.slice(0, 12))}</small></td><td><span class="badge ${job.status === 'succeeded' ? 'completed' : ['failed', 'uncertain', 'interrupted'].includes(job.status) ? 'support' : 'processing'}">${statusLabels[job.status] ?? '处理中'}</span></td><td>${progress.completed} / ${progress.total || '—'}</td><td class="reason-cell">${e(reason)}</td><td>${count(data.model_calls)} 次<br><small>$${(count(data.cost_micro_usd) / 1000000).toFixed(6)}</small></td><td><button class="text-button" data-admin-job-detail="${e(job.id)}">详情</button>${['queued', 'running'].includes(job.status) ? `<button class="text-button danger" data-admin-cancel="${e(job.id)}">停止</button>` : ''}</td></tr>`;
-  }).join('') || '<tr><td colspan="6"><div class="empty"><h3>暂无任务记录</h3><p>新的用户安排会显示在这里。</p></div></td></tr>'}</tbody></table></div>`;
+    const context = jobContext(job), collecting = job.request.mode === 'collect_verified';
+    const scope = collecting ? '题库采集 · 只读' : job.request.scope === 'all' ? '全部课程' : job.request.scope === 'course' ? '整门课程' : job.request.scope === 'current' ? '单个关卡' : '单份作业';
+    const work = collecting ? '采集已通过题目' : homeworkLabel(job, context);
+    const extra = !collecting && context.attention.length > 1 ? `<small class="admin-attention">另有 ${context.attention.length - 1} 份需跟进：${e(context.attention.slice(1).map(item => `${job.request.scope === 'all' && item.course_name ? item.course_name + ' · ' : ''}${item.name || '作业名称待补充'}`).join('；'))}</small>` : '';
+    const level = context.level ? `<small>${context.position ? `第 ${context.position} 关 · ` : ''}${e(context.level)}</small>` : '';
+    return `<tr><td class="admin-user-cell"><strong>${e(context.user)}</strong></td><td class="admin-course-cell"><strong>${e(collecting ? '全部已通过任务' : context.course)}</strong><small>${scope}</small></td><td class="admin-work-cell"><strong>${e(work)}</strong>${collecting ? '' : level}${extra}</td><td class="admin-progress-cell"><span class="badge ${job.status === 'succeeded' ? 'completed' : ['failed', 'uncertain', 'interrupted'].includes(job.status) ? 'support' : 'processing'}">${statusLabels[job.status] ?? '处理中'}</span><small>${e(progressLabel(job))}</small>${!collecting && count(context.batch.total_levels) && !job.context?.summary?.progress_label?.includes('当前作业') ? `<small>当前作业 ${count(context.batch.completed_levels)} / ${count(context.batch.total_levels)} 个关卡</small>` : ''}</td><td class="reason-cell">${e(readableReason(job))}</td><td class="admin-usage-cell">${count(data.model_calls)} 次<small>$${(count(data.cost_micro_usd) / 1000000).toFixed(6)}</small>${count(data.model_calls) === 0 && !collecting ? '<small>未调用模型</small>' : ''}</td><td><button class="text-button" data-admin-job-detail="${e(job.id)}">详情</button>${['queued', 'running'].includes(job.status) ? `<button class="text-button danger" data-admin-cancel="${e(job.id)}">停止</button>` : ''}</td></tr>`;
+  }).join('') || '<tr><td colspan="7"><div class="empty"><h3>暂无任务记录</h3><p>新的用户安排会显示在这里。</p></div></td></tr>'}</tbody></table></div>`;
 }
 export function renderAdmin(page: AdminPage, state: AdminState): string {
   const titles: Record<AdminPage, string> = { overview: '服务概览', users: '用户管理', operations: '任务运营', audit: '操作审计', cards: '服务卡密' };
@@ -31,21 +105,31 @@ export function renderAdmin(page: AdminPage, state: AdminState): string {
   if (page === 'operations') return `${header}<section class="panel"><div class="section-heading"><h2>最近任务</h2><span class="muted">最多 100 条记录</span></div>${adminJobRows(state.jobs)}</section>`;
   return `${header}<section class="panel"><div class="section-heading"><h2>最近管理操作</h2><span class="muted">最多 100 条记录</span></div><div class="table-scroll"><table><thead><tr><th>时间</th><th>操作人</th><th>操作</th><th>目标</th><th>结果</th></tr></thead><tbody>${state.audit.map(row => `<tr><td>${e(dateTime(row.created_at))}</td><td>${e(row.actor_id ?? '系统')}</td><td>${e(row.action || '—')}</td><td>${e(row.target_id ?? '—')}</td><td>${e(row.outcome || '已记录')}</td></tr>`).join('') || '<tr><td colspan="5"><div class="empty">暂无管理操作记录</div></td></tr>'}</tbody></table></div></section>`;
 }
-function renderAdminDiagnostics(data: Record<string, unknown>): string {
-  const diagnostics = Array.isArray(data.diagnostics) ? data.diagnostics.filter((item): item is string => typeof item === 'string') : [];
-  return diagnostics.length ? `<ul class="operator-diagnostics">${diagnostics.map(item => `<li>${e(item)}</li>`).join('')}</ul>` : '';
-}
 function renderAdminSteps(data: Record<string, unknown>, depth = 0): string {
   if (depth > 4) return '';
-  const children = Array.isArray(data.homeworks) ? data.homeworks : Array.isArray(data.levels) ? data.levels : [];
+  const children = resultChildren(data);
   return children.length ? `<ol class="operator-steps">${children.map(value => {
     const item = record(value);
     const nested = record(item.result);
-    const reason = item.reason_code ?? nested.reason_code;
-    return `<li><div class="operator-step-head"><strong>${e(item.title || item.subject || '执行步骤')}</strong><span class="badge">${e(statusLabels[String(item.status)] ?? item.status ?? '尚未执行')}</span></div>${reason ? `<p class="operator-reason">原因代码：${e(reason)}</p>` : ''}${renderAdminDiagnostics(item)}${renderAdminDiagnostics(nested)}${renderAdminSteps(Object.keys(nested).length ? nested : item, depth + 1)}</li>`;
+    const issue = deepestIssue({ ...item, ...nested });
+    const reason = text(issue.reason_code);
+    const position = count(item.position);
+    const score = item.score !== undefined && item.max_score !== undefined ? `<p class="meta">得分 ${e(item.score)} / ${e(item.max_score)}</p>` : '';
+    return `<li><div class="operator-step-head"><strong>${position ? `第 ${position} 关 · ` : ''}${e(item.title || item.subject || '名称待补充')}</strong><span class="badge">${e(statusLabels[text(item.status)] ?? '状态待核对')}</span></div>${item.course_name ? `<p class="meta">${e(item.course_name)}</p>` : ''}${score}${reason && isAttention({ ...item, ...nested }) ? `<p class="operator-reason">${e(reasonLabels[reason.toLowerCase()] ?? '执行未完成，请查看技术记录')}</p>` : ''}${renderAdminSteps(Object.keys(nested).length ? nested : item, depth + 1)}</li>`;
   }).join('')}</ol>` : '';
+}
+function technicalResult(data: Record<string, unknown>, depth = 0): Record<string, unknown> {
+  if (depth > 5) return {};
+  const keys = ['title', 'subject', 'course', 'course_name', 'homework_id', 'challenge_id', 'position', 'status', 'reason_code', 'score', 'max_score', 'diagnostics', 'model_calls', 'reasons'];
+  const result = Object.fromEntries(keys.filter(key => data[key] !== undefined).map(key => [key, data[key]]));
+  const children = resultChildren(data);
+  if (children.length) result.steps = children.map(item => ({ ...technicalResult(item, depth + 1), ...Object.keys(record(item.result)).length ? { result: technicalResult(record(item.result), depth + 1) } : {} }));
+  return result;
 }
 export function renderAdminJobDetail(job: AdminJob): string {
   const data = record(job.result);
-  return `<h2>任务执行详情</h2><p class="subtext">任务 ${e(job.id)}</p><dl class="info-list"><div><dt>用户</dt><dd>${e(job.owner_id ?? job.owner ?? '—')}</dd></div><div><dt>状态</dt><dd>${e(statusLabels[job.status] ?? job.status)}</dd></div><div><dt>阶段</dt><dd>${e(job.phase)}</dd></div><div><dt>停止原因</dt><dd>${e(data.reason_code || job.error_code || job.message || '—')}</dd></div><div><dt>模型调用</dt><dd>${count(data.model_calls)}</dd></div><div><dt>记录费用（含估算）</dt><dd>$${(count(data.cost_micro_usd) / 1000000).toFixed(6)}</dd></div></dl>${renderAdminDiagnostics(data)}${renderAdminSteps(data)}`;
+  const context = jobContext(job), collecting = job.request.mode === 'collect_verified';
+  const scope = collecting ? '题库采集（只读）' : job.request.scope === 'all' ? '全部课程' : job.request.scope === 'course' ? '整门课程' : job.request.scope === 'current' ? '单个关卡' : '单份作业';
+  const raw = { job_id: job.id, owner_id: job.owner_id ?? job.owner, request: job.request, status: job.status, phase: job.phase, error_code: job.error_code, message: job.message, context_reason_code: job.context?.summary?.reason_code, context_diagnostics: job.context?.summary?.diagnostics, result: technicalResult(data) };
+  return `<h2>${collecting ? '题库采集详情' : '任务执行详情'}</h2><p class="subtext">${e(context.user)} · ${e(collecting ? '采集已通过题目' : context.course)}</p><div class="operator-summary"><span class="badge ${job.status === 'succeeded' ? 'completed' : 'support'}">${e(statusLabels[job.status] ?? '状态待核对')}</span><strong>${e(progressLabel(job))}</strong><p>${e(readableReason(job))}</p></div><dl class="info-list admin-detail-info"><div><dt>用户</dt><dd>${e(context.user)}</dd></div><div><dt>任务范围</dt><dd>${scope}</dd></div>${collecting ? '' : `<div><dt>课程</dt><dd>${e(context.course)}</dd></div><div><dt>作业</dt><dd>${e(homeworkLabel(job, context))}</dd></div>${context.level ? `<div><dt>当前关卡</dt><dd>${context.position ? `第 ${context.position} 关 · ` : ''}${e(context.level)}</dd></div>` : ''}`}<div><dt>执行阶段</dt><dd>${e(phaseLabels[job.phase] ?? '阶段待补充')}</dd></div><div><dt>创建时间</dt><dd>${e(dateTime(job.created_at))}</dd></div><div><dt>模型调用</dt><dd>${count(data.model_calls)} 次${!count(data.model_calls) ? '（未调用模型）' : ''}</dd></div><div><dt>记录费用（含估算）</dt><dd>$${(count(data.cost_micro_usd) / 1000000).toFixed(6)}</dd></div></dl>${renderAdminSteps(data)}<details class="operator-technical"><summary>技术记录（原始标识与诊断）</summary><pre>${e(JSON.stringify(raw, null, 2))}</pre></details>`;
 }

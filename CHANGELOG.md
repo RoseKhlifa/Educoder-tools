@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.38 - 2026-11-01
+
+- Show readable user course homework and failure details in admin
+
 ## 0.1.37 - 2026-11-01
 
 - Exclude optional levels from execution and required-work progress

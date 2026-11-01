@@ -166,7 +166,15 @@ export interface AdminAudit {
   outcome?: string;
 }
 export interface AccessCard { id: string; masked_code?: string; label?: string; status?: string; bound_user_id?: string | number; reusable?: boolean; created_at?: string; expires_at?: string }
-export interface AdminJob extends AnswerJob { owner_id?: string | number; owner?: string }
+export interface AdminJobContext {
+  user?: { id?: string | number; name?: string; login?: string };
+  course?: { identifier?: string; name?: string };
+  homework?: { id?: number; name?: string };
+  level?: { title?: string; position?: number; score?: string; max_score?: string };
+  scope_label?: string;
+  summary?: { reason?: string; reason_code?: string; message?: string; diagnostics?: string[]; progress_label?: string; attention_homeworks?: Array<{ id?: number; name?: string; course_identifier?: string; course_name?: string; reason?: string; reason_code?: string; diagnostics?: string[]; level_title?: string; level_position?: number }> };
+}
+export interface AdminJob extends AnswerJob { owner_id?: string | number; owner?: string; context?: AdminJobContext }
 export type AdminOverview = Record<string, unknown>;
 
 export interface AppState {

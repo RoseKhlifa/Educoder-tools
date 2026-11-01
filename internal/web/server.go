@@ -429,6 +429,7 @@ func (s *Server) handleCourses(w http.ResponseWriter, r *http.Request, requestID
 		return
 	}
 	result := make([]courseDTO, 0, len(courses))
+	s.rememberCourseLabels(r.Context(), courses)
 	for _, course := range courses {
 		result = append(result, toCourseDTO(course))
 	}
@@ -450,6 +451,7 @@ func (s *Server) handleHomeworks(w http.ResponseWriter, r *http.Request, request
 		s.upstreamError(w, requestID)
 		return
 	}
+	s.rememberHomeworkLabels(r.Context(), course, homeworks)
 	homeworks = educoder.OpenHomeworks(homeworks, time.Now())
 	result := serviceHomeworks(r.Context(), session.Client, course, homeworks)
 	s.writeJSON(w, requestID, http.StatusOK, result)

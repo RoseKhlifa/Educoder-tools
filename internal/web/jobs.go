@@ -311,7 +311,19 @@ func (r *JobRuntime) Close(ctx context.Context) error {
 
 // AttachJobs is called before ListenAndServe, keeping construction-only HTTP
 // tests free of background workers and persistent side effects.
-func (s *Server) AttachJobs(runtime *JobRuntime) { s.jobs = runtime }
+func (s *Server) AttachJobs(runtime *JobRuntime) {
+	s.jobs = runtime
+	if s.platform == nil || runtime == nil || runtime.manager == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if records, err := runtime.manager.AdminList(ctx, 500); err == nil {
+		for _, record := range records {
+			s.rememberResultLabels(ctx, record.Request, record.Result, true)
+		}
+	}
+}
 
 func accountJobOwner(login string) string {
 	digest := sha256.Sum256([]byte(login))
@@ -388,7 +400,14 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, requestID st
 		// cookie or execution key enters the durable job request.
 		job, reused, err := s.jobs.manager.Submit(r.Context(), owner, req, func(ctx context.Context, request jobs.Request, report func(jobs.Event)) (jobs.Outcome, error) {
 			return s.runAuthorized(ctx, owner, func(ctx context.Context) (jobs.Outcome, error) {
-				return s.jobs.run(ctx, session.Client, owner, request, report)
+				out, err := s.jobs.run(ctx, session.Client, owner, request, func(event jobs.Event) {
+					if p := event.Progress; p != nil && p.CurrentCourse != "" && p.CurrentHomeworkID > 0 && p.CurrentHomeworkTitle != "" {
+						s.rememberHomeworkLabels(ctx, p.CurrentCourse, []educoder.Homework{{ID: p.CurrentHomeworkID, Name: p.CurrentHomeworkTitle}})
+					}
+					report(event)
+				})
+				s.rememberResultLabels(ctx, request, out.Result, false)
+				return out, err
 			})
 		})
 		if err != nil {
