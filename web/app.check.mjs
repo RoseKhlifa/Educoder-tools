@@ -4,7 +4,7 @@ import { renderAdminJobDetail } from './dist/admin.js';
 import { renderServiceJob, renderServiceDetail } from './dist/jobs.js';
 class Element {
   constructor(tag, attributes, document) {
-    this.tag = tag; this.attributes = attributes; this.document = document; this.value = attributes.value ?? ''; this.checked = 'checked' in attributes; this.required = 'required' in attributes; this.isConnected = true;
+    this.tag = tag; this.attributes = attributes; this.document = document; this.value = attributes.value ?? ''; this.checked = 'checked' in attributes; this.required = 'required' in attributes; this.open = 'open' in attributes; this.isConnected = true;
     this.dataset = Object.fromEntries(Object.entries(attributes).filter(([key]) => key.startsWith('data-')).map(([key,value]) => [key.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase()), value]));
     this.listeners = new Map(); this.elements = { namedItem: name => document.items.find(item => item.attributes.name === name) };
   }
@@ -17,7 +17,7 @@ class Element {
 class Input extends Element {}
 class Document {
   items = []; html = ''; listeners = new Map(); activeElement = null;
-  constructor() { const document = this; this.root = { get innerHTML() { return document.html; }, set innerHTML(value) { document.html = value; document.items.forEach(item => { item.isConnected = false; }); document.items = [...value.matchAll(/<(button|input|form|img)\b([^>]*)>/g)].map(([,tag,attrs]) => new (tag === 'input' ? Input : Element)(tag,Object.fromEntries([...attrs.matchAll(/([\w-]+)(?:="([^"]*)")?/g)].map(([,key,value])=>[key,value??''])),document)); } }; }
+  constructor() { const document = this; this.root = { get innerHTML() { return document.html; }, set innerHTML(value) { document.html = value; document.items.forEach(item => { item.isConnected = false; }); document.items = [...value.matchAll(/<(button|input|form|img|details)\b([^>]*)>/g)].map(([,tag,attrs]) => new (tag === 'input' ? Input : Element)(tag,Object.fromEntries([...attrs.matchAll(/([\w-]+)(?:="([^"]*)")?/g)].map(([,key,value])=>[key,value??''])),document)); } }; }
   querySelector(selector) { return selector === '#app' ? this.root : this.querySelectorAll(selector)[0] ?? null; }
   querySelectorAll(selector) { if(selector.startsWith('#')) return this.items.filter(item => item.attributes.id === selector.slice(1)); const match=selector.match(/^\[([^=\]]+)(?:="([^"]*)")?\]$/);return match?this.items.filter(item => match[1] in item.attributes && (match[2]===undefined||item.attributes[match[1]]===match[2])):[]; }
   addEventListener(name, handler) { this.listeners.set(name,handler); }
@@ -134,6 +134,75 @@ await test('consumer course service and administrator boundary',async t=>{
     assert.ok('disabled' in page.get('[data-select-course="COURSE_A"]').attributes);
     assert.match(page.html(), /服务处理中/);
     assert.doesNotMatch(page.html(), /请重试|修复次数|模型费用/);
+  });
+
+  await t.test('latest completed course replaces old support across the course rail and progress page', async () => {
+    const old = job({ id: 'old-course-support', status: 'support', created_at: '2026-01-01T00:00:00Z', updated_at: '2028-01-01T00:00:00Z', result: { service_status: 'support', total_homeworks: 4, completed_homeworks: 3 } });
+    const done = job({ id: 'latest-course-done', status: 'completed', created_at: '2026-01-02T00:00:00Z', result: { service_status: 'completed', total_homeworks: 4, completed_homeworks: 4 } });
+    const page = await app({ '/api/jobs': () => ok({ jobs: [old, done] }) });
+    assert.equal('disabled' in page.get('[data-select-course="COURSE_A"]').attributes, false);
+    assert.doesNotMatch(page.html(), /服务处理中/);
+    assert.match(page.html(), /<strong>4<\/strong><span>\/ 4 份作业/);
+    page.get('[data-nav="progress"]').dispatch('click'); await settle();
+    const current = page.html().split('<details')[0];
+    assert.match(current, /data-job-detail="latest-course-done"/);
+    assert.doesNotMatch(current, /data-job-detail="old-course-support"|3 \/ 4 份作业|服务处理中/);
+    assert.equal(page.get('[data-service-history]').open, false);
+  });
+
+  await t.test('superseded all-course support no longer blocks arranging new work', async () => {
+    const request = { scope: 'all', mode: 'submit' };
+    const page = await app({ '/api/jobs': () => ok({ jobs: [job({ id: 'old-all', status: 'support', request, created_at: '2026-01-01T00:00:00Z', result: { service_status: 'support' } }), job({ id: 'new-all', status: 'completed', request, created_at: '2026-01-02T00:00:00Z', result: { service_status: 'completed' } })] }) });
+    assert.equal('disabled' in page.get('[data-action="start-all"]').attributes, false);
+    assert.equal('disabled' in page.get('[data-select-course="COURSE_A"]').attributes, false);
+    assert.doesNotMatch(page.html(), /服务处理中/);
+  });
+
+  await t.test('genuine running work still blocks a course even when a newer completed record exists', async () => {
+    const page = await app({ '/api/jobs': () => ok({ jobs: [job({ id: 'new-done', status: 'completed', created_at: '2026-01-02T00:00:00Z', result: { service_status: 'completed' } }), job({ id: 'still-running', created_at: '2026-01-01T00:00:00Z' })] }) });
+    assert.ok('disabled' in page.get('[data-select-course="COURSE_A"]').attributes);
+    assert.match(page.html(), /服务已安排/);
+    assert.ok([...page.timers.values()].some(item => item.delay === 3000));
+    assert.ok('disabled' in page.get('[data-action="start-all"]').attributes);
+  });
+
+  await t.test('course status uses the latest matching course or all-course result while preserving other open work', async () => {
+    const oldAll = job({ id: 'old-all-open', request: { scope: 'all', mode: 'submit' }, status: 'support', created_at: '2026-01-01T00:00:00Z', result: { service_status: 'support' } });
+    const newCourse = job({ id: 'new-course-done', status: 'completed', created_at: '2026-01-02T00:00:00Z', result: { service_status: 'completed' } });
+    let page = await app({ '/api/jobs': () => ok({ jobs: [oldAll, newCourse] }) });
+    assert.equal('disabled' in page.get('[data-select-course="COURSE_A"]').attributes, false);
+    assert.ok('disabled' in page.get('[data-select-course="COURSE_B"]').attributes);
+    const oldCourse = job({ id: 'old-course-open', status: 'support', created_at: '2026-01-01T00:00:00Z', result: { service_status: 'support' } });
+    const newAll = job({ id: 'new-all-done', request: { scope: 'all', mode: 'submit' }, status: 'completed', created_at: '2026-01-02T00:00:00Z', result: { service_status: 'completed' } });
+    page = await app({ '/api/jobs': () => ok({ jobs: [oldCourse, newAll] }) });
+    assert.equal('disabled' in page.get('[data-select-course="COURSE_A"]').attributes, false);
+  });
+
+  await t.test('a status update while confirming an arrangement prevents a duplicate submission', async () => {
+    let running = false;
+    const page = await app({ '/api/jobs': () => ok({ jobs: running ? [job()] : [] }) });
+    const input = page.get('[data-select-course="COURSE_A"]'); input.checked = true; input.dispatch('change');
+    page.get('[data-action="start-selected"]').dispatch('click');
+    running = true; await page.tick();
+    page.get('[data-action="modal-confirm"]').dispatch('click'); await settle();
+    assert.equal(page.requests.some(item => item.url === '/api/jobs' && item.options.method === 'POST'), false);
+    assert.ok('disabled' in page.get('[data-select-course="COURSE_A"]').attributes);
+    assert.match(page.html(), /已选 0 门课程/);
+  });
+
+  await t.test('consumer history remains expanded on refresh and opens a historical detail without current-service claims', async () => {
+    const old = job({ id: 'historical-support', status: 'support', created_at: '2026-01-01T00:00:00Z', result: { service_status: 'support', total_homeworks: 2, completed_homeworks: 1 } });
+    const done = job({ id: 'completed', status: 'completed', created_at: '2026-01-02T00:00:00Z', result: { service_status: 'completed', total_homeworks: 2, completed_homeworks: 2 } });
+    const page = await app({ '/api/jobs': () => ok({ jobs: [done, old] }) });
+    page.get('[data-nav="progress"]').dispatch('click'); await settle();
+    const history = page.get('[data-service-history]'); history.open = true; history.dispatch('toggle');
+    page.get('[data-action="jobs-refresh"]').dispatch('click'); await settle();
+    assert.equal(page.get('[data-service-history]').open, true);
+    page.get('[data-job-detail="historical-support"]').dispatch('click'); await settle();
+    const detail = page.html().split('class="modal-content"')[1];
+    assert.match(detail, /历史|当次/);
+    assert.doesNotMatch(detail, /服务人员正在处理|无需重复提交/);
+    assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
   });
 
   await t.test('late login settings and expired restoration never erase credentials being entered', async () => {

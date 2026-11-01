@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.42 - 2026-11-01
+
+- Show compact current consumer progress and fold superseded arrangements into history
+
 ## 0.1.41 - 2026-11-01
 
 - Repair failed programming attempts automatically with durable feedback and show current services separately from history

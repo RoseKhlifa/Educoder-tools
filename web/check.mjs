@@ -18,3 +18,4 @@ console.log('web service static checks: PASS');
 await import('./api.check.mjs');
 await import('./app.check.mjs');
 await import('./admin.check.mjs');
+await import('./jobs.check.mjs');
