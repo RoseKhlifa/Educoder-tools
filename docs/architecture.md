@@ -1,6 +1,6 @@
 # 当前架构与迁移决定
 
-当前唯一 Web 服务为 `cmd/web`，同时托管 A 方向用户端、管理端和应用 API。浏览器 TypeScript 编译为 ES modules；Go 维护全部协议、身份、执行、AI 与题库逻辑。
+当前唯一 Web 服务为 `cmd/web`，同时托管暖纸珊瑚主题的用户端、管理端和应用 API。浏览器 TypeScript 编译为 ES modules；Go 维护全部协议、身份、执行、AI 与题库逻辑。
 
 ## 身份与租户边界
 

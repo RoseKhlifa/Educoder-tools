@@ -105,6 +105,24 @@ await test('consumer course service and administrator boundary',async t=>{
     assert.match(page.html(), /data-admin-jobs-kind="collection" aria-pressed="true"/); assert.match(page.html(), /data-admin-jobs-view="current" aria-pressed="true"/);
     assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
   });
+  await t.test('administrator user search and status filters stay local and survive refresh', async () => {
+    const users = { items: [
+      { id: 'u-active', name: '正常同学', login: 'active', status: 'active', role: 'user', updated_at: '2026-01-02T00:00:00Z' },
+      { id: 'u-paused', name: '暂停同学', login: 'paused', status: 'disabled', role: 'user', updated_at: '2026-01-03T00:00:00Z' },
+    ] };
+    const page = await app({ '/api/auth/me': () => ok({ user, platform: { role: 'admin' } }), '/api/admin/users': () => ok(users) });
+    page.get('[data-nav="admin-overview"]').dispatch('click'); await settle();
+    page.get('[data-nav="admin-users"]').dispatch('click'); await settle();
+    assert.match(page.html(), /正常同学|暂停同学/);
+    const before = page.requests.length;
+    const search = page.get('[data-admin-user-search]'); search.value = '暂停'; search.dispatch('input');
+    assert.match(page.html(), /暂停同学/); assert.doesNotMatch(page.html(), /正常同学/);
+    page.get('[data-admin-user-filter="disabled"]').dispatch('click');
+    assert.match(page.html(), /暂停同学/); assert.match(page.html(), /显示 1 \/ 2 位/);
+    page.get('[data-action="admin-refresh"]').dispatch('click'); await settle();
+    assert.match(page.html(), /data-admin-user-filter="disabled"[^>]*aria-pressed="true"/); assert.match(page.html(), /value="暂停"/);
+    assert.equal(page.requests.filter(item => item.options.method === 'POST').length, 0); assert.ok(page.requests.length > before);
+  });
   await t.test('logout invalidates a delayed private course response',async()=>{
     const late=deferred();const page=await app({'/api/courses':()=>late.promise});page.get('[data-action="logout"]').dispatch('click');late.resolve(ok(courses));await settle();assert.match(page.html(),/id="login-form"/);assert.doesNotMatch(page.html(),/课堂甲|课堂乙/);
   });

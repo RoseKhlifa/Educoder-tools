@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.44 - 2026-11-01
+
+- Adopt warm paper template UI for consumer and admin workspaces
+
 ## 0.1.43 - 2026-11-01
 
 - Add Go online-exam protocol, verified answer save and submission workflow with classroom exam UI
