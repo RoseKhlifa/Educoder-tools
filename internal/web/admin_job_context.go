@@ -15,6 +15,7 @@ type AdminJobContext struct {
 	User       *AdminJobContextUser `json:"user,omitempty"`
 	Course     AdminJobCourse       `json:"course"`
 	Homework   AdminJobHomework     `json:"homework"`
+	Exercise   *AdminJobHomework    `json:"exercise,omitempty"`
 	Level      AdminJobLevel        `json:"level"`
 	ScopeLabel string               `json:"scope_label"`
 	Summary    AdminJobSummary      `json:"summary"`
@@ -69,6 +70,11 @@ type AdminAttentionHomework struct {
 // returning generated code/answer bodies. The stored result itself is bounded by
 // jobs.Config.MaxResultBytes; the additional bounds keep operator lists small.
 type adminContextResult struct {
+	Title              string                 `json:"title"`
+	ExerciseID         int64                  `json:"exercise_id"`
+	TotalQuestions     int                    `json:"total_questions"`
+	CompletedQuestions int                    `json:"completed_questions"`
+	Submitted          bool                   `json:"submitted"`
 	Status             string                 `json:"status"`
 	ReasonCode         string                 `json:"reason_code"`
 	StopReason         string                 `json:"stop_reason"`
@@ -176,6 +182,27 @@ func deriveJobContext(j jobs.Job) AdminJobContext {
 		}
 	}
 	out.Summary.Diagnostics = adminContextDiagnostics(result.Diagnostics)
+	if j.Request.Scope == "exercise" {
+		out.ScopeLabel = "在线考试"
+		out.Homework, out.Level = AdminJobHomework{}, AdminJobLevel{}
+		out.Exercise = &AdminJobHomework{ID: j.Request.ExerciseID, Name: adminContextText(result.Title, 500)}
+		if p := j.Progress; p != nil && p.CurrentExerciseID == j.Request.ExerciseID && p.CurrentCourse == j.Request.Course {
+			if out.Exercise.Name == "" {
+				out.Exercise.Name = adminContextText(p.CurrentExerciseTitle, 500)
+			}
+			if result.TotalQuestions == 0 {
+				result.TotalQuestions, result.CompletedQuestions = p.TotalQuestions, p.CompletedQuestions
+			}
+		}
+		if result.TotalQuestions > 0 {
+			out.Summary.ProgressLabel = fmt.Sprintf("%d / %d 题已保存", result.CompletedQuestions, result.TotalQuestions)
+			if result.Submitted {
+				out.Summary.ProgressLabel = fmt.Sprintf("已交卷 · 共 %d 题", result.TotalQuestions)
+			}
+		}
+		out.Summary.ReasonCode = adminContextFirst(result.ReasonCode, j.ErrorCode)
+		return out
+	}
 	if result.ReasonCode != "" {
 		out.Summary.ReasonCode = adminContextText(result.ReasonCode, 120)
 	}

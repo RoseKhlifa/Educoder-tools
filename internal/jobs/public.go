@@ -19,7 +19,7 @@ func normalize(req Request) (Request, string, string, error) {
 	req.Course = strings.TrimSpace(req.Course)
 	req.Game = strings.TrimSpace(req.Game)
 	collect := req.Mode == "collect_verified"
-	if collect && (req.Course != "" || req.HomeworkID != 0 || req.Game != "" || req.Scope != "") {
+	if collect && (req.Course != "" || req.HomeworkID != 0 || req.ExerciseID != 0 || req.Game != "" || req.Scope != "") {
 		return req, "", "", fail("invalid_request", "Collection scans the authenticated account, not a supplied target")
 	}
 	// Older workbench bundles submitted the current game for a normal submit
@@ -35,13 +35,20 @@ func normalize(req Request) (Request, string, string, error) {
 	if req.Scope == "current" {
 		req.Scope = ""
 	}
-	if req.Scope != "" && req.Scope != "homework" && req.Scope != "course" && req.Scope != "all" {
+	if req.Scope != "" && req.Scope != "homework" && req.Scope != "course" && req.Scope != "all" && req.Scope != "exercise" {
 		return req, "", "", fail("invalid_request", "Unknown execution scope")
+	}
+	if req.Scope != "exercise" && req.ExerciseID != 0 {
+		return req, "", "", fail("invalid_request", "Exercise target requires exercise scope")
 	}
 	if req.Scope == "homework" && (req.Mode != "submit" || req.Game != "") {
 		return req, "", "", fail("invalid_request", "Whole-homework jobs require submit mode and no current game")
 	}
 	switch req.Scope {
+	case "exercise":
+		if req.Mode != "submit" || !identifier.MatchString(req.Course) || req.ExerciseID <= 0 || req.HomeworkID != 0 || req.Game != "" {
+			return req, "", "", fail("invalid_request", "Exercise jobs require a course, exercise_id, submit mode and no homework or game")
+		}
 	case "course":
 		if req.Mode != "submit" || !identifier.MatchString(req.Course) || req.HomeworkID != 0 || req.Game != "" {
 			return req, "", "", fail("invalid_request", "Whole-course jobs require a course, submit mode and no homework or game")
@@ -70,7 +77,8 @@ func normalize(req Request) (Request, string, string, error) {
 		HomeworkID int64
 		Game, Mode string
 		Scope      string `json:",omitempty"`
-	}{req.Course, req.HomeworkID, req.Game, req.Mode, req.Scope}
+		ExerciseID int64  `json:",omitempty"`
+	}{req.Course, req.HomeworkID, req.Game, req.Mode, req.Scope, req.ExerciseID}
 	tb, _ := json.Marshal(t)
 	th := sha256.Sum256(tb)
 	return req, hex.EncodeToString(h[:]), hex.EncodeToString(th[:]), nil
@@ -198,12 +206,16 @@ func publicProgress(p *BatchProgress) *BatchProgress {
 	if p == nil || p.TotalLevels < 0 || p.TotalLevels > 100 || p.CompletedLevels < 0 || p.CompletedLevels > p.TotalLevels || p.SkippedLevels < 0 || p.SkippedLevels > p.CompletedLevels || p.FailedLevels < 0 || p.FailedLevels > p.TotalLevels || p.CurrentPosition < 0 || p.CurrentPosition > 500 {
 		return nil
 	}
-	if p.TotalHomeworks < 0 || p.TotalHomeworks > 100 || p.CompletedHomeworks < 0 || p.CompletedHomeworks > p.TotalHomeworks || p.SkippedHomeworks < 0 || p.SkippedHomeworks > p.CompletedHomeworks || p.NeedsServiceHomeworks < 0 || p.CompletedHomeworks+p.NeedsServiceHomeworks > p.TotalHomeworks || (p.TotalLevels == 0 && p.TotalHomeworks == 0) || p.CurrentHomeworkID < 0 {
+	if p.TotalQuestions < 0 || p.TotalQuestions > 256 || p.CompletedQuestions < 0 || p.CompletedQuestions > p.TotalQuestions || p.CurrentExerciseID < 0 {
+		return nil
+	}
+	if p.TotalHomeworks < 0 || p.TotalHomeworks > 100 || p.CompletedHomeworks < 0 || p.CompletedHomeworks > p.TotalHomeworks || p.SkippedHomeworks < 0 || p.SkippedHomeworks > p.CompletedHomeworks || p.NeedsServiceHomeworks < 0 || p.CompletedHomeworks+p.NeedsServiceHomeworks > p.TotalHomeworks || (p.TotalLevels == 0 && p.TotalHomeworks == 0 && p.TotalQuestions == 0) || p.CurrentHomeworkID < 0 {
 		return nil
 	}
 	result := *p
 	result.CurrentTitle = publicText(result.CurrentTitle, "")
 	result.CurrentHomeworkTitle = publicText(result.CurrentHomeworkTitle, "")
+	result.CurrentExerciseTitle = publicText(result.CurrentExerciseTitle, "")
 	if result.CurrentCourse != "" && !identifier.MatchString(result.CurrentCourse) {
 		result.CurrentCourse = ""
 	}

@@ -5,6 +5,20 @@ import { ApiRequestError, BrowserApi } from './dist/api.js';
 const envelope = (data, status = 200) => new Response(JSON.stringify({ data, error: null, requestId: 'test-request' }), { status });
 
 await test('browser API uses the Go workbench contract', async t => {
+  await t.test('exam catalog keeps explicit submission and grade evidence without treating hidden or missing scores as published', async () => {
+    let requested;
+    globalThis.fetch = async url => { requested = url; return envelope({ items: [
+      { id: 701, name: '试卷一', available: false, submitted: true, scoreKnown: false, score: '--' },
+      { id: 702, name: '试卷二', available: false, submitted: true, scoreKnown: true, score: '0.00', maxScore: '100.00' },
+      { id: 703, name: '试卷三', submitted: false },
+    ], courseIdentifier: 'COURSE/A' }); };
+    const result = await new BrowserApi().exercises('COURSE/A');
+    assert.equal(requested, '/api/courses/COURSE%2FA/exercises');
+    assert.equal(result.courseIdentifier, 'COURSE/A');
+    assert.equal(result.items[0].submitted, true); assert.equal(result.items[0].scoreKnown, false);
+    assert.equal(result.items[1].score, '0.00'); assert.equal(result.items[1].maxScore, '100.00');
+    assert.equal(result.items[2].available, false); assert.equal(result.items[2].scoreKnown, false);
+  });
   await t.test('login sends credentials only in the request body and uses the session cookie', async () => {
     let request;
     globalThis.fetch = async (url, options) => {

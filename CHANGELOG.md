@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.43 - 2026-11-01
+
+- Add Go online-exam protocol, verified answer save and submission workflow with classroom exam UI
+
 ## 0.1.42 - 2026-11-01
 
 - Show compact current consumer progress and fold superseded arrangements into history

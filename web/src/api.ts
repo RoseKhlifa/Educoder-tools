@@ -3,6 +3,7 @@ import type {
   AdminUser, AdminAudit, AdminJob, AdminOverview, AccessCard,
   AnswerJob,
   Course,
+  Exercise,
   EnteredTask,
   Homework,
   JobList,
@@ -123,6 +124,28 @@ function normalizeHomework(value: unknown): Homework {
   };
 }
 
+function normalizeExercise(value: unknown): Exercise {
+  const item = asRecord(value);
+  const score = typeof item.score === 'string' || typeof item.score === 'number' ? item.score : undefined;
+  const maxValue = item.maxScore ?? item.max_score;
+  const maxScore = typeof maxValue === 'string' || typeof maxValue === 'number' ? maxValue : undefined;
+  return {
+    id: number(item.id || item.exercise_id) ?? 0,
+    name: text(item.name || item.exercise_name, '未命名考试'),
+    status: text(item.status || item.status_text, '待开始'),
+    submitted: Boolean(item.submitted ?? item.commit_status === 2),
+    scoreKnown: Boolean(item.scoreKnown ?? item.score_known ?? false),
+    score,
+    maxScore,
+    totalQuestions: number(item.totalQuestions || item.total_questions || item.question_count),
+    deadline: text(item.deadline || item.end_time) || undefined,
+    available: item.available === true,
+    actionRequired: item.actionRequired === undefined ? undefined : Boolean(item.actionRequired),
+    reasonCode: text(item.reasonCode || item.reason_code) || undefined,
+    url: text(item.url) || undefined,
+  };
+}
+
 function normalizeEnteredTask(value: unknown): EnteredTask {
   const item = asRecord(value);
   const challenge = asRecord(item.challenge);
@@ -161,6 +184,7 @@ export interface EducoderApi {
   logout(): Promise<void>;
   courses(): Promise<Course[]>;
   homeworks(courseIdentifier: string): Promise<Homework[]>;
+  exercises(courseIdentifier: string): Promise<{ items: Exercise[]; courseIdentifier?: string }>;
   enter(courseIdentifier: string, homeworkId: number): Promise<EnteredTask>;
   jobs(): Promise<JobList>;
   job(id: string): Promise<AnswerJob>;
@@ -220,6 +244,13 @@ export class BrowserApi implements EducoderApi {
     const payload = asRecord(raw);
     const rows = Array.isArray(raw) ? raw : (Array.isArray(payload.homeworks) ? payload.homeworks : Array.isArray(payload.items) ? payload.items : []);
     return rows.map(normalizeHomework).filter(homework => homework.id > 0);
+  }
+
+  async exercises(courseIdentifier: string): Promise<{ items: Exercise[]; courseIdentifier?: string }> {
+    const raw = await this.request<unknown>(`/api/courses/${encodeURIComponent(courseIdentifier)}/exercises`);
+    const payload = asRecord(raw);
+    const rows = Array.isArray(raw) ? raw : (Array.isArray(payload.items) ? payload.items : Array.isArray(payload.exercises) ? payload.exercises : []);
+    return { items: rows.map(normalizeExercise).filter(exercise => exercise.id > 0), courseIdentifier: text(payload.courseIdentifier || payload.course_identifier) || undefined };
   }
 
   async enter(courseIdentifier: string, homeworkId: number): Promise<EnteredTask> {

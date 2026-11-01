@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { partitionAdminJobs, renderAdmin, renderAdminJobDetail } from './dist/admin.js';
+import { renderServiceDetail, renderServiceJob } from './dist/jobs.js';
 
 const job = (extra = {}) => ({
   id: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', owner_id: 'platform:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
@@ -23,8 +24,42 @@ const state = jobs => ({ overview: {}, users: [], jobs, audit: [], cards: [], lo
 const visible = html => html.replace(/<details\b[\s\S]*?<\/details>/g, '').replace(/<[^>]*>/g, ' ');
 
 await test('current operations keep live service targets clear and retain previous attempts in history', async t => {
+  await t.test('a confirmed exam submission is not a follow-up alert when the outer worker expired after reconciliation', () => {
+    const value = job({ status: 'uncertain', request: { scope: 'exercise', course: 'SAMPLE_COURSE', exercise_id: 12, mode: 'submit' }, result: { title: '示例考试', submitted: true, score_known: false, total_questions: 50, completed_questions: 0 } });
+    const shown = renderAdmin('overview', state([value]));
+    assert.doesNotMatch(shown, /data-admin-job-detail=/);
+    assert.match(shown, /当前需跟进<\/span><strong>0/);
+    assert.match(visible(renderAdmin('operations', state([value]))), /已交卷/);
+  });
   const attempt = (id, day, extra = {}) => job({ id, created_at: `2026-01-${String(day).padStart(2, '0')}T00:00:00Z`, ...extra });
   const ids = rows => rows.map(row => row.id);
+  await t.test('exam service stop reasons are readable to administrators while consumer details retain fixed service copy', () => {
+    const cases = [
+      ['answer_readback_unconfirmed', '保存后的答案回读尚未确认'], ['answer_save_unconfirmed', '答案保存响应尚未确认'], ['paper_changed', '题卷或选项已变化，需要重新核对'], ['checkpoint_persistence_failed', '执行记录保存失败'], ['commit_readiness_unconfirmed', '交卷前检查尚未确认'], ['unanswered_questions', '仍有未作答项目'], ['model_provider_missing', '考试模型尚未配置'], ['model_generation_failed', '考试答案生成失败'], ['model_budget_exhausted', '达到本次内部用量上限'], ['previous_execution_interrupted', '上次执行已中断，需要先核对结果'], ['submitted_state_unconfirmed', '交卷状态尚未确认'], ['exercise_candidate_contract', '生成答案与当前题卷不匹配'], ['exercise_media_unverified', '题目中的媒体内容尚未核验'],
+    ];
+    for (const [code, label] of cases) {
+      const item = job({ request: { scope: 'exercise', exercise_id: 701, course: 'SAMPLE_COURSE', mode: 'submit' }, context: { user: { id: 'sample-user', name: '示例同学' }, course: { name: '示例课堂' }, exercise: { id: 701, name: '示例考试' }, summary: { reason_code: code } }, error_code: code, message: 'PRIVATE_TRACE', result: { title: '示例考试', reason_code: code, diagnostics: ['PRIVATE_DIAG'] } });
+      const admin = visible(renderAdmin('operations', state([item])) + renderAdminJobDetail(item));
+      assert.ok(admin.includes(label), `missing readable reason ${code}`);
+      const consumer = renderServiceDetail(item) + renderServiceJob(item);
+      assert.ok(!consumer.includes(code)); assert.ok(!consumer.includes(label)); assert.doesNotMatch(consumer, /PRIVATE_TRACE|PRIVATE_DIAG/);
+      assert.match(consumer, /考试事项由服务人员跟进/);
+    }
+  });
+  await t.test('exam targets remain independent and use names, question progress, submission and grade states', () => {
+    const request = exercise_id => ({ scope: 'exercise', exercise_id, course: 'SAMPLE_COURSE', mode: 'submit' });
+    const context = { user: { id: 'sample-user', name: '示例同学' }, course: { name: '示例课堂' }, exercise: { id: 701, name: '示例在线考试' } };
+    const old = attempt('old-exam', 1, { request: request(701), context });
+    const newest = attempt('new-exam', 3, { request: request(701), context, status: 'succeeded', result: { title: '示例在线考试', submitted: true, score_known: false, total_questions: 20, completed_questions: 20 } });
+    const other = attempt('other-exam', 2, { request: request(702), context: { ...context, exercise: { id: 702, name: '另一场考试' } } });
+    const homework = attempt('same-number-homework', 2, { request: { scope: 'homework', homework_id: 701, course: 'SAMPLE_COURSE', mode: 'submit' } });
+    const parts = partitionAdminJobs([old, newest, other, homework]);
+    assert.deepEqual(ids(parts.history), ['old-exam']); assert.deepEqual(ids(parts.current), ['new-exam', 'other-exam', 'same-number-homework']);
+    const html = renderAdmin('operations', state([newest]));
+    assert.match(html, /示例在线考试|在线考试|20 \/ 20 道题|待公布成绩/);
+    assert.doesNotMatch(html, /尚未进入关卡|必做内容已完成并核验|满分/);
+    assert.match(renderAdminJobDetail(newest), /示例在线考试|成绩尚未公布/);
+  });
   await t.test('latest creation replaces a prior failed or successful attempt regardless of later log updates', () => {
     const older = attempt('old-error', 1, { updated_at: '2026-02-01T00:00:00Z' });
     const latest = attempt('new-complete', 2, { status: 'succeeded' });

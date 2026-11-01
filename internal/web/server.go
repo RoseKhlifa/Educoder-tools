@@ -298,6 +298,10 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request, requestID str
 			s.handleHomeworks(w, r, requestID, course)
 			return
 		}
+		if len(parts) == 4 && parts[3] == "exercises" {
+			s.handleExercises(w, r, requestID, course)
+			return
+		}
 		if len(parts) == 6 && (parts[3] == "homeworks" || parts[3] == "tasks") && parts[5] == "enter" {
 			s.handleEnter(w, r, requestID, course, parts[4])
 			return

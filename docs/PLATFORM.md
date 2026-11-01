@@ -29,6 +29,7 @@
 | GET | `/api/avatar` | 当前用户头像，固定官方来源与内存缓存 |
 | GET | `/api/courses` | 本人课堂，默认 `status=processing` |
 | GET | `/api/courses/:course/homeworks` | 所选课堂作业摘要 |
+| GET | `/api/courses/:course/exercises` | 所选课堂在线考试及本人交卷、成绩开放状态 |
 | POST | `/api/jobs` | 创建课程、全部课堂或兼容作业任务，202 返回任务标识 |
 | GET | `/api/jobs` | 本人的近期服务任务摘要，不包含内部采集任务 |
 | GET | `/api/jobs/:id` | 本人的任务状态和公开进度 |
@@ -48,7 +49,9 @@
 
 `Idempotency-Key` 请求头也可设置幂等键；如果 body 同时提供，二者必须相同。同一键用于不同 payload 会返回冲突；同账号相同目标的活动任务会复用。`course` 不允许 `homework_id` 或 `game`，`all` 不接受客户端指定的课堂、作业或 game。
 
-兼容的整份作业请求为 `scope=homework`、`mode=submit`，需 `course` 与 `homework_id` 且不带 game。平台模式的公共 `/api/jobs` 只接受 `submit` 和 `homework / course / all`；技术用 `generate_only` 与 `selftest` 保留在 Go CLI，不可从普通服务 API 冒充完成状态。缺 scope 且带作业 ID 的旧 submit 请求统一扩展为整份作业。旧版缺 scope 的 submit+game 请求会归一化为整份作业，避免旧浏览器继续只做一关。
+兼容的整份作业请求为 `scope=homework`、`mode=submit`，需 `course` 与 `homework_id` 且不带 game。平台模式的公共 `/api/jobs` 接受 `submit` 和 `homework / course / all / exercise`；考试 `scope=exercise` 单独使用 `course + exercise_id`，不接收 `homework_id / game`，须在课程详情的在线考试页明确安排。课程与一键全部作业不自动纳入考试。技术用 `generate_only` 与 `selftest` 保留在 Go CLI，不可从普通服务 API 冒充完成状态。缺 scope 且带作业 ID 的旧 submit 请求统一扩展为整份作业。旧版缺 scope 的 submit+game 请求会归一化为整份作业，避免旧浏览器继续只做一关。
+
+考试状态区分答案保存、已交卷、成绩已公布；已交卷不等同满分。教师禁止交卷后读卷时，仍能通过本人答卷摘要和考试概要显示已交卷；摘要不臆造逐题保存计数。需要原站入场、教师解锁或监考浏览器的考试，目录提供原站入口，后台遵循平台状态。接口、支持题型、保存回读与交卷证据详见 [在线考试协议](exercise-protocol.md)。
 
 课程执行会重新读取账号活动课堂并核实所选课堂归属，读取完整作业列表再开始动作。已完成的判定来自完整、唯一的必做关卡分数清单与精确满分，不采用汇总完成数。上游明确标记为选做的关卡不执行，也不计入待完成清单、进度分母与最终满分核验；整份作业只有选做关卡时从本次作业计划中排除。零分值本身不能代替选做标记。单份作业中的必做关卡仍顺序执行。失败或平台写入结果未知的作业保留给服务人员，其他独立作业继续执行；不自动重放未知写入。
 

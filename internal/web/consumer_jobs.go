@@ -23,6 +23,14 @@ type consumerJob struct {
 	Progress  *consumerProgress `json:"progress,omitempty"`
 }
 type consumerResult struct {
+	Title              string         `json:"title,omitempty"`
+	ExerciseID         int64          `json:"exercise_id,omitempty"`
+	TotalQuestions     int            `json:"total_questions,omitempty"`
+	CompletedQuestions int            `json:"completed_questions,omitempty"`
+	Submitted          bool           `json:"submitted,omitempty"`
+	ScoreKnown         bool           `json:"score_known,omitempty"`
+	Score              string         `json:"score,omitempty"`
+	MaxScore           string         `json:"max_score,omitempty"`
 	ServiceStatus      string         `json:"service_status"`
 	TotalHomeworks     int            `json:"total_homeworks"`
 	CompletedHomeworks int            `json:"completed_homeworks"`
@@ -61,6 +69,8 @@ func consumerItems(items []summaryItem) []consumerItem {
 }
 
 type consumerProgress struct {
+	TotalQuestions     int    `json:"total_questions,omitempty"`
+	CompletedQuestions int    `json:"completed_questions,omitempty"`
 	TotalHomeworks     int    `json:"total_homeworks"`
 	CompletedHomeworks int    `json:"completed_homeworks"`
 	TotalLevels        int    `json:"total_levels"`
@@ -89,6 +99,15 @@ func toConsumerJob(j jobs.Job) consumerJob {
 	out.Result.ServiceStatus = status
 	// Decode a tiny typed projection; never copy the executor result map.
 	var summary struct {
+		Status             string        `json:"status"`
+		Title              string        `json:"title"`
+		ExerciseID         int64         `json:"exercise_id"`
+		TotalQuestions     int           `json:"total_questions"`
+		CompletedQuestions int           `json:"completed_questions"`
+		Submitted          bool          `json:"submitted"`
+		ScoreKnown         bool          `json:"score_known"`
+		Score              string        `json:"score"`
+		MaxScore           string        `json:"max_score"`
 		TotalHomeworks     int           `json:"total_homeworks"`
 		CompletedHomeworks int           `json:"completed_homeworks"`
 		TotalLevels        int           `json:"total_levels"`
@@ -100,6 +119,28 @@ func toConsumerJob(j jobs.Job) consumerJob {
 		out.Result.TotalHomeworks, out.Result.CompletedHomeworks = summary.TotalHomeworks, summary.CompletedHomeworks
 		out.Result.TotalLevels, out.Result.CompletedLevels = summary.TotalLevels, summary.CompletedLevels
 		out.Result.Homeworks, out.Result.Levels = consumerItems(summary.Homeworks), consumerItems(summary.Levels)
+	}
+	if req.Scope == "exercise" {
+		out.Kind = "exercise"
+		out.Result.Title = adminContextText(summary.Title, 500)
+		out.Result.ExerciseID = req.ExerciseID
+		out.Result.TotalQuestions, out.Result.CompletedQuestions = summary.TotalQuestions, summary.CompletedQuestions
+		out.Result.Submitted, out.Result.ScoreKnown = summary.Submitted, summary.ScoreKnown
+		if summary.ScoreKnown {
+			out.Result.Score = adminContextText(summary.Score, 80)
+			out.Result.MaxScore = adminContextText(summary.MaxScore, 80)
+		}
+		if summary.Submitted {
+			out.Status, out.Phase, out.Message = "submitted", "submitted", "已交卷，成绩以头歌公布为准"
+			if summary.ScoreKnown {
+				out.Status, out.Phase, out.Message = "graded", "graded", "考试成绩已公布"
+			}
+		} else if j.Status == jobs.Succeeded {
+			// An exercise's successful executor response cannot manufacture a
+			// confirmed submission or full-score result.
+			out.Status, out.Phase, out.Message = "support", "support", "考试状态正在核对"
+		}
+		out.Result.ServiceStatus = out.Status
 	}
 	if p := j.Progress; p != nil {
 		if out.Result.TotalHomeworks == 0 {
@@ -114,6 +155,15 @@ func toConsumerJob(j jobs.Job) consumerJob {
 		}
 		out.Result.CurrentTitle = strings.TrimSpace(title)
 		out.Progress = &consumerProgress{TotalHomeworks: out.Result.TotalHomeworks, CompletedHomeworks: out.Result.CompletedHomeworks, TotalLevels: out.Result.TotalLevels, CompletedLevels: out.Result.CompletedLevels, CurrentTitle: out.Result.CurrentTitle}
+		if req.Scope == "exercise" {
+			if out.Result.TotalQuestions == 0 {
+				out.Result.TotalQuestions, out.Result.CompletedQuestions = p.TotalQuestions, p.CompletedQuestions
+			}
+			out.Progress.TotalQuestions, out.Progress.CompletedQuestions = out.Result.TotalQuestions, out.Result.CompletedQuestions
+			if out.Result.Title == "" {
+				out.Result.Title = adminContextText(p.CurrentExerciseTitle, 500)
+			}
+		}
 	}
 	return out
 }

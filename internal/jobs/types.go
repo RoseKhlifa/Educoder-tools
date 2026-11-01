@@ -34,6 +34,7 @@ const (
 type Request struct {
 	Course         string `json:"course"`
 	HomeworkID     int64  `json:"homework_id"`
+	ExerciseID     int64  `json:"exercise_id,omitempty"`
 	Game           string `json:"game,omitempty"`
 	Mode           string `json:"mode"`
 	Scope          string `json:"scope,omitempty"`
@@ -51,6 +52,10 @@ type Event struct {
 // BatchProgress contains public counters only. Completed includes already-full
 // levels skipped by this run; Skipped is a subset of Completed.
 type BatchProgress struct {
+	TotalQuestions        int    `json:"total_questions,omitempty"`
+	CompletedQuestions    int    `json:"completed_questions,omitempty"`
+	CurrentExerciseID     int64  `json:"current_exercise_id,omitempty"`
+	CurrentExerciseTitle  string `json:"current_exercise_title,omitempty"`
 	TotalHomeworks        int    `json:"total_homeworks,omitempty"`
 	CompletedHomeworks    int    `json:"completed_homeworks,omitempty"`
 	SkippedHomeworks      int    `json:"skipped_homeworks,omitempty"`

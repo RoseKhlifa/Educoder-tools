@@ -214,4 +214,71 @@ await test('consumer course service and administrator boundary',async t=>{
     assert.equal(page.get('#login').value, 'typing-user'); assert.equal(page.get('#password').value, 'typing-password'); assert.equal(page.get('#card-code').required, true);
   });
 
+  await t.test('online exams are read-only until a single exam is explicitly confirmed', async () => {
+    const exam = { id: 701, name: '数据结构期中测试', status: 'available', available: true, submitted: false, scoreKnown: false, totalQuestions: 20 };
+    const page = await app({ '/api/courses/COURSE_A/exercises': () => ok({ items: [exam], courseIdentifier: 'COURSE_A' }) });
+    page.get('[data-course-detail="COURSE_A"]').dispatch('click'); await settle();
+    assert.match(page.html(), /课程实验|在线考试/);
+    assert.equal(page.requests.some(item => item.url.endsWith('/exercises')), false);
+    page.get('[data-detail-tab="exercise"]').dispatch('click'); await settle();
+    assert.match(page.html(), /数据结构期中测试|20 道题/);
+    assert.match(page.html(), /不包含在一键完成课程作业中/);
+    assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
+    page.get('[data-exam-submit="701"]').dispatch('click');
+    assert.match(page.html(), /安排这场考试|数据结构期中测试/);
+    assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
+    page.get('[data-action="modal-confirm"]').dispatch('click'); await settle();
+    const requests = page.requests.filter(item => item.url === '/api/jobs' && item.options.method === 'POST');
+    assert.equal(requests.length, 1);
+    assert.deepEqual(JSON.parse(requests[0].options.body), { scope: 'exercise', course: 'COURSE_A', exercise_id: 701, mode: 'submit', idempotency_key: JSON.parse(requests[0].options.body).idempotency_key });
+    assert.ok(JSON.parse(requests[0].options.body).idempotency_key);
+  });
+  await t.test('submitted and blocked exams expose original-site links and cannot enqueue work', async () => {
+    const rows = [
+      { id: 701, name: '已交卷考试', submitted: true, available: false, scoreKnown: false, score: '--' },
+      { id: 702, name: '教师锁定考试', submitted: false, available: false, actionRequired: true, reasonCode: 'locked' },
+      { id: 703, name: '已截止考试', submitted: false, available: false, reasonCode: 'expired' },
+      { id: 704, name: '尚未开放考试', submitted: false, available: false, reasonCode: 'not_started' },
+      { id: 705, name: '监考确认考试', submitted: false, available: false, reasonCode: 'action_required', url: 'javascript:private' },
+    ];
+    const page = await app({ '/api/courses/COURSE_A/exercises': () => ok({ items: rows }) });
+    page.get('[data-course-detail="COURSE_A"]').dispatch('click'); await settle(); page.get('[data-detail-tab="exercise"]').dispatch('click'); await settle();
+    assert.match(page.html(), /已交卷 · 待公布成绩/); assert.match(page.html(), /教师|解锁流程/); assert.match(page.html(), /考试已截止/); assert.match(page.html(), /考试尚未开始/);
+    assert.doesNotMatch(page.html(), /data-exam-submit=|javascript:|private|满分|结果已核验/);
+    assert.match(page.html(), /href="https:\/\/www.educoder.net\/classrooms\/COURSE_A\/exercise"/);
+    assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
+  });
+  await t.test('exam requests never block ordinary course arrangements and stale exam lists cannot reopen closed dialogs', async () => {
+    const pending = deferred();
+    const page = await app({ '/api/jobs': () => ok({ jobs: [job({ request: { scope: 'exercise', course: 'COURSE_A', exercise_id: 701, mode: 'submit' } })] }), '/api/courses/COURSE_A/exercises': () => pending.promise });
+    assert.equal('disabled' in page.get('[data-select-course="COURSE_A"]').attributes, false);
+    assert.equal('disabled' in page.get('[data-action="start-all"]').attributes, false);
+    page.get('[data-course-detail="COURSE_A"]').dispatch('click'); await settle(); page.get('[data-detail-tab="exercise"]').dispatch('click'); await settle();
+    page.get('[data-action="close-modal"]').dispatch('click');
+    pending.resolve(ok({ items: [{ id: 701, name: '迟到的考试', available: true }] })); await settle();
+    assert.doesNotMatch(page.html(), /迟到的考试|role="dialog"/);
+    assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
+  });
+  await t.test('a submitted exam appears in the home progress rail and remains separate from completed course counts', async () => {
+    const exam = job({ request: { scope: 'exercise', course: 'COURSE_A', exercise_id: 701, mode: 'submit' }, status: 'submitted', result: { title: '示例已交卷考试', submitted: true, score_known: false, service_status: 'submitted', total_questions: 50, completed_questions: 0 } });
+    const page = await app({ '/api/jobs': () => ok({ jobs: [exam] }) });
+    assert.match(page.html(), /<h2>已交卷<\/h2>|示例已交卷考试/); assert.doesNotMatch(page.html(), /一切准备就绪|0<\/strong><span>\/ 50|50<\/strong><span>\/ 50/); assert.match(page.html(), /已交卷 · 共 50 道题/);
+    assert.equal('disabled' in page.get('[data-select-course="COURSE_A"]').attributes, false);
+    page.get('[data-nav="progress"]').dispatch('click'); await settle();
+    assert.match(page.html(), /已交卷 <b>1<\/b>/); assert.doesNotMatch(page.html(), /已完成 <b>|处理中 <b>/);
+  });
+  await t.test('switching between course experiments and exams invalidates responses from the previous tab', async () => {
+    const lateHomework = deferred(), lateExam = deferred(); let homeworkReads = 0;
+    const page = await app({ '/api/courses/COURSE_A/homeworks': () => ++homeworkReads === 1 ? lateHomework.promise : ok([{ id: 101, name: '当前实验列表' }]), '/api/courses/COURSE_A/exercises': () => lateExam.promise });
+    page.get('[data-course-detail="COURSE_A"]').dispatch('click'); await settle();
+    page.get('[data-detail-tab="exercise"]').dispatch('click'); await settle();
+    lateHomework.resolve(ok([{ id: 102, name: '过时的实验列表' }])); await settle();
+    assert.match(page.html(), /正在同步在线考试/); assert.doesNotMatch(page.html(), /过时的实验列表/);
+    page.get('[data-detail-tab="homework"]').dispatch('click'); await settle();
+    assert.match(page.html(), /当前实验列表/);
+    lateExam.resolve(ok({ items: [{ id: 701, name: '过时的在线考试', available: true }] })); await settle();
+    assert.match(page.html(), /当前实验列表/); assert.doesNotMatch(page.html(), /过时的在线考试|data-exam-submit=/);
+    assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
+  });
+
 });

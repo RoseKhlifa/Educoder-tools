@@ -39,11 +39,12 @@ type Request struct {
 	BudgetMicroUSD int64
 }
 type Progress struct {
-	Phase   string           `json:"phase"`
-	Kind    string           `json:"kind"`
-	Message string           `json:"message"`
-	Batch   *BatchProgress   `json:"batch,omitempty"`
-	Service *ServiceProgress `json:"service,omitempty"`
+	Phase    string            `json:"phase"`
+	Kind     string            `json:"kind"`
+	Message  string            `json:"message"`
+	Batch    *BatchProgress    `json:"batch,omitempty"`
+	Service  *ServiceProgress  `json:"service,omitempty"`
+	Exercise *ExerciseProgress `json:"exercise,omitempty"`
 }
 
 type BatchProgress struct {
@@ -71,12 +72,13 @@ type Result struct {
 	Diagnostics      []string       `json:"diagnostics,omitempty"`
 }
 type Service struct {
-	store       *questionbank.Store
-	provider    Provider
-	programming *solver.Service
-	cfg         Config
-	targetMu    sync.Mutex
-	targets     map[string]*targetLock
+	store            *questionbank.Store
+	provider         Provider
+	exerciseProvider answer.ExerciseProvider
+	programming      *solver.Service
+	cfg              Config
+	targetMu         sync.Mutex
+	targets          map[string]*targetLock
 }
 type targetLock struct {
 	sem  chan struct{}
@@ -104,11 +106,16 @@ func New(store *questionbank.Store, provider Provider, cfg Config) *Service {
 	}
 	var wrapped Provider
 	var prog answer.Provider
+	var exerciseProvider answer.ExerciseProvider
 	if provider != nil {
-		wrapped = &limitedProvider{provider: provider, sem: make(chan struct{}, cfg.ModelConcurrency)}
+		limited := &limitedProvider{provider: provider, sem: make(chan struct{}, cfg.ModelConcurrency)}
+		wrapped = limited
 		prog = wrapped
+		if _, ok := provider.(answer.ExerciseProvider); ok {
+			exerciseProvider = limited
+		}
 	}
-	return &Service{store: store, provider: wrapped, programming: solver.New(store, prog, solver.Config{Timeout: cfg.Timeout, MaxModelCalls: cfg.MaxModelCalls, MaxEvaluations: cfg.MaxEvaluations, BudgetMicroUSD: cfg.BudgetMicroUSD}), cfg: cfg, targets: make(map[string]*targetLock)}
+	return &Service{store: store, provider: wrapped, exerciseProvider: exerciseProvider, programming: solver.New(store, prog, solver.Config{Timeout: cfg.Timeout, MaxModelCalls: cfg.MaxModelCalls, MaxEvaluations: cfg.MaxEvaluations, BudgetMicroUSD: cfg.BudgetMicroUSD}), cfg: cfg, targets: make(map[string]*targetLock)}
 }
 func (s *Service) lock(ctx context.Context, key string) (func(), error) {
 	s.targetMu.Lock()

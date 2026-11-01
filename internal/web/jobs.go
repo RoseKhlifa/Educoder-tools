@@ -178,6 +178,16 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 		if !ok {
 			return jobs.Outcome{Status: jobs.Failed, ErrorCode: "CLIENT_UNSUPPORTED", Message: "当前会话尚未支持答题执行"}, errors.New("unsupported task client")
 		}
+		if req.Scope == "exercise" {
+			result, err := service.RunExercise(ctx, protocol, taskservice.ExerciseRequest{Owner: owner, Course: req.Course, ExerciseID: req.ExerciseID, Mode: solver.ModeSubmit, IdempotencyKey: req.IdempotencyKey}, func(p taskservice.Progress) {
+				e := jobs.Event{Phase: p.Phase, Kind: "exercise", Message: p.Message}
+				if v := p.Exercise; v != nil {
+					e.Progress = &jobs.BatchProgress{CurrentCourse: req.Course, CurrentExerciseID: req.ExerciseID, CurrentExerciseTitle: v.Title, TotalQuestions: v.TotalQuestions, CompletedQuestions: v.CompletedQuestions}
+				}
+				report(e)
+			})
+			return exerciseOutcome(result, err)
+		}
 		if req.Scope == "course" || req.Scope == "all" {
 			result, err := service.RunCourses(ctx, protocol, taskservice.Request{Owner: owner, Course: req.Course, Mode: solver.ModeSubmit, IdempotencyKey: req.IdempotencyKey}, func(p taskservice.Progress) {
 				e := jobs.Event{Phase: p.Phase, Kind: p.Kind, Message: p.Message}
@@ -367,13 +377,13 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, requestID st
 		return
 	}
 	if len(parts) == 2 && r.Method == http.MethodPost {
-		if !s.jobs.modelConfigured {
-			s.writeError(w, requestID, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "服务暂时不可用，管理员正在处理，请稍后再试")
-			return
-		}
 		var req jobs.Request
 		if err := decodeJSON(r, &req); err != nil {
 			s.writeError(w, requestID, http.StatusBadRequest, "INVALID_REQUEST", "任务参数无效")
+			return
+		}
+		if !s.jobs.modelConfigured && req.Scope != "exercise" {
+			s.writeError(w, requestID, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "服务暂时不可用，管理员正在处理，请稍后再试")
 			return
 		}
 		if req.Mode == "collect_verified" {
@@ -384,7 +394,7 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, requestID st
 			if req.Mode == "submit" && req.Scope == "" && req.HomeworkID > 0 {
 				req.Scope, req.Game = "homework", ""
 			}
-			if req.Mode != "submit" || (req.Scope != "homework" && req.Scope != "course" && req.Scope != "all") {
+			if req.Mode != "submit" || (req.Scope != "homework" && req.Scope != "course" && req.Scope != "all" && req.Scope != "exercise") {
 				s.writeError(w, requestID, http.StatusBadRequest, "INVALID_REQUEST", "请选择需要完成的课程或作业")
 				return
 			}

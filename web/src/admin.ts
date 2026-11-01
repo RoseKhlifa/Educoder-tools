@@ -1,6 +1,6 @@
 import type { AdminAudit, AdminJob, AdminOverview, AdminUser, AccessCard, CollectionSummary } from './types.js';
 import { count, dateTime, escapeHtml as e, record } from './ui.js';
-import { jobProgress } from './jobs.js';
+import { jobProgress, serviceLabels, serviceStatus } from './jobs.js';
 export type AdminPage = 'overview' | 'users' | 'operations' | 'audit' | 'cards';
 export type AdminJobsView = 'current' | 'history';
 export type AdminJobsKind = 'service' | 'collection' | 'all';
@@ -8,13 +8,15 @@ export interface AdminState { overview: AdminOverview; users: AdminUser[]; jobs:
 const statusLabels: Record<string, string> = { queued: '等待安排', running: '执行中', succeeded: '已完成', failed: '需要处理', uncertain: '待核验', interrupted: '已中断', canceled: '已停止', active: '正常', disabled: '已暂停', passed: '已通过', completed: '已完成', skipped: '已满分，已跳过', skipped_optional: '选做，已跳过', planned: '尚未开始', needs_service: '需要跟进', verification_unconfirmed: '待核验', processing: '执行中', support: '需要跟进', waiting: '等待安排', deadline_passed: '已截止' };
 const phaseLabels: Record<string, string> = { starting: '准备执行', preflight: '核对关卡清单', verified: '已核验当前结果', service_pending: '等待服务人员跟进', queued: '等待安排', loading: '读取课程与作业', loading_resources: '读取题目图片', preparing: '准备执行', collecting: '采集已验证题目', bank_lookup: '查询题库答案', bank_saved: '保存已验证答案', generating: '生成答案', answering: '生成答案', solving: '处理题目', validating: '校验答案格式', saving: '保存代码', selftesting: '执行自测', selftest: '执行自测', submitting: '提交答案', evaluating: '等待评测', polling: '读取评测结果', verifying: '核验完成状态', reconciling: '核对提交结果', repairing: '根据反馈修复', completed: '执行结束', failed: '执行结束，等待处理', canceled: '已停止', processing: '执行中', running: '执行中' };
 const reasonLabels: Record<string, string> = {
+  answer_readback_unconfirmed: '保存后的答案回读尚未确认', answer_save_unconfirmed: '答案保存响应尚未确认', paper_changed: '题卷或选项已变化，需要重新核对', checkpoint_persistence_failed: '执行记录保存失败', commit_readiness_unconfirmed: '交卷前检查尚未确认', unanswered_questions: '仍有未作答项目', model_provider_missing: '考试模型尚未配置', model_generation_failed: '考试答案生成失败', model_budget_exhausted: '达到本次内部用量上限', previous_execution_interrupted: '上次执行已中断，需要先核对结果', submitted_state_unconfirmed: '交卷状态尚未确认', exercise_candidate_contract: '生成答案与当前题卷不匹配', exercise_media_unverified: '题目中的媒体内容尚未核验',
+  action_required: '考试入场事项需要在头歌处理', locked: '考试已锁定，需要教师解锁', expired: '考试已截止', already_submitted: '考试已经交卷，未重复提交', unsupported_question: '考试包含尚未适配的题型', identity_mismatch: '考试或题目身份不一致', answer_invalid: '考试答案未通过格式核验', grading_pending: '考试已交卷，成绩尚未公布', not_started: '考试尚未开始', proctoring_required: '考试需要原站监考或入场确认',
   editor_changed: '保存后的源码与候选答案不一致，尚未确认评测通过',
   model_error: '模型服务调用失败', model_timeout: '模型响应超时', model_network_error: '模型服务连接失败', collection_stopped: '只读题库采集已停止，请查看采集统计和跳过原因', service_restarted: '服务重启中断了任务，需要核对已完成结果',
   verification_unconfirmed: '头歌返回的完成或分值信息不足，尚未核验通过', submission_uncertain: '提交结果尚未确认，需要先读取头歌结果', attempts_exhausted: '已达到本次修复次数，仍未通过', budget_exhausted: '已达到本次任务费用上限', budget_unavailable: '执行预算暂不可用', selftest_failed: '代码自测未通过', selftest_connection_failed: '自测连接失败', selftest_stream_unconfirmed: '自测输出未完整确认', invalid_candidate: '生成的答案未满足提交要求', invalid_output_json: '模型返回内容格式不正确', model_response_invalid: '模型返回内容格式不正确', model_output_truncated: '模型返回内容被截断', model_rate_limited: '模型请求受到频率限制', execution_failed: '执行未完成，需要检查原始响应', unsupported_multifile: '当前作业的多文件结构尚未支持', unsupported_roster: '关卡清单不完整，暂停执行', unsupported_homework: '当前作业类型尚未支持', usage_persistence_failed: '执行用量保存失败', verification_persistence_failed: '完成核验结果保存失败', course_sync_failed: '课程列表读取失败', homework_sync_failed: '作业列表读取失败', course_identity_invalid: '课程标识不完整，暂停执行', homework_identity_invalid: '作业标识不完整，暂停执行', course_limit: '课程数量达到本次任务上限', homework_limit: '作业数量达到本次任务上限', deadline_passed: '作业已经截止', no_required_levels: '没有需要执行的必做关卡', deadline_exceeded: '整批执行达到时间上限，尚未开始此作业', time_limit: '整批执行达到时间上限，尚未开始此作业', context_deadline_exceeded: '整批执行达到时间上限，尚未开始此作业', collection_failed: '题库采集未完成，请检查采集明细', collect_failed: '题库采集未完成，请检查采集明细', request_byte_or_time_limit: '题库采集达到读取量或时间上限', limit_reached: '题库采集达到本次上限', service_required: '存在尚未完成的作业，需跟进', canceled: '管理员或用户已停止执行', interrupted: '服务重启中断了执行，需要核对已完成结果',
 };
 const text = (value: unknown): string => typeof value === 'string' ? value.trim() : '';
 const pendingStatuses = new Set(['queued', 'running', 'waiting', 'processing']);
-const terminalStatuses = new Set(['succeeded', 'failed', 'canceled', 'uncertain', 'interrupted', 'completed', 'support']);
+const terminalStatuses = new Set(['succeeded', 'failed', 'canceled', 'uncertain', 'interrupted', 'completed', 'support', 'submitted', 'awaiting_review', 'graded']);
 function targetKey(job: AdminJob): string {
   const owner = String(job.owner_id ?? job.owner ?? job.context?.user?.id ?? '').trim();
   const request = job.request;
@@ -24,7 +26,8 @@ function targetKey(job: AdminJob): string {
   // Only submitted request identities define a service target. A batch's
   // highlighted failed homework and current progress are display metadata.
   if (scope !== 'all' && !request.course || ['homework', 'current'].includes(scope) && !request.homework_id || scope === 'current' && !request.game) return `record:${job.id}`;
-  return JSON.stringify([owner, request.mode, scope, request.course ?? '', request.homework_id ?? 0, request.game ?? '']);
+  if (scope === 'exercise' && !request.exercise_id) return `record:${job.id}`;
+  return JSON.stringify([owner, request.mode, scope, request.course ?? '', request.homework_id ?? 0, request.game ?? '', request.exercise_id ?? 0]);
 }
 export function partitionAdminJobs(jobs: AdminJob[]): { current: AdminJob[]; history: AdminJob[] } {
   const ordered = jobs.map((job, index) => ({ job, index })).sort((a, b) => {
@@ -76,6 +79,7 @@ function collectionNeedsReview(job: AdminJob): boolean {
   return count(summary.failed) > 0 || !!text(summary.stop_reason) || summary.scan_complete === false;
 }
 function needsAttention(job: AdminJob): boolean {
+	if (job.request.scope === 'exercise' && record(job.result).submitted === true) return false;
   if (collectionNeedsReview(job)) return true;
   return ['failed', 'uncertain', 'interrupted'].includes(job.status) && !collectionBudgetEnd(job);
 }
@@ -90,6 +94,10 @@ function collectionEndReason(job: AdminJob): string {
     : '达到本次读取预算或时间上限，已保留结果；尚未扫描完全部内容';
 }
 function displayStatus(job: AdminJob): { label: string; tone: string } {
+  if (job.request.scope === 'exercise' && !pendingStatuses.has(job.status)) {
+    const status = serviceStatus(job);
+    return { label: serviceLabels[status], tone: status === 'graded' ? 'completed' : status === 'support' ? 'support' : 'processing' };
+  }
   if (job.request.mode === 'collect_verified' && text(record(job.result).reason_code) === 'collector_busy') return { label: '本次采集已跳过', tone: 'limited' };
   if (collectionNeedsReview(job)) return { label: '需要处理', tone: 'support' };
   if (collectionBudgetEnd(job)) return { label: '达到采集上限', tone: 'limited' };
@@ -140,6 +148,7 @@ function renderCollectionSummary(job: AdminJob): string {
   return `<section class="collection-summary"><h3>本次只读采集结果</h3><dl class="collection-counters">${counters.map(([label, value, unit]) => `<div><dt>${label}</dt><dd>${value} ${unit}</dd></div>`).join('')}</dl><p class="meta">新增和已有答案按答案条目计数；跳过按课堂、作业或关卡计项，不代表跳过的题目总数。证据未确认是跳过的子集，不重复相加。</p>${count(summary.collected) === 0 && count(summary.duplicates) > 0 ? '<p class="detail-note">本次没有新增答案，是因为已核验的答案在题库中已存在；已有答案仍可复用。</p>' : ''}<h3>跳过、失败与终止原因</h3><ul class="collection-reasons">${reasons.map(([code, value]) => { const reason = collectionReasons[code]; return `<li><div><strong>${e(reason?.label ?? '其他采集记录，请展开技术记录查看原因代码')}</strong><span>${count(value)} ${e(reason?.unit ?? '项')}</span></div>${reason?.note ? `<p>${e(reason.note)}</p>` : ''}</li>`; }).join('') || '<li><p>没有记录跳过、失败或终止原因。</p></li>'}</ul></section>`;
 }
 function readableReason(job: AdminJob): string {
+  if (job.request.scope === 'exercise' && ['submitted', 'awaiting_review', 'graded'].includes(serviceStatus(job))) return serviceStatus(job) === 'graded' ? '已交卷，成绩已公布' : '已交卷，成绩尚未公布';
   if (collectionBudgetEnd(job)) return collectionEndReason(job);
   if (job.request.mode === 'collect_verified' && text(record(job.result).reason_code) === 'collector_busy') return '已有其他只读采集正在进行，本次没有启动扫描';
   if (job.request.mode === 'collect_verified' && count(collectionSummary(job).failed) > 0) {
@@ -190,7 +199,7 @@ function jobContext(job: AdminJob) {
   return {
     user: context?.user?.name || context?.user?.login || '用户名称待补充',
     course: context?.course?.name || text(currentHomework?.course_name) || '课程名称待补充',
-    homework: context?.homework?.name || text(currentHomework?.title) || text(data.title) || '作业名称待补充',
+    homework: context?.exercise?.name || context?.homework?.name || text(currentHomework?.title) || text(data.title) || (job.request.scope === 'exercise' ? '考试名称待补充' : '作业名称待补充'),
     level: context ? context.level?.title || '' : (issueLevel ? text(issue.title) : '') || text(batch.current_title) || (progressMatches ? text(progress.current_title) : ''),
     position: context ? context.level?.position || 0 : count(issue.position) || count(batch.current_position) || (progressMatches ? count(progress.current_position) : 0),
     attention: context?.summary?.attention_homeworks ?? homeworks.filter(item => isAttention(item) || isAttention(record(item.result))).map(item => ({ id: count(item.homework_id), name: text(item.title), course_name: text(item.course_name), reason_code: text(deepestIssue(record(item.result)).reason_code) || text(item.reason_code) })),
@@ -207,6 +216,7 @@ function progressLabel(job: AdminJob): string {
   return progress.total ? `${progress.completed} / ${progress.total} ${progress.unit === '关' ? '个关卡' : progress.unit}` : '进度尚未获取';
 }
 function homeworkLabel(job: AdminJob, context: ReturnType<typeof jobContext>): string {
+  if (job.request.scope === 'exercise') return context.homework;
   if (context.homework !== '作业名称待补充') return context.homework;
   if (job.request.scope === 'course' || job.request.scope === 'all') {
     if (['queued', 'waiting', 'running', 'processing'].includes(job.status)) return '等待同步作业';
@@ -225,10 +235,10 @@ function adminJobRows(jobs: AdminJob[], limited = false, history = false): strin
   return `<div class="table-scroll"><table class="admin-jobs-table"><thead><tr><th>用户</th><th>课程 / 任务范围</th><th>作业 / 当前关卡</th><th>状态 / 完成进度</th><th>具体原因</th><th>模型 / 记录费用</th><th>管理</th></tr></thead><tbody>${rows.map(job => {
     const data = record(job.result);
     const context = jobContext(job), collecting = job.request.mode === 'collect_verified', status = displayStatus(job);
-    const scope = collecting ? '题库采集 · 只读' : job.request.scope === 'all' ? '全部课程' : job.request.scope === 'course' ? '整门课程' : job.request.scope === 'current' ? '单个关卡' : '单份作业';
+    const scope = collecting ? '题库采集 · 只读' : job.request.scope === 'all' ? '全部课程' : job.request.scope === 'course' ? '整门课程' : job.request.scope === 'current' ? '单个关卡' : job.request.scope === 'exercise' ? '在线考试' : '单份作业';
     const work = collecting ? '采集已通过题目' : homeworkLabel(job, context);
     const extra = !collecting && context.attention.length > 1 ? `<small class="admin-attention">另有 ${context.attention.length - 1} 份需跟进，详情查看</small>` : '';
-    const level = context.level ? `<small>${context.position ? `第 ${context.position} 关 · ` : ''}${e(context.level)}</small>` : '<small>尚未进入关卡</small>';
+    const level = job.request.scope === 'exercise' ? '<small>在线考试</small>' : context.level ? `<small>${context.position ? `第 ${context.position} 关 · ` : ''}${e(context.level)}</small>` : '<small>尚未进入关卡</small>';
     return `<tr><td class="admin-user-cell"><strong>${e(context.user)}</strong></td><td class="admin-course-cell"><strong>${e(collecting ? '全部已通过任务' : context.course)}</strong><small>${scope}</small></td><td class="admin-work-cell"><strong>${e(work)}</strong>${collecting ? '' : level}${extra}<small class="admin-created-at">${e(dateTime(job.created_at))} 创建</small></td><td class="admin-progress-cell">${history ? '<span class="admin-history-label">历史记录</span>' : ''}<span class="badge ${history ? 'limited' : status.tone}">${e(history && needsAttention(job) ? '当次未完成' : status.label)}</span><small>${e(progressLabel(job))}</small>${!collecting && count(context.batch.total_levels) && !job.context?.summary?.progress_label?.includes('当前作业') ? `<small>当前作业 ${count(context.batch.completed_levels)} / ${count(context.batch.total_levels)} 个关卡</small>` : ''}</td><td class="reason-cell">${e(readableReason(job))}${count(job.context?.summary?.pending_homeworks) ? `<small>另有 ${count(job.context?.summary?.pending_homeworks)} 份尚未开始</small>` : ''}</td><td class="admin-usage-cell">${count(data.model_calls)} 次<small>$${(count(data.cost_micro_usd) / 1000000).toFixed(6)}</small>${count(data.model_calls) === 0 && !collecting ? '<small>未调用模型</small>' : ''}</td><td><button class="text-button" data-admin-job-detail="${e(job.id)}">详情</button>${['queued', 'running'].includes(job.status) ? `<button class="text-button danger" data-admin-cancel="${e(job.id)}">停止</button>` : ''}</td></tr>`;
   }).join('') || `<tr><td colspan="7"><div class="empty"><h3>${history ? '暂无历史记录' : limited ? '当前没有需要跟进的服务' : '暂无当前任务'}</h3><p>${history ? '被新安排替代的旧记录会保留在这里。' : limited ? '旧记录已收进任务运营的历史记录。' : '可切换任务类型查看题库采集。新的用户安排会显示在这里。'}</p></div></td></tr>`}</tbody></table></div>`;
 }
@@ -272,7 +282,7 @@ function renderAttentionHomework(items: ReturnType<typeof jobContext>['attention
 }
 function technicalResult(data: Record<string, unknown>, depth = 0): Record<string, unknown> {
   if (depth > 5) return {};
-  const keys = ['scan_complete', 'title', 'subject', 'course', 'course_name', 'homework_id', 'challenge_id', 'position', 'status', 'reason_code', 'score', 'max_score', 'diagnostics', 'model_calls', 'reasons', 'collected', 'duplicates', 'skipped', 'unconfirmed', 'failed', 'limit_reached', 'total_homeworks', 'completed_homeworks', 'needs_service_homeworks', 'pending_homeworks', 'stop_reason'];
+  const keys = ['exercise_id', 'total_questions', 'completed_questions', 'submitted', 'score_known', 'scan_complete', 'title', 'subject', 'course', 'course_name', 'homework_id', 'challenge_id', 'position', 'status', 'reason_code', 'score', 'max_score', 'diagnostics', 'model_calls', 'reasons', 'collected', 'duplicates', 'skipped', 'unconfirmed', 'failed', 'limit_reached', 'total_homeworks', 'completed_homeworks', 'needs_service_homeworks', 'pending_homeworks', 'stop_reason'];
   const result = Object.fromEntries(keys.filter(key => data[key] !== undefined).map(key => [key, data[key]]));
   const children = resultChildren(data);
   if (children.length) result.steps = children.map(item => ({ ...technicalResult(item, depth + 1), ...Object.keys(record(item.result)).length ? { result: technicalResult(record(item.result), depth + 1) } : {} }));
@@ -282,7 +292,7 @@ export function renderAdminJobDetail(job: AdminJob, historical = false): string 
   const data = record(job.result);
   const context = jobContext(job), collecting = job.request.mode === 'collect_verified', status = displayStatus(job);
   if (historical) { status.tone = 'limited'; if (needsAttention(job)) status.label = '当次未完成'; }
-  const scope = collecting ? '题库采集（只读）' : job.request.scope === 'all' ? '全部课程' : job.request.scope === 'course' ? '整门课程' : job.request.scope === 'current' ? '单个关卡' : '单份作业';
+  const scope = collecting ? '题库采集（只读）' : job.request.scope === 'all' ? '全部课程' : job.request.scope === 'course' ? '整门课程' : job.request.scope === 'current' ? '单个关卡' : job.request.scope === 'exercise' ? '在线考试' : '单份作业';
   const raw = { job_id: job.id, owner_id: job.owner_id ?? job.owner, request: job.request, status: job.status, phase: job.phase, error_code: job.error_code, message: job.message, context_reason_code: job.context?.summary?.reason_code, context_diagnostics: job.context?.summary?.diagnostics, stop_reason: job.context?.summary?.stop_reason, result: technicalResult(data) };
-  return `<h2>${collecting ? '题库采集详情' : '任务执行详情'}</h2>${historical ? '<p class="detail-note">历史执行记录：以下状态与原因仅代表当次尝试，不计入当前待处理。当前结果请查看当前任务。</p>' : ''}<p class="subtext">${e(context.user)} · ${e(collecting ? '采集已通过题目' : context.course)}</p><div class="operator-summary"><span class="badge ${status.tone}">${e(status.label)}</span><strong>${e(progressLabel(job))}</strong><p>${e(readableReason(job))}</p>${count(job.context?.summary?.pending_homeworks) ? `<p>另有 ${count(job.context?.summary?.pending_homeworks)} 份作业尚未开始，不计作已完成。</p>` : ''}</div><dl class="info-list admin-detail-info"><div><dt>用户</dt><dd>${e(context.user)}</dd></div><div><dt>任务范围</dt><dd>${scope}</dd></div>${collecting ? '' : `<div><dt>课程</dt><dd>${e(context.course)}</dd></div><div><dt>作业</dt><dd>${e(homeworkLabel(job, context))}</dd></div><div><dt>当前关卡</dt><dd>${context.level ? `${context.position ? `第 ${context.position} 关 · ` : ''}${e(context.level)}` : '尚未进入关卡'}</dd></div>`}<div><dt>${['course', 'all'].includes(job.request.scope ?? '') ? '整批最后阶段' : '执行阶段'}</dt><dd>${e(phaseLabels[job.phase] ?? '阶段待补充')}</dd></div><div><dt>创建时间</dt><dd>${e(dateTime(job.created_at))}</dd></div><div><dt>模型调用</dt><dd>${count(data.model_calls)} 次${!count(data.model_calls) ? '（未调用模型）' : ''}</dd></div><div><dt>记录费用（含估算）</dt><dd>$${(count(data.cost_micro_usd) / 1000000).toFixed(6)}</dd></div></dl>${collecting ? renderCollectionSummary(job) : renderAttentionHomework(context.attention) + renderAdminSteps(data)}<details class="operator-technical"><summary>技术记录（原始标识与诊断）</summary><pre>${e(JSON.stringify(raw, null, 2))}</pre></details>`;
+  return `<h2>${collecting ? '题库采集详情' : '任务执行详情'}</h2>${historical ? '<p class="detail-note">历史执行记录：以下状态与原因仅代表当次尝试，不计入当前待处理。当前结果请查看当前任务。</p>' : ''}<p class="subtext">${e(context.user)} · ${e(collecting ? '采集已通过题目' : context.course)}</p><div class="operator-summary"><span class="badge ${status.tone}">${e(status.label)}</span><strong>${e(progressLabel(job))}</strong><p>${e(readableReason(job))}</p>${count(job.context?.summary?.pending_homeworks) ? `<p>另有 ${count(job.context?.summary?.pending_homeworks)} 份作业尚未开始，不计作已完成。</p>` : ''}</div><dl class="info-list admin-detail-info"><div><dt>用户</dt><dd>${e(context.user)}</dd></div><div><dt>任务范围</dt><dd>${scope}</dd></div>${collecting ? '' : `<div><dt>课程</dt><dd>${e(context.course)}</dd></div><div><dt>${job.request.scope === 'exercise' ? '考试' : '作业'}</dt><dd>${e(homeworkLabel(job, context))}</dd></div>${job.request.scope === 'exercise' ? '' : `<div><dt>当前关卡</dt><dd>${context.level ? `${context.position ? `第 ${context.position} 关 · ` : ''}${e(context.level)}` : '尚未进入关卡'}</dd></div>`}`}<div><dt>${['course', 'all'].includes(job.request.scope ?? '') ? '整批最后阶段' : '执行阶段'}</dt><dd>${e(phaseLabels[job.phase] ?? '阶段待补充')}</dd></div><div><dt>创建时间</dt><dd>${e(dateTime(job.created_at))}</dd></div><div><dt>模型调用</dt><dd>${count(data.model_calls)} 次${!count(data.model_calls) ? '（未调用模型）' : ''}</dd></div><div><dt>记录费用（含估算）</dt><dd>$${(count(data.cost_micro_usd) / 1000000).toFixed(6)}</dd></div></dl>${collecting ? renderCollectionSummary(job) : renderAttentionHomework(context.attention) + renderAdminSteps(data)}<details class="operator-technical"><summary>技术记录（原始标识与诊断）</summary><pre>${e(JSON.stringify(raw, null, 2))}</pre></details>`;
 }

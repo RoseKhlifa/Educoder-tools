@@ -50,6 +50,22 @@ export interface Homework {
   canEnter?: boolean;
 }
 
+export interface Exercise {
+  id: number;
+  name: string;
+  status: string;
+  submitted: boolean;
+  scoreKnown: boolean;
+  score?: number | string;
+  maxScore?: number | string;
+  totalQuestions?: number;
+  deadline?: string;
+  available: boolean;
+  actionRequired?: boolean;
+  reasonCode?: string;
+  url?: string;
+}
+
 export interface EnteredTask {
   kind: 'programming' | 'choice' | 'unknown';
   courseIdentifier: string;
@@ -78,11 +94,12 @@ export interface EnteredTask {
 export type View = 'login' | 'courses' | 'homeworks';
 
 export type JobMode = 'generate_only' | 'selftest' | 'submit';
-export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled' | 'uncertain' | 'interrupted' | 'waiting' | 'processing' | 'support' | 'completed';
+export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'canceled' | 'uncertain' | 'interrupted' | 'waiting' | 'processing' | 'support' | 'completed' | 'submitted' | 'awaiting_review' | 'graded';
 export interface JobRequest {
   course?: string;
   homework_id?: number;
-  scope?: 'homework' | 'current' | 'course' | 'all';
+  scope?: 'homework' | 'current' | 'course' | 'all' | 'exercise';
+  exercise_id?: number;
   game?: string;
   mode: JobMode;
   idempotency_key?: string;
@@ -136,6 +153,8 @@ export interface HomeworkProgress {
   failed_levels?: number;
   current_position?: number;
   current_title?: string;
+  total_questions?: number;
+  completed_questions?: number;
 }
 export interface JobCapacity {
   workers: number;
@@ -172,6 +191,7 @@ export interface AdminJobContext {
   user?: { id?: string | number; name?: string; login?: string; linked?: boolean };
   course?: { identifier?: string; name?: string };
   homework?: { id?: number; name?: string };
+  exercise?: { id?: number; name?: string };
   level?: { title?: string; position?: number; score?: string; max_score?: string };
   scope_label?: string;
   summary?: { stop_reason?: string; pending_homeworks?: number; reason?: string; reason_code?: string; message?: string; diagnostics?: string[]; progress_label?: string; attention_homeworks?: Array<{ id?: number; name?: string; course_identifier?: string; course_name?: string; reason?: string; reason_code?: string; diagnostics?: string[]; level_title?: string; level_position?: number }> };

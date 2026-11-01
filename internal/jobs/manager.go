@@ -127,6 +127,9 @@ func (m *Manager) Submit(ctx context.Context, owner string, req Request, exec Ex
 	if req.Scope == "course" || req.Scope == "all" {
 		kind = "service"
 	}
+	if req.Scope == "exercise" {
+		kind = "exercise"
+	}
 	if req.Mode == "collect_verified" {
 		kind = "collection"
 	}
@@ -245,6 +248,11 @@ func (m *Manager) removeQueuedLocked(id string) {
 func requestsOverlap(a, b Request) bool {
 	if a.Mode == "collect_verified" || b.Mode == "collect_verified" {
 		return false
+	}
+	// Classroom/all jobs currently cover lab homework only. Exams have their
+	// own target and must not collide with equal numeric homework identifiers.
+	if a.Scope == "exercise" || b.Scope == "exercise" {
+		return a.Scope == "exercise" && b.Scope == "exercise" && a.Course == b.Course && a.ExerciseID == b.ExerciseID
 	}
 	if a.Scope == "all" || b.Scope == "all" {
 		return true
