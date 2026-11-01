@@ -25,7 +25,8 @@ class Document {
 const ok = data => new Response(JSON.stringify({data,error:null}));
 const failure=(status,code,message)=>new Response(JSON.stringify({data:null,error:{code,message}}),{status});
 const user={login:'demo',name:'<测试同学>',avatarUrl:'/api/avatar'};
-const courses=[{identifier:'COURSE_A',name:'课堂甲',homeworkCount:2},{identifier:'COURSE_B',name:'课堂乙',homeworkCount:3}];
+const courses=[{identifier:'COURSE_A',name:'课堂甲',homeworkCount:2,teacherName:'合成老师',studentCount:25},{identifier:'COURSE_B',name:'课堂乙',homeworkCount:3,teacherName:'<老师>',studentCount:0}];
+const serviceDate=()=>new Date(Date.now()+8*60*60*1000).toISOString().slice(0,10);
 const job=(extra={})=>({id:'job-1',status:'processing',phase:'processing',request:{scope:'course',course:'COURSE_A',mode:'submit'},created_at:'2026-10-31T00:00:00Z',updated_at:'2026-10-31T00:00:00Z',result:{service_status:'processing',total_homeworks:2,completed_homeworks:1},...extra});
 const settle=async()=>{for(let i=0;i<12;i++)await new Promise(resolve=>setImmediate(resolve));};
 const deferred=()=>{let resolve;const promise=new Promise(done=>{resolve=done;});return{promise,resolve};};
@@ -40,9 +41,11 @@ async function app(overrides={}) {
     if(url==='/api/auth/me'||url==='/api/auth/login')return ok({user,platform:{role:'user',status:'active'}});
     if(url==='/api/auth/logout')return ok({loggedOut:true});
     if(url==='/api/courses')return ok(courses);
+    if(url==='/api/service/today-summary')return ok({date:serviceDate(),timezone:'Asia/Shanghai',completed_students:7,completed_questions:103});
     if(url==='/api/question-bank/summary')return ok({verified_objective_questions:272,verified_programming_problems:8,total_verified_questions:280});
     if(url==='/api/jobs')return options.method==='POST'?ok(job({request:JSON.parse(options.body)})):ok({jobs:[]});
     if(url.endsWith('/homeworks'))return ok([{id:1,name:'测试作业',challengeCount:2,finishedChallengeCount:1,requiredProgressKnown:true,requiredChallengeCount:2,finishedRequiredChallengeCount:1}]);
+    if(url.endsWith('/exercises'))return ok({items:[]});
     if(url.startsWith('/api/admin/'))return ok(url==='/api/admin/overview'?{total_users:3,running_jobs:1,capacity:{model_concurrency:8}}:{items:[]});
     throw new Error(`Unexpected URL ${url}`);
   };
@@ -91,6 +94,52 @@ await test('consumer course service and administrator boundary',async t=>{
     page.get('[data-action="logout"]').dispatch('click');late.resolve(ok({verified_objective_questions:900,verified_programming_problems:1,total_verified_questions:901}));await settle();
     assert.match(page.html(), /id="login-form"/);assert.doesNotMatch(page.html(), /题库概况|901|课堂甲/);
     assert.equal(page.timers.size,0);
+  });
+  await t.test('daily completions replace connection labels and use real teacher/student fields', async () => {
+    const page=await app();
+    assert.match(page.html(), /aria-label="今日完成"/);assert.match(page.html(), /已为 <strong>7<\/strong> 位同学/);assert.match(page.html(), /完成 <strong>103<\/strong> 道题/);
+    assert.match(page.html(), /北京时间.*当日提交并核验通过/);assert.doesNotMatch(page.html(), /头歌已连接|头歌账号已连接|<h3>服务状态<\/h3>|class="connection"/);
+    const meta=page.html().match(/class="course-meta">([\s\S]*?)<\/td>/)?.[1] || '';
+    assert.match(meta,/授课教师/);assert.match(meta,/合成老师/);assert.match(meta,/学生人数/);assert.match(meta,/25 人/);assert.doesNotMatch(meta,/COURSE_A/);
+    assert.match(page.html(), /&lt;老师&gt;/);assert.match(page.html(), /0 人/);
+    assert.equal(page.requests.filter(item=>item.url==='/api/service/today-summary').length,1);await page.tick();assert.equal(page.requests.filter(item=>item.url==='/api/service/today-summary').length,1);
+  });
+  await t.test('missing people metadata and unavailable daily totals stay explicitly unknown', async () => {
+    const page=await app({'/api/courses':()=>ok([{identifier:'COURSE_A',name:'信息待同步',membersCount:99}]),'/api/service/today-summary':()=>failure(503,'SERVICE_SUMMARY_UNAVAILABLE','private-stat-error')});
+    assert.match(page.html(),/教师待同步/);assert.match(page.html(),/人数待同步/);assert.match(page.html(),/今日统计暂未同步/);assert.doesNotMatch(page.html(),/99 人|private-stat-error|完成 <strong>0/);
+    const old=await app({'/api/service/today-summary':()=>ok({date:'2020-01-01',timezone:'Asia/Shanghai',completed_students:999,completed_questions:999})});
+    assert.match(old.html(),/今日统计暂未同步/);assert.doesNotMatch(old.html(),/完成 <strong>999|已为 <strong>999/);
+  });
+  await t.test('login prefetches both lists and opening cached details does not wait or request again', async () => {
+    const page=await app();
+    for(const id of ['COURSE_A','COURSE_B'])for(const kind of ['homeworks','exercises'])assert.equal(page.requests.filter(item=>item.url===`/api/courses/${id}/${kind}`).length,1);
+    const before=page.requests.length;page.get('[data-course-detail="COURSE_A"]').dispatch('click');
+    assert.match(page.html(),/测试作业/);assert.doesNotMatch(page.html(),/正在同步列表/);
+    page.get('[data-detail-tab="exercise"]').dispatch('click');assert.match(page.html(),/暂无在线考试/);
+    page.get('[data-detail-tab="homework"]').dispatch('click');assert.match(page.html(),/测试作业/);
+    assert.equal(page.requests.length,before);assert.equal(page.requests.some(item=>item.url.endsWith('/enter')||item.options.method==='POST'),false);
+  });
+  await t.test('the detail SVG refresh revalidates both tabs and retains previous results on failure', async () => {
+    let step=1,failed=false;
+    const page=await app({
+      '/api/courses/COURSE_A/homeworks':()=>failed?failure(503,'UPSTREAM','private-refresh-error'):ok([{id:1,name:`实验版本${step}`}]),
+      '/api/courses/COURSE_A/exercises':()=>failed?failure(503,'UPSTREAM','private-refresh-error'):ok({items:[{id:701,name:`考试版本${step}`,available:false,submitted:true,scoreKnown:false}]}),
+    });
+    page.get('[data-course-detail="COURSE_A"]').dispatch('click');assert.match(page.html(),/实验版本1/);
+    step=2;page.get('[data-action="detail-refresh"]').dispatch('click');assert.match(page.html(),/实验版本1/);await settle();assert.match(page.html(),/实验版本2/);
+    page.get('[data-detail-tab="exercise"]').dispatch('click');assert.match(page.html(),/考试版本2/);
+    failed=true;page.get('[data-action="detail-refresh"]').dispatch('click');await settle();assert.match(page.html(),/考试版本2/);assert.match(page.html(),/暂未更新，继续显示上次结果/);assert.doesNotMatch(page.html(),/private-refresh-error/);
+    assert.equal(page.requests.filter(item=>item.url==='/api/courses/COURSE_A/homeworks').length,3);assert.equal(page.requests.filter(item=>item.url==='/api/courses/COURSE_A/exercises').length,3);
+    assert.equal(page.requests.some(item=>item.options.method==='POST'),false);
+  });
+  await t.test('old prefetched details cannot populate a subsequent login session', async () => {
+    const old=deferred();let fresh=false;
+    const page=await app({'/api/courses/COURSE_A/homeworks':()=>fresh?ok([{id:2,name:'新会话作业'}]):old.promise});
+    page.get('[data-action="logout"]').dispatch('click');await settle();fresh=true;
+    page.get('#login').value='synthetic-other';page.get('#password').value='synthetic-only';page.get('#login-form').dispatch('submit');await settle();
+    old.resolve(ok([{id:1,name:'旧会话私有作业'}]));await settle();page.get('[data-course-detail="COURSE_A"]').dispatch('click');
+    assert.match(page.html(),/新会话作业/);assert.doesNotMatch(page.html(),/旧会话私有作业/);
+    assert.equal(page.requests.some(item=>item.url==='/api/jobs'&&item.options.method==='POST'),false);
   });
   await t.test('loads only own courses and service progress, with no automatic task entry or admin request',async()=>{
     const page=await app();assert.match(page.html(),/课堂甲|课堂乙/);assert.match(page.html(),/&lt;测试同学&gt;/);assert.match(page.html(),/一键完成全部未完成作业/);assert.doesNotMatch(page.html(),/API额度|模型|Token|管理后台|自测|修复次数/);assert.equal(page.requests.some(item=>item.url.startsWith('/api/admin')||item.url.endsWith('/enter')),false);
@@ -312,7 +361,7 @@ await test('consumer course service and administrator boundary',async t=>{
     const page = await app({ '/api/courses/COURSE_A/exercises': () => ok({ items: [exam], courseIdentifier: 'COURSE_A' }) });
     page.get('[data-course-detail="COURSE_A"]').dispatch('click'); await settle();
     assert.match(page.html(), /课程实验|在线考试/);
-    assert.equal(page.requests.some(item => item.url.endsWith('/exercises')), false);
+    assert.equal(page.requests.filter(item => item.url==='/api/courses/COURSE_A/exercises').length, 1, 'exam catalog should already be prefetched without starting the exam');
     page.get('[data-detail-tab="exercise"]').dispatch('click'); await settle();
     assert.match(page.html(), /数据结构期中测试|20 道题/);
     assert.match(page.html(), /不包含在一键完成课程作业中/);
@@ -362,15 +411,15 @@ await test('consumer course service and administrator boundary',async t=>{
   });
   await t.test('switching between course experiments and exams invalidates responses from the previous tab', async () => {
     const lateHomework = deferred(), lateExam = deferred(); let homeworkReads = 0;
-    const page = await app({ '/api/courses/COURSE_A/homeworks': () => ++homeworkReads === 1 ? lateHomework.promise : ok([{ id: 101, name: '当前实验列表' }]), '/api/courses/COURSE_A/exercises': () => lateExam.promise });
+    const page = await app({ '/api/courses/COURSE_A/homeworks': () => ++homeworkReads === 1 ? lateHomework.promise : ok([{ id: 101, name: '再次读取的实验列表' }]), '/api/courses/COURSE_A/exercises': () => lateExam.promise });
     page.get('[data-course-detail="COURSE_A"]').dispatch('click'); await settle();
     page.get('[data-detail-tab="exercise"]').dispatch('click'); await settle();
-    lateHomework.resolve(ok([{ id: 102, name: '过时的实验列表' }])); await settle();
-    assert.match(page.html(), /正在同步在线考试/); assert.doesNotMatch(page.html(), /过时的实验列表/);
+    lateHomework.resolve(ok([{ id: 102, name: '后台预取的实验列表' }])); await settle();
+    assert.match(page.html(), /正在同步列表/); assert.doesNotMatch(page.html(), /后台预取的实验列表/);
     page.get('[data-detail-tab="homework"]').dispatch('click'); await settle();
-    assert.match(page.html(), /当前实验列表/);
+    assert.match(page.html(), /后台预取的实验列表/);
     lateExam.resolve(ok({ items: [{ id: 701, name: '过时的在线考试', available: true }] })); await settle();
-    assert.match(page.html(), /当前实验列表/); assert.doesNotMatch(page.html(), /过时的在线考试|data-exam-submit=/);
+    assert.match(page.html(), /后台预取的实验列表/); assert.doesNotMatch(page.html(), /过时的在线考试|data-exam-submit=/);
     assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
   });
 

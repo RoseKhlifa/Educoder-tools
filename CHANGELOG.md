@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.49 - 2026-11-02
+
+- Prefetch course details and show real daily completions, instructors and student counts
+
 ## 0.1.48 - 2026-11-02
 
 - Add verified question bank summary and service notes to the user sidebar

@@ -11,6 +11,7 @@ export const icon = (name: string): string => {
     courses: '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="M8 4v16M3 9h18"/>',
     progress: '<path d="M4 15v5m8-10v10m8-16v16"/>',
     overview: '<rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/>',
+    teacher: '<path d="m2 8 10-5 10 5-10 5L2 8zM6 10v6c3 3 9 3 12 0v-6M22 8v8"/>',
     users: '<circle cx="9" cy="8" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2m1-15a3 3 0 0 1 0 6m2 3a5 5 0 0 1 3 4v2"/>',
     audit: '<path d="M6 3h12v18H6zM9 8h6m-6 4h6m-6 4h4"/>',
     check: '<path d="m5 12 4 4L19 6"/>',

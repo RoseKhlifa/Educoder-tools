@@ -3,6 +3,7 @@ import type {
   AdminUser, AdminAudit, AdminJob, AdminOverview,
   AnswerJob,
   Course,
+  DailyServiceSummary,
   Exercise,
   EnteredTask,
   Homework,
@@ -44,6 +45,10 @@ function text(value: unknown, fallback = ''): string {
 function number(value: unknown): number | undefined {
   const result = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(result) ? result : undefined;
+}
+
+function count(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
 function unwrap<T>(payload: unknown, status: number, requestId?: string): T {
@@ -97,9 +102,24 @@ function normalizeCourse(value: unknown): Course {
     identifier: text(item.identifier || item.course_identifier || urlIdentifier || item.id),
     name: text(item.name || item.course_name, '未命名课堂'),
     homeworkCount: number(item.homeworkCount || item.homework_count || item.homework_commons_count),
-    membersCount: number(item.membersCount || item.members_count),
+    teacherName: typeof item.teacherName === 'string' ? item.teacherName.trim() || undefined : undefined,
+    // members_count includes instructors upstream; it is not a student count.
+    studentCount: count(item.studentCount),
     ended: Boolean(item.ended ?? item.is_end),
   };
+}
+
+function normalizeDailyServiceSummary(value: unknown): DailyServiceSummary {
+  const item = asRecord(value);
+  const date = typeof item.date === 'string' ? item.date : '';
+  const parsed = /^\d{4}-\d{2}-\d{2}$/.test(date) ? new Date(`${date}T00:00:00Z`) : null;
+  const validDate = parsed && Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
+  const students = count(item.completed_students);
+  const questions = count(item.completed_questions);
+  if (!validDate || item.timezone !== 'Asia/Shanghai' || students === undefined || questions === undefined) {
+    throw new ApiRequestError('今日服务概况暂时不可用，请稍后重试', 200, 'INVALID_RESPONSE');
+  }
+  return { date, timezone: 'Asia/Shanghai', completed_students: students, completed_questions: questions };
 }
 
 function normalizeQuestionBankSummary(value: unknown): QuestionBankSummary {
@@ -197,6 +217,7 @@ export interface EducoderApi {
   logout(): Promise<void>;
   courses(): Promise<Course[]>;
   questionBankSummary(): Promise<QuestionBankSummary>;
+  todayServiceSummary(): Promise<DailyServiceSummary>;
   homeworks(courseIdentifier: string): Promise<Homework[]>;
   exercises(courseIdentifier: string): Promise<{ items: Exercise[]; courseIdentifier?: string }>;
   enter(courseIdentifier: string, homeworkId: number): Promise<EnteredTask>;
@@ -251,6 +272,10 @@ export class BrowserApi implements EducoderApi {
 
   async questionBankSummary(): Promise<QuestionBankSummary> {
     return normalizeQuestionBankSummary(await this.request<unknown>('/api/question-bank/summary'));
+  }
+
+  async todayServiceSummary(): Promise<DailyServiceSummary> {
+    return normalizeDailyServiceSummary(await this.request<unknown>('/api/service/today-summary'));
   }
 
   async homeworks(courseIdentifier: string): Promise<Homework[]> {

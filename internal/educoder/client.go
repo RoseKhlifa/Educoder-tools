@@ -90,6 +90,11 @@ type Course struct {
 	FirstCategoryURL string `json:"first_category_url"`
 	IsEnd            bool   `json:"is_end"`
 	HomeworkCount    int    `json:"homework_commons_count"`
+	Teacher          struct {
+		RealName string `json:"real_name"`
+	} `json:"teacher"`
+	TeacherName  string `json:"teacher_name,omitempty"`
+	StudentCount *int   `json:"student_count,omitempty"`
 }
 
 type Homework struct {
@@ -179,6 +184,8 @@ type Client struct {
 	LoginName string
 	// Trace receives method/path/status only. It must never receive credentials.
 	Trace func(string)
+	// Course metadata remains scoped to this authenticated cookie jar.
+	courseMetadataCache *courseMetadataCache
 }
 
 func New(baseURL string) *Client {
@@ -186,7 +193,7 @@ func New(baseURL string) *Client {
 		baseURL = DefaultBaseURL
 	}
 	jar, _ := cookiejar.New(nil)
-	return &Client{HTTP: &http.Client{Transport: upstreamTransport, Jar: jar, Timeout: 45 * time.Second}, BaseURL: strings.TrimRight(baseURL, "/"), Origin: DefaultOrigin}
+	return &Client{HTTP: &http.Client{Transport: upstreamTransport, Jar: jar, Timeout: 45 * time.Second}, BaseURL: strings.TrimRight(baseURL, "/"), Origin: DefaultOrigin, courseMetadataCache: &courseMetadataCache{}}
 }
 
 func (c *Client) request(ctx context.Context, method, path string, query url.Values, body any, ref string, out any) error {
@@ -412,6 +419,9 @@ func (c *Client) Courses(ctx context.Context, status string) ([]Course, error) {
 			if !seen[course.ID] {
 				seen[course.ID] = true
 				course.Identifier = CourseIdentifier(course.FirstCategoryURL)
+				if name := strings.TrimSpace(course.Teacher.RealName); name != "" {
+					course.TeacherName = name
+				}
 				result = append(result, course)
 				added++
 			}

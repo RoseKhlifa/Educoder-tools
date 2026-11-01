@@ -100,6 +100,7 @@ type Server struct {
 	platform            *platform.Store
 	loginLimits         *loginLimiter
 	questionBankSummary questionBankSummaryCache
+	todaySummary        todaySummaryCache
 }
 
 func NewServer(config Config) *Server {
@@ -213,6 +214,10 @@ func validOrigin(origin string) bool {
 }
 
 func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request, requestID string) {
+	if r.URL.Path == "/api/service/today-summary" {
+		s.handleTodaySummary(w, r, requestID)
+		return
+	}
 	if r.URL.Path == "/api/question-bank/summary" {
 		s.handleQuestionBankSummary(w, r, requestID)
 		return
@@ -422,6 +427,7 @@ func (s *Server) handleCourses(w http.ResponseWriter, r *http.Request, requestID
 		s.upstreamError(w, requestID)
 		return
 	}
+	courses = enrichCourseMetadata(r.Context(), session.Client, courses)
 	result := make([]courseDTO, 0, len(courses))
 	s.rememberCourseLabels(r.Context(), courses)
 	for _, course := range courses {

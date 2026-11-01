@@ -44,10 +44,20 @@ type courseDTO struct {
 	Name          string `json:"name"`
 	IsEnd         bool   `json:"ended"`
 	HomeworkCount int    `json:"homeworkCount"`
+	TeacherName   string `json:"teacherName,omitempty"`
+	StudentCount  *int   `json:"studentCount,omitempty"`
 }
 
 func toCourseDTO(course educoder.Course) courseDTO {
-	return courseDTO{ID: course.ID, Identifier: course.Identifier, Name: course.Name, IsEnd: course.IsEnd, HomeworkCount: course.HomeworkCount}
+	name := strings.TrimSpace(course.TeacherName)
+	if name == "" {
+		name = strings.TrimSpace(course.Teacher.RealName)
+	}
+	students := course.StudentCount
+	if students != nil && *students < 0 {
+		students = nil
+	}
+	return courseDTO{ID: course.ID, Identifier: course.Identifier, Name: course.Name, IsEnd: course.IsEnd, HomeworkCount: course.HomeworkCount, TeacherName: name, StudentCount: students}
 }
 
 type homeworkDTO struct {

@@ -1693,3 +1693,31 @@ td { border-color:var(--line); }
   .bank-mobile .bank-counts { max-width:360px; }
   .bank-mobile .bank-service-notice .guidelines-link { min-height:44px; }
 }
+
+/* Course people metadata and daily verified service totals. */
+.course-meta { display:flex; align-items:center; flex-wrap:wrap; gap:5px 7px; line-height:1.7; }
+.course-teacher, .course-students { display:inline-flex; align-items:center; gap:4px; min-width:0; }
+.course-teacher > span { overflow-wrap:anywhere; }
+.course-meta svg { width:12px; height:12px; color:var(--muted-2); }
+.course-meta-separator { color:var(--line-strong); }
+.today-heading { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.today-heading h3 { margin:0; }
+.today-heading > span { font-size:10px; color:var(--muted-2); }
+.today-completion { font-size:12px; color:var(--ink-soft); line-height:2.2; margin:10px 0; }
+.today-completion strong { color:var(--coral-deep); font-family:var(--serif); font-size:24px; line-height:1.2; font-variant-numeric:tabular-nums; }
+.today-note { color:var(--muted); font-size:10px; line-height:1.8; margin-top:8px; }
+.today-empty { color:var(--muted); font-size:12px; margin:14px 0; }
+/* Footer follows long content and settles at the bottom when content is short. */
+.consumer-main, .admin-main { display:flex; flex-direction:column; }
+.consumer-main > *, .admin-main > * { flex-shrink:0; }
+.main > .page-footer { margin-top:auto; padding:24px 12px 0; }
+@media (max-width:640px) { .course-meta { font-size:11px; } .main > .page-footer { padding-top:22px; } }
+
+/* Course details stay readable while explicit refresh revalidates both lists. */
+.course-detail-title { padding-right:76px!important; }
+.course-detail-refresh { position:absolute; right:54px; top:12px; z-index:2; width:40px; min-height:40px; color:var(--coral-deep); }
+.detail-sync-message { min-height:18px; font-size:12px; color:var(--muted); line-height:1.7; margin-top:8px; }
+.course-detail-refresh.refreshing svg { animation:spin 1s linear infinite; }
+@media (prefers-reduced-motion:reduce) { .course-detail-refresh.refreshing svg { animation:none; } }
+
+.mobile-service-summary { margin-bottom:12px; }

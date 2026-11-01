@@ -5,6 +5,41 @@ import { ApiRequestError, BrowserApi } from './dist/api.js';
 const envelope = (data, status = 200) => new Response(JSON.stringify({ data, error: null, requestId: 'test-request' }), { status });
 
 await test('browser API uses the Go workbench contract', async t => {
+  await t.test('today service summary uses authenticated read-only aggregate counts and strips private fields', async () => {
+    let request;
+    const summary = { date: '2026-11-02', timezone: 'Asia/Shanghai', completed_students: 0, completed_questions: 0 };
+    globalThis.fetch = async (url, options) => {
+      request = { url, options };
+      return envelope({ ...summary, owner: 'private-owner', jobs: ['private-job'], answers: ['private-answer'] });
+    };
+    assert.deepEqual(await new BrowserApi().todayServiceSummary(), summary);
+    assert.equal(request.url, '/api/service/today-summary');
+    assert.equal(request.options.credentials, 'include');
+    assert.equal(request.options.body, undefined);
+    assert.ok(request.options.method === undefined || request.options.method === 'GET');
+  });
+  await t.test('today service summary rejects invalid dates, timezones and non-integer aggregate counts', async () => {
+    const valid = { date: '2026-11-02', timezone: 'Asia/Shanghai', completed_students: 2, completed_questions: 30 };
+    const invalid = [null, [], {}, { ...valid, completed_students: undefined },
+      { ...valid, completed_students: '2' }, { ...valid, completed_questions: null },
+      { ...valid, completed_students: -1 }, { ...valid, completed_questions: 0.5 },
+      { ...valid, completed_questions: Number.MAX_SAFE_INTEGER + 1 },
+      { ...valid, date: '2026-02-30' }, { ...valid, date: '2026-2-03' },
+      { ...valid, date: '2026-11-02T00:00:00Z' }, { ...valid, timezone: 'UTC' },
+    ];
+    for (const value of invalid) {
+      globalThis.fetch = async () => envelope(value);
+      await assert.rejects(new BrowserApi().todayServiceSummary(), error => error instanceof ApiRequestError && error.code === 'INVALID_RESPONSE' && !error.isSessionExpired, JSON.stringify(value));
+    }
+    globalThis.fetch = async () => envelope({ ...valid, date: '2028-02-29' });
+    assert.equal((await new BrowserApi().todayServiceSummary()).date, '2028-02-29');
+  });
+  await t.test('today service failures remain availability or session errors instead of fabricated zeroes', async () => {
+    globalThis.fetch = async () => new Response(JSON.stringify({ data: null, error: { code: 'UNAUTHENTICATED', message: '请先登录' } }), { status: 401 });
+    await assert.rejects(new BrowserApi().todayServiceSummary(), error => error instanceof ApiRequestError && error.isSessionExpired);
+    globalThis.fetch = async () => new Response(JSON.stringify({ data: null, error: { code: 'SERVICE_SUMMARY_UNAVAILABLE', message: '服务概况暂时不可用' } }), { status: 503 });
+    await assert.rejects(new BrowserApi().todayServiceSummary(), error => error instanceof ApiRequestError && error.status === 503 && error.code === 'SERVICE_SUMMARY_UNAVAILABLE' && !error.isSessionExpired);
+  });
   await t.test('question-bank summary uses authenticated read-only counts and retains genuine zeroes', async () => {
     let request;
     const summary = { verified_objective_questions: 0, verified_programming_problems: 19, total_verified_questions: 19 };
@@ -77,6 +112,25 @@ await test('browser API uses the Go workbench contract', async t => {
     ]);
     const courses = await new BrowserApi().courses();
     assert.deepEqual(courses.map(course => course.identifier), ['CLASSROOM_A', 'CLASSROOM_B']);
+  });
+  await t.test('course metadata uses the exact student count including zero and never labels members as students', async () => {
+    globalThis.fetch = async () => envelope([
+      { identifier: 'COURSE_A', name: '课程一', teacherName: ' 示例老师 ', studentCount: 0, members_count: 5 },
+      { identifier: 'COURSE_B', name: '课程二', teacherName: '', members_count: 125 },
+      { identifier: 'COURSE_C', name: '课程三', teacherName: { real_name: 'private object' }, studentCount: '100' },
+      { identifier: 'COURSE_D', name: '课程四', studentCount: -2 },
+      { identifier: 'COURSE_E', name: '课程五', studentCount: 10.5 },
+    ]);
+    const courses = await new BrowserApi().courses();
+    assert.equal(courses[0].teacherName, '示例老师');
+    assert.equal(courses[0].studentCount, 0);
+    assert.equal(courses[1].teacherName, undefined);
+    assert.equal(courses[1].studentCount, undefined);
+    assert.equal(courses[2].teacherName, undefined);
+    assert.equal(courses[2].studentCount, undefined);
+    assert.equal(courses[3].studentCount, undefined);
+    assert.equal(courses[4].studentCount, undefined);
+    assert.equal('membersCount' in courses[0], false);
   });
   await t.test('homework and enter responses normalize the current Go DTO', async () => {
     const requests = [];

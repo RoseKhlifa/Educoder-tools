@@ -32,8 +32,16 @@ export interface Course {
   identifier: string;
   name: string;
   homeworkCount?: number;
-  membersCount?: number;
+  teacherName?: string;
+  studentCount?: number;
   ended?: boolean;
+}
+
+export interface DailyServiceSummary {
+  date: string;
+  timezone: 'Asia/Shanghai';
+  completed_students: number;
+  completed_questions: number;
 }
 
 export interface QuestionBankSummary {
