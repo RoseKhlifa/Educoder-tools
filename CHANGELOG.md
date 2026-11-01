@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.40 - 2026-11-01
+
+- Clarify that the phase in batch task details belongs to the whole batch
+
 ## 0.1.39 - 2026-11-01
 
 - Explain collection outcomes and skip reasons; bind admin assignment details and preserve precise batch stop causes

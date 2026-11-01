@@ -151,6 +151,15 @@ await test('administrator sees people and work instead of storage identifiers', 
     assert.match(html, /整批执行达到 30 分钟时限/); assert.match(html, /2 份作业尚未开始，不计作已完成/);
     assert.match(visible(renderAdmin('operations', state([value]))), /另有 2 份尚未开始/);
   });
+  await t.test('batch phase is explicitly scoped to the whole batch instead of the highlighted assignment', () => {
+    const value = job({ phase: 'selftesting' }); value.context.level = {};
+    const html = visible(renderAdminJobDetail(value));
+    assert.match(html, /当前关卡\s+尚未进入关卡/);
+    assert.match(html, /整批最后阶段\s+执行自测/);
+    value.request.scope = 'homework';
+    assert.match(visible(renderAdminJobDetail(value)), /执行阶段\s+执行自测/);
+    assert.doesNotMatch(visible(renderAdminJobDetail(value)), /整批最后阶段/);
+  });
   await t.test('historical child timeout evidence is not presented as a confirmed whole-batch timeout', () => {
     const value = job({ status: 'uncertain', request: { scope: 'all', mode: 'submit' } });
     value.context.level = {}; value.context.summary.stop_reason = 'deadline_observed'; value.context.summary.pending_homeworks = 3;
