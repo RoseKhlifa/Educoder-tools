@@ -4,7 +4,7 @@
 
 ## Docker 与配置
 
-`deploy/.env.example` 只包含无敏感值的示例。把实际部署参数放在服务器当前发布目录的 `.env` 或启动进程环境，不能提交账号、密码、Cookie、卡密原文或模型密钥。
+`deploy/.env.example` 只包含无敏感值的示例。把实际部署参数放在服务器当前发布目录的 `.env` 或启动进程环境，不能提交账号、密码、Cookie 或模型密钥。
 
 ```bash
 export APP_VERSION="$(cat VERSION)"
@@ -12,7 +12,7 @@ export VCS_REF="$(git rev-parse HEAD)"
 export WEB_COOKIE_SECURE=true
 # 推荐在部署 .env 中设置精确外部来源 WEB_ORIGIN=https://touge.mom。
 # PLATFORM_ADMIN_USER_IDS 填经核验的头歌数字用户 ID，不能填手机号。
-# ACCESS_CARD_REQUIRED 默认 false，计费和支付尚未启用。
+# 计费和支付尚未启用。
 docker compose --project-name educoder-tools build
 docker compose --project-name educoder-tools up -d --no-build
 curl --fail http://127.0.0.1:11454/healthz
@@ -24,7 +24,7 @@ Compose 使用命名卷 `app-data` 挂载 `/data`。该目录包含：
 
 | 文件 | 内容 |
 | --- | --- |
-| `platform.sqlite` | 数字用户身份、个人数据分区、角色、卡密摘要、兑换与审计 |
+| `platform.sqlite` | 数字用户身份、个人数据分区、角色与审计 |
 | `jobs.sqlite` | 异步任务、幂等键、内部状态与进度 |
 | `questionbank.sqlite` | 题目、候选、验证证据、模型调用与费用台账 |
 
@@ -32,13 +32,13 @@ SQLite 使用期间还可能出现 WAL/SHM 文件，备份时必须保持一致�
 
 模型密钥保存在发布目录外，例如 `/opt/educoder-tools/secrets/deepseek_api_key`，通过 Docker secret 只读挂载为 `/run/secrets/deepseek_api_key`。安装器在没有密钥时创建空 secret：登录与课程浏览仍可使用，普通用户执行操作得到统一服务不可用提示；配置情况只向管理员展示。实际密钥由受控本机/服务器操作写入，不能放到 `.env.example`、Git、构建参数或日志。
 
-## 首次管理员引导与卡密
+## 首次管理员引导
 
-默认无引导管理员，且 `ACCESS_CARD_REQUIRED=false`。先在平台使用本人头歌账号登录，从 `/api/auth/me` 的 `data.user.id` 核对头歌数字 ID，再写入服务器 `PLATFORM_ADMIN_USER_IDS`，重启并重新登录。多 ID 使用逗号分隔；错误的非整数配置会阻止启动，防止用登录名误授予权限。
+默认无引导管理员。先在平台使用本人头歌账号登录，从 `/api/auth/me` 的 `data.user.id` 核对头歌数字 ID，再写入服务器 `PLATFORM_ADMIN_USER_IDS`，重启并重新登录。多 ID 使用逗号分隔；错误的非整数配置会阻止启动，防止用登录名误授予权限。
 
 环境列表在成功登录时提升并持久化管理员角色，移除列表中的 ID 不自动降低旧角色。没有 HTTP 角色授予接口。管理页面不能自行把普通用户变为管理员，头歌教师身份也不构成管理资格。
 
-当前不收款、不扣用户模型额度。卡密只作为可选服务准入，管理员可生成、人工分发、绑定用户、设到期时间或撤销；完整随机卡密只在签发响应出现一次。启用 `ACCESS_CARD_REQUIRED=true` 后普通用户每次登录需要有效卡密，管理员免卡密。先完成管理员引导与卡密分发，再开启校验，避免普通用户缺卡无法进入。卡密不代表已设计好的次数、包月或按课程定价规则。详细语义见 [PLATFORM.md](../docs/PLATFORM.md)。
+登录仅需头歌账号与密码，不使用卡密。卡密输入、管理页、后端接口及环境开关已移除，旧数据库记录不会被清空。旧 `ACCESS_CARD_REQUIRED` 配置不再生效，可从服务器持久配置删除；无需修改身份、角色或题库数据。当前不收款、不扣用户模型额度。详细语义见 [PLATFORM.md](../docs/PLATFORM.md)。
 
 ## 发布安装与核验
 
@@ -48,11 +48,10 @@ SQLite 使用期间还可能出现 WAL/SHM 文件，备份时必须保持一致�
 bash deploy/install-release.sh VERSION FULL_COMMIT_SHA
 ```
 
-安装器先构建镜像，再替换容器，核验 `/healthz` 顶层 `status`、`version`、`commit`。部署参数来自当前 shell 或该发布目录 `.env`；新的发布目录不会自动继承旧目录的 `.env`。每次升级均须保留管理员数字 ID、卡密开关、外部来源与模型 secret 路径等实际配置。
+安装器先构建镜像，再替换容器，核验 `/healthz` 顶层 `status`、`version`、`commit`。部署参数来自当前 shell 或该发布目录 `.env`；新的发布目录不会自动继承旧目录的 `.env`。每次升级均须保留管理员数字 ID、外部来源与模型 secret 路径等实际配置。
 
 ```bash
 curl --fail http://127.0.0.1:11454/version
-curl --fail http://127.0.0.1:11454/api/auth/config
 curl --fail http://127.0.0.1:11454/dist/app.js > /dev/null
 docker compose --project-name educoder-tools ps
 ```
@@ -90,6 +89,6 @@ curl --fail http://127.0.0.1:11454/healthz
 
 `VERSION` 是版本来源。完成的小改动增加 patch、更新 CHANGELOG、执行 Go 与浏览器检查、隐私审计，再创建 commit、annotated tag 并通过 SSH 原子推送。根 `scripts/release.ps1` 支持基于最新主线的独立工作区发布，不能夹带其他会话未完成工作或运行隐私文件。
 
-服务器持久配置使用 `/opt/educoder-tools/config/service.env`（仅服务器保存，权限 0600）；安装脚本自动作为 Compose env-file 读取，使后续版本更新保留 `PLATFORM_ADMIN_USER_IDS / WEB_ORIGIN / ACCESS_CARD_REQUIRED`。模型密钥继续使用单独 secret 文件。
+服务器持久配置使用 `/opt/educoder-tools/config/service.env`（仅服务器保存，权限 0600）；安装脚本自动作为 Compose env-file 读取，使后续版本更新保留 `PLATFORM_ADMIN_USER_IDS / WEB_ORIGIN`。模型密钥继续使用单独 secret 文件。
 
 部署脚本在构建前要求至少 1 GiB 非特权用户可用空间；构建后用镜像内应用用户检查实际 `/data` 挂载可写，再替换在线容器。检查失败会停止切换。Docker 构建缓存需要另行维护，根用户保留块不能作为应用可用空间。

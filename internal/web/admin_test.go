@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -68,15 +67,15 @@ func newPlatformHTTPFixture(t *testing.T, execute func(context.Context, Educoder
 		f.bank.Close()
 		f.platform.Close()
 	})
-	f.admin, err = f.platform.UpsertLogin(ctx, platform.Identity{UpstreamID: 1, Login: "administrator", Name: "管理员"}, "")
+	f.admin, err = f.platform.UpsertLogin(ctx, platform.Identity{UpstreamID: 1, Login: "administrator", Name: "管理员"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.alice, err = f.platform.UpsertLogin(ctx, platform.Identity{UpstreamID: 2, Login: "alice", Name: "同学 A"}, "")
+	f.alice, err = f.platform.UpsertLogin(ctx, platform.Identity{UpstreamID: 2, Login: "alice", Name: "同学 A"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.bob, err = f.platform.UpsertLogin(ctx, platform.Identity{UpstreamID: 3, Login: "bob", Name: "同学 B"}, "")
+	f.bob, err = f.platform.UpsertLogin(ctx, platform.Identity{UpstreamID: 3, Login: "bob", Name: "同学 B"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -128,8 +127,8 @@ func (f *platformHTTPFixture) waitJob(t *testing.T, id string) jobs.Job {
 func TestAllAdminRoutesRejectUnauthenticatedAndOrdinaryAccounts(t *testing.T) {
 	f := newPlatformHTTPFixture(t, nil)
 	routes := []struct{ method, path, body string }{
-		{"GET", "/api/admin/users", ""}, {"GET", "/api/admin/cards", ""}, {"GET", "/api/admin/audit", ""}, {"GET", "/api/admin/jobs", ""}, {"GET", "/api/admin/jobs/example", ""}, {"GET", "/api/admin/overview", ""}, {"GET", "/api/admin/usage", ""},
-		{"POST", "/api/admin/users/" + f.bob.ID + "/status", `{"status":"disabled"}`}, {"POST", "/api/admin/cards", `{"label":"fixture"}`}, {"POST", "/api/admin/cards/example/revoke", ""}, {"POST", "/api/admin/jobs/example/cancel", ""}, {"GET", "/api/admin/unknown", ""},
+		{"GET", "/api/admin/users", ""}, {"GET", "/api/admin/audit", ""}, {"GET", "/api/admin/jobs", ""}, {"GET", "/api/admin/jobs/example", ""}, {"GET", "/api/admin/overview", ""}, {"GET", "/api/admin/usage", ""},
+		{"POST", "/api/admin/users/" + f.bob.ID + "/status", `{"status":"disabled"}`}, {"POST", "/api/admin/jobs/example/cancel", ""}, {"GET", "/api/admin/unknown", ""},
 	}
 	for _, route := range routes {
 		for _, browser := range []struct {
@@ -146,10 +145,7 @@ func TestAllAdminRoutesRejectUnauthenticatedAndOrdinaryAccounts(t *testing.T) {
 	if err != nil || bob.Status != "active" {
 		t.Fatal("rejected admin request changed user status")
 	}
-	cards, err := f.platform.ListCards(context.Background(), 10)
-	if err != nil || len(cards) != 0 {
-		t.Fatal("rejected admin request created card")
-	}
+
 }
 
 func TestAdminGetsOperatorDiagnosticsAndActualLedgerUsage(t *testing.T) {
@@ -208,52 +204,6 @@ func TestAdminGetsOperatorDiagnosticsAndActualLedgerUsage(t *testing.T) {
 	}
 }
 
-func TestAdminCardIssueIsOneTimeCodeAndRevokeRequiresAdmin(t *testing.T) {
-	f := newPlatformHTTPFixture(t, nil)
-	issued := f.request(t, f.adminClient, "POST", "/api/admin/cards", `{"label":"fixture card"}`)
-	if issued.StatusCode != 201 {
-		t.Fatal(issued.Body)
-	}
-	var envelope struct {
-		Data platform.IssuedCard `json:"data"`
-	}
-	if err := json.Unmarshal([]byte(issued.Body), &envelope); err != nil {
-		t.Fatal(err)
-	}
-	code, id := envelope.Data.Code, envelope.Data.Card.ID
-	if code == "" || id == "" {
-		t.Fatal("issuing administrator did not receive code exactly once")
-	}
-	for _, path := range []string{"/api/admin/cards", "/api/admin/audit"} {
-		got := f.request(t, f.adminClient, "GET", path, "")
-		if got.StatusCode != 200 || strings.Contains(got.Body, code) || strings.Contains(got.Body, `"code"`) || strings.Contains(got.Body, "code_hash") {
-			t.Fatalf("read API exposed raw code or digest: %s", got.Body)
-		}
-	}
-	for _, path := range []string{f.platformPath, f.platformPath + "-wal"} {
-		body, err := os.ReadFile(path)
-		if err == nil && strings.Contains(string(body), code) {
-			t.Fatal("raw issued code persisted in SQLite")
-		}
-	}
-	bad := f.request(t, f.aliceClient, "POST", "/api/admin/cards/"+id+"/revoke", "")
-	if bad.StatusCode != 403 {
-		t.Fatal("ordinary user revoked card")
-	}
-	cards, err := f.platform.ListCards(context.Background(), 10)
-	if err != nil || cards[0].Status != "active" {
-		t.Fatal("denied revoke changed card")
-	}
-	good := f.request(t, f.adminClient, "POST", "/api/admin/cards/"+id+"/revoke", "")
-	if good.StatusCode != 200 {
-		t.Fatal(good.Body)
-	}
-	cards, err = f.platform.ListCards(context.Background(), 10)
-	if err != nil || cards[0].Status != "revoked" {
-		t.Fatal("admin revoke not persisted")
-	}
-}
-
 func TestAdminDisableCancelsRunningOwnerAndRevokesSessions(t *testing.T) {
 	started := make(chan struct{})
 	stopped := make(chan struct{})
@@ -298,83 +248,6 @@ func TestAdminDisableCancelsRunningOwnerAndRevokesSessions(t *testing.T) {
 	}
 }
 
-func TestDetachedExecutionRechecksRevokedOrExpiredCardAfterLogout(t *testing.T) {
-	for _, action := range []string{"revoke", "expire"} {
-		t.Run(action, func(t *testing.T) {
-			ctx := context.Background()
-			ps, err := platform.Open(filepath.Join(t.TempDir(), "platform.sqlite"), platform.Options{AdminUserIDs: []int64{1}, AccessCardRequired: true})
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer ps.Close()
-			admin, err := ps.UpsertLogin(ctx, platform.Identity{UpstreamID: 1, Login: "administrator"}, "")
-			if err != nil {
-				t.Fatal(err)
-			}
-			options := platform.CardOptions{}
-			if action == "expire" {
-				options.ExpiresAt = time.Now().Add(time.Second)
-			}
-			issued, err := ps.IssueCard(ctx, admin.ID, options)
-			if err != nil {
-				t.Fatal(err)
-			}
-			u, err := ps.UpsertLogin(ctx, platform.Identity{UpstreamID: 2, Login: "student"}, issued.Code)
-			if err != nil {
-				t.Fatal(err)
-			}
-			app := NewServerWithFactory(DefaultConfig(), func(string) EducoderClient { return &fakeClient{} })
-			app.AttachPlatform(ps)
-			token, err := app.Store().createPrincipal(&fakeClient{}, educoder.User{UserID: u.UpstreamID, Login: u.Login}, "b", u)
-			if err != nil {
-				t.Fatal(err)
-			}
-			started := make(chan struct{})
-			finished := make(chan error, 1)
-			runCtx, cancel := context.WithTimeout(ctx, 7*time.Second)
-			defer cancel()
-			go func() {
-				_, err := app.runAuthorized(runCtx, u.Owner(), func(ctx context.Context) (jobs.Outcome, error) {
-					close(started)
-					<-ctx.Done()
-					return jobs.Outcome{}, ctx.Err()
-				})
-				finished <- err
-			}()
-			select {
-			case <-started:
-			case <-time.After(2 * time.Second):
-				t.Fatal("authorized detached work did not start")
-			}
-			logoutReq := httptest.NewRequest(http.MethodPost, "http://service.example/api/auth/logout", nil)
-			logoutReq.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
-			logout := httptest.NewRecorder()
-			app.ServeHTTP(logout, logoutReq)
-			if logout.Code != 200 || app.Store().Len() != 0 {
-				t.Fatal("logout did not remove browser session")
-			}
-			select {
-			case <-finished:
-				t.Fatal("logout itself canceled valid detached work")
-			default:
-			}
-			if action == "revoke" {
-				if err = ps.RevokeCard(ctx, admin.ID, issued.Card.ID); err != nil {
-					t.Fatal(err)
-				}
-			}
-			select {
-			case err = <-finished:
-				if !errors.Is(err, context.Canceled) {
-					t.Fatalf("invalid grant did not cooperatively cancel execution: %v", err)
-				}
-			case <-time.After(6 * time.Second):
-				t.Fatal("detached work ignored revoked/expired persistent grant")
-			}
-		})
-	}
-}
-
 func TestDisabledOwnerCannotStartExecutor(t *testing.T) {
 	f := newPlatformHTTPFixture(t, nil)
 	ctx := context.Background()
@@ -388,5 +261,95 @@ func TestDisabledOwnerCannotStartExecutor(t *testing.T) {
 	})
 	if err != nil || called || out.Status != jobs.Failed || out.ErrorCode != "ACCESS_REVOKED" {
 		t.Fatalf("disabled owner started execution: called=%v outcome=%+v err=%v", called, out, err)
+	}
+}
+
+func TestRetiredCardAdminAPIsReturnNotFound(t *testing.T) {
+	f := newPlatformHTTPFixture(t, nil)
+	for _, route := range []struct{ method, path, body string }{
+		{"GET", "/api/admin/cards", ""},
+		{"POST", "/api/admin/cards", `{"label":"retired"}`},
+		{"POST", "/api/admin/cards/historical-fixture/revoke", ""},
+	} {
+		got := f.request(t, f.adminClient, route.method, route.path, route.body)
+		if got.StatusCode != http.StatusNotFound {
+			t.Fatalf("retired %s %s still available: %d %s", route.method, route.path, got.StatusCode, got.Body)
+		}
+	}
+	got := f.request(t, f.adminClient, "GET", "/api/admin/overview", "")
+	if got.StatusCode != http.StatusOK || strings.Contains(got.Body, "access_card") {
+		t.Fatalf("overview contains retired card policy: %s", got.Body)
+	}
+	audit, err := f.platform.ListAudit(context.Background(), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range audit {
+		if strings.HasPrefix(event.Action, "card.") {
+			t.Fatal("removed API changed card state")
+		}
+	}
+}
+
+func TestDetachedExecutionRechecksDisabledAccountAfterLogout(t *testing.T) {
+	ctx := context.Background()
+	ps, err := platform.Open(filepath.Join(t.TempDir(), "platform.sqlite"), platform.Options{AdminUserIDs: []int64{1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ps.Close()
+	admin, err := ps.UpsertLogin(ctx, platform.Identity{UpstreamID: 1, Login: "administrator"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, err := ps.UpsertLogin(ctx, platform.Identity{UpstreamID: 2, Login: "student"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := NewServerWithFactory(DefaultConfig(), func(string) EducoderClient { return &fakeClient{} })
+	app.AttachPlatform(ps)
+	token, err := app.Store().createPrincipal(&fakeClient{}, educoder.User{UserID: u.UpstreamID, Login: u.Login}, "b", u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	finished := make(chan error, 1)
+	runCtx, cancel := context.WithTimeout(ctx, 7*time.Second)
+	defer cancel()
+	go func() {
+		_, err := app.runAuthorized(runCtx, u.Owner(), func(ctx context.Context) (jobs.Outcome, error) {
+			close(started)
+			<-ctx.Done()
+			return jobs.Outcome{}, ctx.Err()
+		})
+		finished <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("authorized detached work did not start")
+	}
+	logoutReq := httptest.NewRequest(http.MethodPost, "http://service.example/api/auth/logout", nil)
+	logoutReq.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
+	logout := httptest.NewRecorder()
+	app.ServeHTTP(logout, logoutReq)
+	if logout.Code != 200 || app.Store().Len() != 0 {
+		t.Fatal("logout did not remove browser session")
+	}
+	select {
+	case <-finished:
+		t.Fatal("logout itself canceled valid detached work")
+	default:
+	}
+	if err = ps.SetStatus(ctx, admin.ID, u.ID, "disabled"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err = <-finished:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("disabled account did not cooperatively cancel execution: %v", err)
+		}
+	case <-time.After(6 * time.Second):
+		t.Fatal("detached work ignored disabled account")
 	}
 }

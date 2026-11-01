@@ -29,7 +29,7 @@ func run() error {
 		return err
 	}
 	app := web.NewServer(cfg)
-	identities, err := platform.Open(filepath.Join(cfg.DataDir, "platform.sqlite"), platform.Options{AdminUserIDs: cfg.PlatformAdminUserIDs, AccessCardRequired: cfg.AccessCardRequired})
+	identities, err := platform.Open(filepath.Join(cfg.DataDir, "platform.sqlite"), platform.Options{AdminUserIDs: cfg.PlatformAdminUserIDs})
 	if err != nil {
 		return errors.New("open platform identity store failed")
 	}

@@ -21,7 +21,7 @@ func TestPlatformLoginProvisioningAndImmediateDisable(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ps.Close()
-	admin, err := ps.UpsertLogin(context.Background(), platform.Identity{UpstreamID: 1, Login: "admin"}, "")
+	admin, err := ps.UpsertLogin(context.Background(), platform.Identity{UpstreamID: 1, Login: "admin"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,28 +96,19 @@ func TestLoginLimiterBoundedByAccountAndSource(t *testing.T) {
 	}
 }
 
-func TestPlatformCardLoginDoesNotBindOnCSRFAndRevocationInvalidatesSession(t *testing.T) {
+func TestPlatformLoginRetainsCSRFAndCookieProtectionsWithoutCards(t *testing.T) {
 	ctx := context.Background()
-	ps, err := platform.Open(filepath.Join(t.TempDir(), "platform.sqlite"), platform.Options{AdminUserIDs: []int64{1}, AccessCardRequired: true})
+	ps, err := platform.Open(filepath.Join(t.TempDir(), "platform.sqlite"), platform.Options{AdminUserIDs: []int64{1}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer ps.Close()
-	admin, err := ps.UpsertLogin(ctx, platform.Identity{UpstreamID: 1, Login: "administrator"}, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	issued, err := ps.IssueCard(ctx, admin.ID, platform.CardOptions{})
-	if err != nil {
-		t.Fatal(err)
-	}
 	fake := &fakeClient{user: educoder.User{UserID: 9, Login: "student"}}
 	cfg := DefaultConfig()
-	cfg.AccessCardRequired = true
 	cfg.WebOrigin = "https://service.example"
 	app := NewServerWithFactory(cfg, func(string) EducoderClient { return fake })
 	app.AttachPlatform(ps)
-	body := `{"login":"student","password":"fixture-only","access_code":"` + issued.Code + `"}`
+	body := `{"login":"student","password":"fixture-only"}`
 	request := func(method, path, origin, body string, cookie *http.Cookie) *httptest.ResponseRecorder {
 		t.Helper()
 		r := httptest.NewRequest(method, "http://service.example"+path, strings.NewReader(body))
@@ -137,21 +128,17 @@ func TestPlatformCardLoginDoesNotBindOnCSRFAndRevocationInvalidatesSession(t *te
 			t.Fatalf("CSRF login invoked upstream: %q %d", origin, w.Code)
 		}
 	}
-	cards, err := ps.ListCards(ctx, 10)
-	if err != nil || len(cards) != 1 || cards[0].BoundUserID != "" {
-		t.Fatal("blocked login redeemed card")
-	}
-	missing := request(http.MethodPost, "/api/auth/login", cfg.WebOrigin, `{"login":"student","password":"fixture-only"}`, nil)
-	if missing.Code != http.StatusForbidden || !strings.Contains(missing.Body.String(), "ACCESS_CODE_REQUIRED") {
-		t.Fatalf("missing card = %d %s", missing.Code, missing.Body.String())
-	}
 	users, err := ps.ListUsers(ctx, 10)
-	if err != nil || len(users) != 1 {
-		t.Fatal("missing card created platform user")
+	if err != nil || len(users) != 0 {
+		t.Fatal("blocked login created platform user")
 	}
 	login := request(http.MethodPost, "/api/auth/login", cfg.WebOrigin, body, nil)
-	if login.Code != http.StatusOK || strings.Contains(login.Body.String(), issued.Code) || strings.Contains(login.Body.String(), "fixture-only") {
-		t.Fatalf("card login = %d %s", login.Code, login.Body.String())
+	if login.Code != http.StatusOK || strings.Contains(login.Body.String(), "fixture-only") {
+		t.Fatalf("password-only login = %d %s", login.Code, login.Body.String())
+	}
+	users, err = ps.ListUsers(ctx, 10)
+	if err != nil || len(users) != 1 || users[0].Status != "active" {
+		t.Fatal("login failed to provision active account")
 	}
 	cookies := login.Result().Cookies()
 	if len(cookies) != 1 || !cookies[0].Secure || !cookies[0].HttpOnly || cookies[0].SameSite != http.SameSiteLaxMode {
@@ -173,16 +160,47 @@ func TestPlatformCardLoginDoesNotBindOnCSRFAndRevocationInvalidatesSession(t *te
 	if w.Code != http.StatusForbidden {
 		t.Fatal("cross-site request without Origin accepted")
 	}
-	if err = ps.RevokeCard(ctx, admin.ID, issued.Card.ID); err != nil {
-		t.Fatal(err)
+	if me := request(http.MethodGet, "/api/auth/me", cfg.WebOrigin, "", cookie); me.Code != http.StatusOK {
+		t.Fatalf("valid session rejected: %d", me.Code)
 	}
-	me := request(http.MethodGet, "/api/auth/me", cfg.WebOrigin, "", cookie)
-	if me.Code != http.StatusUnauthorized || app.Store().Len() != 0 {
-		t.Fatalf("revoked grant kept browser session: %d", me.Code)
+}
+
+func TestLegacyCardConfigurationIgnoredAndEndpointsRemoved(t *testing.T) {
+	for _, value := range []string{"true", "invalid-old-value"} {
+		t.Setenv("ACCESS_CARD_REQUIRED", value)
+		cfg := DefaultConfig()
+		if err := loadPlatformConfig(&cfg); err != nil {
+			t.Fatalf("retired configuration still parsed: %v", err)
+		}
+		fake := &fakeClient{user: educoder.User{UserID: 9, Login: "student"}}
+		app := NewServerWithFactory(cfg, func(string) EducoderClient { return fake })
+		ps, err := platform.Open(filepath.Join(t.TempDir(), "platform.sqlite"), platform.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		app.AttachPlatform(ps)
+		login := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"login":"student","password":"fixture-only"}`))
+		result := httptest.NewRecorder()
+		app.ServeHTTP(result, login)
+		if result.Code != http.StatusOK {
+			t.Fatalf("legacy setting blocked login: %d %s", result.Code, result.Body.String())
+		}
+		ps.Close()
 	}
-	login = request(http.MethodPost, "/api/auth/login", cfg.WebOrigin, body, nil)
-	if login.Code != http.StatusForbidden || !strings.Contains(login.Body.String(), "ACCESS_CODE_INVALID") {
-		t.Fatal("revoked card accepted at login")
+	app := NewServerWithFactory(DefaultConfig(), func(string) EducoderClient { return &fakeClient{} })
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		r := httptest.NewRequest(method, "/api/auth/config", nil)
+		w := httptest.NewRecorder()
+		app.ServeHTTP(w, r)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("retired auth config route still exposed: %s %d", method, w.Code)
+		}
+	}
+	legacy := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader(`{"login":"student","password":"fixture-only","access_code":"retired"}`))
+	w := httptest.NewRecorder()
+	app.ServeHTTP(w, legacy)
+	if w.Code != http.StatusBadRequest {
+		t.Fatal("retired login field still accepted")
 	}
 }
 
@@ -193,11 +211,11 @@ func TestAdministratorPermissionsAreRefreshedFromStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ps.Close()
-	admin, err := ps.UpsertLogin(ctx, platform.Identity{UpstreamID: 1, Login: "administrator"}, "")
+	admin, err := ps.UpsertLogin(ctx, platform.Identity{UpstreamID: 1, Login: "administrator"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	u, err := ps.UpsertLogin(ctx, platform.Identity{UpstreamID: 9, Login: "student"}, "")
+	u, err := ps.UpsertLogin(ctx, platform.Identity{UpstreamID: 9, Login: "student"})
 	if err != nil {
 		t.Fatal(err)
 	}

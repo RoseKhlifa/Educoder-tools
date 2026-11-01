@@ -2,6 +2,7 @@ import { ApiRequestError, BrowserApi } from './api.js';
 import { partitionAdminJobs, renderAdmin, renderAdminJobDetail, type AdminPage, type AdminState } from './admin.js';
 import { currentServiceJobs, jobProgress, jobTitle, pendingJob, renderJobs, renderServiceDetail, serviceJob, serviceLabels, serviceStatus } from './jobs.js';
 import { count, escapeHtml as e, icon } from './ui.js';
+import { renderUserGuidelines } from './guidelines.js';
 import type { AnswerJob, Course, Exercise, Homework, User } from './types.js';
 
 const root = document.querySelector<HTMLDivElement>('#app');
@@ -10,10 +11,10 @@ const api = new BrowserApi();
 type Page = 'courses' | 'progress' | `admin-${AdminPage}`;
 const state = {
   user: null as User | null, page: 'courses' as Page, courses: [] as Course[], jobs: [] as AnswerJob[],
-  selected: [] as string[], cardRequired: false, loading: false, signingIn: false, creating: false, notice: '', loginError: '', search: '',
-  modal: '' as string, modalAction: null as (() => Promise<void> | void) | null,
+  selected: [] as string[], loading: false, signingIn: false, creating: false, notice: '', loginError: '', search: '',
+  modal: '' as string, modalKind: '' as '' | 'guidelines', modalAction: null as (() => Promise<void> | void) | null,
   progressHistoryOpen: false,
-  admin: { overview: {}, users: [], jobs: [], audit: [], cards: [], loading: false, error: false, jobsView: 'current', jobsKind: 'service' } as AdminState,
+  admin: { overview: {}, users: [], jobs: [], audit: [], loading: false, error: false, jobsView: 'current', jobsKind: 'service' } as AdminState,
 };
 let generation = 0;
 let jobsRevision = 0;
@@ -29,7 +30,7 @@ const activeJobs = (): AnswerJob[] => state.jobs.filter(job => serviceJob(job) &
 function stopPoll(): void { if (pollTimer !== undefined) clearTimeout(pollTimer); pollTimer = undefined; }
 function resetSession(message = ''): void {
   generation++; jobsRevision++; coursesRevision++; adminRevision++; modalRevision++; stopPoll(); courseDialog = null;
-  Object.assign(state, { user: null, page: 'courses', courses: [], jobs: [], selected: [], loading: false, signingIn: false, creating: false, notice: '', loginError: message, modal: '', modalAction: null, search: '', progressHistoryOpen: false, admin: { overview: {}, users: [], jobs: [], audit: [], cards: [], loading: false, error: false, userSearch: '', userFilter: 'all' } });
+  Object.assign(state, { user: null, page: 'courses', courses: [], jobs: [], selected: [], loading: false, signingIn: false, creating: false, notice: '', loginError: message, modal: '', modalKind: '', modalAction: null, search: '', progressHistoryOpen: false, admin: { overview: {}, users: [], jobs: [], audit: [], loading: false, error: false, userSearch: '', userFilter: 'all' } });
   render();
 }
 function handleError(error: unknown): boolean {
@@ -37,23 +38,23 @@ function handleError(error: unknown): boolean {
   return false;
 }
 function brandLogo(): string {
-  return '<img class="brand-logo" src="/assets/brand-logo.png?v=0.1.46" alt="头歌妈妈" width="40" height="40" decoding="async">';
+  return '<img class="brand-logo" src="/assets/brand-logo.png?v=0.1.47" alt="头歌妈妈" width="40" height="40" decoding="async">';
 }
 
 function avatar(): string {
   return state.user?.avatarUrl ? `<img class="avatar" src="${e(state.user.avatarUrl)}" alt="个人头像" data-avatar>` : `<span class="avatar">${e(state.user?.name.slice(0, 1) || '同')}</span>`;
 }
 function renderLogin(): string {
-  return `<main id="view-login" class="login login-page"><aside class="login-brand" aria-label="品牌介绍"><div class="brand-mark">${brandLogo()}<div class="mark-text"><strong>头歌妈妈</strong><span>touge.mom</span></div></div><div class="login-brand-copy"><span class="login-kicker">头歌平台服务</span><h1>选好课程，<br>剩下交给我们。</h1><p class="lede">登录你的头歌账号，选择需要完成的课程。每一步进度，回来就能看见。</p><div class="brand-points"><ul><li><span class="dot">1</span><span>选择课程，或一键安排全部未完成作业</span></li><li><span class="dot">2</span><span>后台持续处理，关闭页面也不会中断</span></li><li><span class="dot">3</span><span>随时查看课程与作业完成进度</span></li></ul></div></div><p class="login-foot">你的头歌账号，就是这里的账号。</p></aside><section class="login-panel"><div class="login-panel-inner"><div class="login-kicker">TOUGE.MOM</div><h2>登录头歌妈妈</h2><p class="sub">使用头歌账号进入。无需额外注册，卡密仅用于开通服务。</p><form class="login-card" id="login-form"><div class="field"><label for="login">头歌账号</label><input id="login" name="login" autocomplete="username" placeholder="手机号 / 邮箱 / 学号" required maxlength="120"></div><div class="field"><label for="password">头歌密码</label><input id="password" name="password" type="password" autocomplete="current-password" placeholder="输入头歌密码" required maxlength="512"></div><div class="field"><label for="card-code">卡密 <span data-card-requirement>${state.cardRequired ? '必填' : '选填'}</span></label><input id="card-code" name="access_code" type="password" autocomplete="off" placeholder="${state.cardRequired ? '输入你的服务卡密' : '如有卡密，请在这里填写'}" maxlength="256" ${state.cardRequired ? 'required' : ''}><p class="field-help" data-card-help>${state.cardRequired ? '使用有效卡密开通服务，具体规则请联系服务人员。' : '卡密规则尚未开放，当前可暂不填写。'}</p></div>${state.loginError ? `<div class="form-feedback" role="alert">${e(state.loginError)}</div>` : ''}<button class="btn-primary button primary full" type="submit" ${state.signingIn ? 'disabled' : ''}>${state.signingIn ? '正在登录…' : '登录并进入'}</button><div class="login-meta"><span>对象：头歌平台</span><span>密码不会在本站保存</span></div></form><p class="login-foot">登录后只展示你的课程和进度，服务过程中的异常由服务人员处理。</p></div></section></main>`;
+  return `<main id="view-login" class="login login-page"><aside class="login-brand" aria-label="品牌介绍"><div class="brand-mark">${brandLogo()}<div class="mark-text"><strong>头歌妈妈</strong><span>touge.mom</span></div></div><div class="login-brand-copy"><span class="login-kicker">头歌平台服务</span><h1>选好课程，<br>剩下交给我们。</h1><p class="lede">登录你的头歌账号，选择需要完成的课程。每一步进度，回来就能看见。</p><div class="brand-points"><ul><li><span class="dot">1</span><span>选择课程，或一键安排全部未完成作业</span></li><li><span class="dot">2</span><span>后台持续处理，关闭页面也不会中断</span></li><li><span class="dot">3</span><span>随时查看课程与作业完成进度</span></li></ul></div></div><p class="login-foot">你的头歌账号，就是这里的账号。</p></aside><section class="login-panel"><div class="login-panel-inner"><div class="login-kicker">TOUGE.MOM</div><h2>登录头歌妈妈</h2><p class="sub">使用头歌账号进入，无需额外注册。</p><form class="login-card" id="login-form"><div class="field"><label for="login">头歌账号</label><input id="login" name="login" autocomplete="username" placeholder="手机号 / 邮箱 / 学号" required maxlength="120"></div><div class="field"><label for="password">头歌密码</label><input id="password" name="password" type="password" autocomplete="current-password" placeholder="输入头歌密码" required maxlength="512"></div>${state.loginError ? `<div class="form-feedback" role="alert">${e(state.loginError)}</div>` : ''}<button class="btn-primary button primary full" type="submit" ${state.signingIn ? 'disabled' : ''}>${state.signingIn ? '正在登录…' : '登录并进入'}</button></form><p class="login-guidelines">登录前请阅读<button class="guidelines-link" type="button" data-action="user-guidelines">《用户准则》</button>。<span>平台会收集做题数据，用于题目与答案复用。</span></p></div></section></main>`;
 }
 function navItem(page: Page, label: string, name: string): string { return `<button class="nav-link nav-item ${state.page === page ? 'active' : ''}" data-nav="${page}" ${state.page === page ? 'aria-current="page"' : ''}>${icon(name)}<span>${label}</span></button>`; }
 function renderShell(): string {
   const admin = state.page.startsWith('admin-') && isAdmin();
   const consumerLinks = `${navItem('courses', '我的课程', 'courses')}${navItem('progress', '完成进度', 'progress')}${isAdmin() ? navItem('admin-overview', '管理后台', 'overview') : ''}`;
-  const adminLinks = `${navItem('admin-overview', '服务概览', 'overview')}${navItem('admin-users', '用户管理', 'users')}${navItem('admin-operations', '任务运营', 'progress')}${navItem('admin-cards', '服务卡密', 'audit')}${navItem('admin-audit', '操作审计', 'audit')}`;
+  const adminLinks = `${navItem('admin-overview', '服务概览', 'overview')}${navItem('admin-users', '用户管理', 'users')}${navItem('admin-operations', '任务运营', 'progress')}${navItem('admin-audit', '操作审计', 'audit')}`;
   const adminSideLinks = adminLinks.replaceAll('class="nav-link nav-item', 'class="side-link nav-item');
   const links = admin ? adminLinks : consumerLinks;
-  const title = admin ? ({ 'admin-overview': '服务概览', 'admin-users': '用户管理', 'admin-operations': '任务运营', 'admin-audit': '操作审计', 'admin-cards': '服务卡密' } as Record<string, string>)[state.page] : state.page === 'courses' ? '我的课程' : '完成进度';
+  const title = admin ? ({ 'admin-overview': '服务概览', 'admin-users': '用户管理', 'admin-operations': '任务运营', 'admin-audit': '操作审计' } as Record<string, string>)[state.page] : state.page === 'courses' ? '我的课程' : '完成进度';
   const selectedCount = state.selected.length;
   const current = currentServiceJobs(state.jobs);
   const active = current.filter(pendingJob).length;
@@ -123,15 +124,32 @@ function renderCourseDetail(course: Course, homeworks: Homework[], exercises: Ex
   return `<h2 id="modal-title">${e(course.name)}</h2><div class="detail-tabs" role="tablist"><button class="detail-tab ${tab === 'homework' ? 'selected' : ''}" data-detail-tab="homework" role="tab" aria-selected="${tab === 'homework'}">课程实验</button><button class="detail-tab ${tab === 'exercise' ? 'selected' : ''}" data-detail-tab="exercise" role="tab" aria-selected="${tab === 'exercise'}">在线考试</button></div>${tab === 'homework' ? homeworkBody : examBody}<div class="modal-actions"><button class="button" data-action="close-modal">关闭</button></div>`;
 }
 function render(): void {
-  root!.innerHTML = `${state.user ? renderShell() : renderLogin()}${state.modal ? `<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" tabindex="-1"><button class="icon-button modal-close" data-action="close-modal" aria-label="关闭">${icon('close')}</button><div class="modal-content">${state.modal}</div></section></div>` : ''}`;
+  // Draft values live only in the form controls. Preserve them across opening a
+  // read-only dialog without serializing them into markup or persistent state.
+  const draft = !state.user && !state.signingIn ? {
+    login: document.querySelector<HTMLInputElement>('#login')?.value ?? '',
+    password: document.querySelector<HTMLInputElement>('#password')?.value ?? '',
+  } : null;
+  root!.innerHTML = `${state.user ? renderShell() : renderLogin()}${state.modal ? `<div class="modal-backdrop"><section class="modal${state.modalKind === 'guidelines' ? ' guidelines-modal' : ''}" role="dialog" aria-modal="true" aria-labelledby="modal-title" tabindex="-1"><button class="icon-button modal-close" type="button" data-action="close-modal" aria-label="关闭">${icon('close')}</button><div class="modal-content">${state.modal}</div></section></div>` : ''}`;
+  if (draft) {
+    const account = document.querySelector<HTMLInputElement>('#login');
+    const password = document.querySelector<HTMLInputElement>('#password');
+    if (account) account.value = draft.login;
+    if (password) password.value = draft.password;
+  }
   bindEvents();
 }
-function showModal(content: string, action: (() => Promise<void> | void) | null = null): void {
+function showModal(content: string, action: (() => Promise<void> | void) | null = null, kind: '' | 'guidelines' = ''): void {
   previousFocus = document.activeElement as HTMLElement | null; modalRevision++;
-  state.modal = content; state.modalAction = action; render();
+  state.modal = content; state.modalAction = action; state.modalKind = kind; render();
   document.querySelector<HTMLButtonElement>('[data-action="close-modal"]')?.focus();
 }
-function closeModal(): void { state.modal = ''; state.modalAction = null; modalRevision++; courseDialog = null; render(); previousFocus?.isConnected && previousFocus.focus(); }
+function closeModal(): void {
+  const guidelines = state.modalKind === 'guidelines';
+  state.modal = ''; state.modalKind = ''; state.modalAction = null; modalRevision++; courseDialog = null; render();
+  if (guidelines) document.querySelector<HTMLButtonElement>('[data-action="user-guidelines"]')?.focus();
+  else if (previousFocus?.isConnected) previousFocus.focus();
+}
 function scheduleJobs(): void {
   stopPoll(); if (!state.user) return;
   pollTimer = setTimeout(() => { pollTimer = undefined; void loadJobs(); }, activeJobs().length ? 3000 : 15000);
@@ -166,17 +184,17 @@ async function login(event: Event): Promise<void> {
   event.preventDefault(); if (state.signingIn) return;
   const form = event.currentTarget as HTMLFormElement;
   const value = (name: string): string => (form.elements.namedItem(name) as HTMLInputElement).value;
-  const account = value('login').trim(); const password = value('password'); const card = value('access_code').trim();
+  const account = value('login').trim(); const password = value('password');
   if (!account || !password) { state.loginError = '请输入头歌账号和密码。'; render(); return; }
   form.reset(); const session = ++generation; state.signingIn = true; state.loginError = ''; render();
   try {
-    const user = await api.login(account, password, card);
+    const user = await api.login(account, password);
     if (session !== generation) return;
     state.user = user; state.signingIn = false; render(); void loadJobs(); void loadCourses();
   } catch (error) {
     if (session !== generation) return;
     const code = error instanceof ApiRequestError ? error.code : '';
-    const messages: Record<string, string> = { AUTH_FAILED: '账号或密码不正确，请检查后重新登录。', CARD_REQUIRED: '请填写你的卡密。', CARD_INVALID: '卡密暂未验证通过，请联系服务人员。', USER_SUSPENDED: '账号服务暂不可用，请联系服务人员。', ACCOUNT_DISABLED: '账号服务暂不可用，请联系服务人员。', ACCESS_CARD_REQUIRED: '请填写你的卡密。', ACCESS_CARD_INVALID: '卡密暂未验证通过，请联系服务人员。', RATE_LIMITED: '登录有点频繁，请稍后再试。' };
+    const messages: Record<string, string> = { AUTH_FAILED: '账号或密码不正确，请检查后重新登录。', USER_SUSPENDED: '账号服务暂不可用，请联系服务人员。', ACCOUNT_DISABLED: '账号服务暂不可用，请联系服务人员。', LOGIN_RATE_LIMITED: '登录有点频繁，请稍后再试。' };
     state.signingIn = false; state.loginError = messages[code || ''] || '登录暂未完成，请稍后再试或联系服务人员。'; render();
   }
 }
@@ -258,9 +276,9 @@ async function loadAdmin(): Promise<void> {
   if (!isAdmin()) return; const session = generation; const revision = ++adminRevision;
   state.admin.loading = true; state.admin.error = false; render();
   try {
-    const [overview, users, jobs, audit, cards] = await Promise.all([api.adminOverview(), api.adminUsers(), api.adminJobs(), api.adminAudit(), api.adminCards()]);
+    const [overview, users, jobs, audit] = await Promise.all([api.adminOverview(), api.adminUsers(), api.adminJobs(), api.adminAudit()]);
     if (session !== generation || revision !== adminRevision) return;
-    Object.assign(state.admin, { overview, users, jobs, audit, cards, loading: false, error: false }); render();
+    Object.assign(state.admin, { overview, users, jobs, audit, loading: false, error: false }); render();
   } catch (error) {
     if (session !== generation || revision !== adminRevision) return;
     if (handleError(error)) return;
@@ -269,7 +287,7 @@ async function loadAdmin(): Promise<void> {
   }
 }
 function navigate(page: string): void {
-  if (!['courses', 'progress', 'admin-overview', 'admin-users', 'admin-operations', 'admin-audit', 'admin-cards'].includes(page)) return;
+  if (!['courses', 'progress', 'admin-overview', 'admin-users', 'admin-operations', 'admin-audit'].includes(page)) return;
   if (page.startsWith('admin-') && !isAdmin()) return;
   state.page = page as Page; state.notice = ''; render();
   if (page.startsWith('admin-')) void loadAdmin(); else if (page === 'progress') void loadJobs();
@@ -340,16 +358,12 @@ function bindEvents(): void {
     if (!isAdmin()) return; const id = button.dataset.adminCancel!;
     showModal('<h2 id="modal-title">停止该任务？</h2><p class="subtext">会保留已完成的结果，停止后续处理。此操作会记录到管理审计。</p><div class="modal-actions"><button class="button" data-action="close-modal">取消</button><button class="button primary" data-action="modal-confirm">确认停止</button></div>', async () => { await adminAction(() => api.adminCancelJob(id)); });
   }));
-  document.querySelectorAll<HTMLButtonElement>('[data-revoke-card]').forEach(button => button.addEventListener('click', () => {
-    if (!isAdmin()) return; const id = button.dataset.revokeCard!;
-    showModal('<h2 id="modal-title">停用这张卡密？</h2><p class="subtext">停用后将不能用于开通新的服务。此操作会记录到审计。</p><div class="modal-actions"><button class="button" data-action="close-modal">取消</button><button class="button primary" data-action="modal-confirm">确认停用</button></div>', async () => { await adminAction(() => api.adminRevokeCard(id)); });
-  }));
   document.querySelectorAll<HTMLElement>('[data-action]').forEach(button => button.addEventListener(button instanceof HTMLInputElement ? 'change' : 'click', () => {
     switch (button.dataset.action) {
       case 'logout': void logout(); break;
       case 'refresh': void loadCourses(); break;
       case 'jobs-refresh': void loadJobs(); break;
-      case 'create-card': newCard(); break;
+      case 'user-guidelines': showModal(renderUserGuidelines(), null, 'guidelines'); break;
       case 'admin-refresh': void loadAdmin(); break;
       case 'start-all': confirmStart(true); break;
       case 'start-selected': confirmStart(false); break;
@@ -363,18 +377,6 @@ function bindEvents(): void {
     }
   }));
   document.querySelector<HTMLImageElement>('[data-avatar]')?.addEventListener('error', () => { if (state.user) { state.user.avatarUrl = undefined; render(); } });
-}
-function newCard(): void {
-  if (!isAdmin()) return;
-  showModal('<h2 id="modal-title">新建服务卡密</h2><p class="subtext">当前仅创建一次性服务凭证，不设置价格或套餐。</p><label class="card-label" for="card-label">备注</label><input class="card-field" id="card-label" maxlength="80" placeholder="例如：课程服务，张同学"><div class="modal-actions"><button class="button" data-action="close-modal">取消</button><button class="button primary" data-action="modal-confirm">创建卡密</button></div>', async () => {
-    const label = document.querySelector<HTMLInputElement>('#card-label')?.value.trim() || '服务卡密';
-    const session = generation;
-    try {
-      const result = await api.adminCreateCard(label); if (session !== generation || !isAdmin()) return;
-      const code = typeof result.access_code === 'string' ? result.access_code : typeof result.code === 'string' ? result.code : '';
-      showModal(`<h2 id="modal-title">${code ? '卡密已创建' : '卡密已登记'}</h2><p class="subtext">${code ? '明文只显示这一次。关闭前请妥善交付给用户。' : '请刷新列表查看记录。'}</p>${code ? `<pre class="new-card-code">${e(code)}</pre>` : ''}<div class="modal-actions"><button class="button primary" data-action="close-modal">已妥善保存</button></div>`); void loadAdmin();
-    } catch (error) { if (session !== generation || handleError(error)) return; closeModal(); state.notice = '卡密创建状态待确认，请先刷新列表，避免重复创建。'; render(); }
-  });
 }
 async function adminAction(action: () => Promise<void>): Promise<void> {
   const session = generation; closeModal();
@@ -395,4 +397,4 @@ async function restore(): Promise<void> {
   try { const user = await api.me(); if (session !== generation) return; state.user = user; render(); void loadJobs(); void loadCourses(); }
   catch { /* Keep the existing login form intact, including fields currently being entered. */ }
 }
-render(); void api.authConfig().then(config => { state.cardRequired = config.access_card_required; if (!state.user && !state.signingIn) { const field = document.querySelector<HTMLInputElement>('#card-code'); if (field) field.required = state.cardRequired; const label = document.querySelector<HTMLElement>('[data-card-requirement]'); if (label) label.textContent = state.cardRequired ? '必填' : '选填'; const help = document.querySelector<HTMLElement>('[data-card-help]'); if (help) help.textContent = state.cardRequired ? '使用有效卡密开通服务，具体规则请联系服务人员。' : '卡密规则尚未开放，当前可暂不填写。'; } }).catch(() => { /* Login remains available if the optional settings request has not completed. */ }); void restore();
+render(); void restore();

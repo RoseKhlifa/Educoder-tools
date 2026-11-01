@@ -110,14 +110,18 @@ await test('browser API uses the Go workbench contract', async t => {
     assert.equal(requests[0].url, '/api/jobs');
     assert.notEqual(requests[0].options.method, 'POST');
   });
-  await t.test('local role comes from the server platform identity and card is a request-body credential', async () => {
+  await t.test('local role comes from the server platform identity and login accepts only upstream credentials', async () => {
     let request;
     globalThis.fetch = async (url, options) => { request = { url, options }; return envelope({ user: { id: 91, name: '同学', role: 'admin' }, platform: { id: 'local-uuid', role: 'user', status: 'active' } }); };
     const api = new BrowserApi();
-    const user = await api.login('demo', 'test-password', '  example-card  ');
+    const user = await api.login('demo', 'test-password');
     assert.equal(user.role, 'user');
-    assert.deepEqual(JSON.parse(request.options.body), { login: 'demo', password: 'test-password', access_code: 'example-card' });
-    assert.doesNotMatch(request.url, /example-card|test-password/);
+    assert.deepEqual(JSON.parse(request.options.body), { login: 'demo', password: 'test-password' });
+    assert.doesNotMatch(request.url, /test-password/);
+  });
+  await t.test('retired access-card configuration and administration are absent from the browser API', () => {
+    const api = new BrowserApi();
+    for (const method of ['authConfig', 'adminCards', 'adminCreateCard', 'adminRevokeCard']) assert.equal(method in api, false, method);
   });
   await t.test('administrator user IDs stay opaque strings and mutation permission errors are not session expiry', async () => {
     let request;

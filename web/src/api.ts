@@ -1,6 +1,6 @@
 import type {
   ApiError,
-  AdminUser, AdminAudit, AdminJob, AdminOverview, AccessCard,
+  AdminUser, AdminAudit, AdminJob, AdminOverview,
   AnswerJob,
   Course,
   Exercise,
@@ -178,8 +178,7 @@ function normalizeEnteredTask(value: unknown): EnteredTask {
 }
 
 export interface EducoderApi {
-  login(login: string, password: string, cardCode?: string): Promise<User>;
-  authConfig(): Promise<{ access_card_required: boolean }>;
+  login(login: string, password: string): Promise<User>;
   me(): Promise<User>;
   logout(): Promise<void>;
   courses(): Promise<Course[]>;
@@ -196,9 +195,6 @@ export interface EducoderApi {
   adminAudit(): Promise<AdminAudit[]>;
   adminUserStatus(id: string | number, status: 'active' | 'disabled'): Promise<void>;
   adminCancelJob(id: string): Promise<void>;
-  adminCards(): Promise<AccessCard[]>;
-  adminCreateCard(label: string): Promise<Record<string, unknown>>;
-  adminRevokeCard(id: string): Promise<void>;
 }
 
 export class BrowserApi implements EducoderApi {
@@ -219,16 +215,15 @@ export class BrowserApi implements EducoderApi {
     return unwrap<T>(payload, response.status, requestId);
   }
 
-  async login(login: string, password: string, cardCode?: string): Promise<User> {
+  async login(login: string, password: string): Promise<User> {
     const payload = await this.request<unknown>('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ login: login.trim(), password, ...(cardCode?.trim() ? { access_code: cardCode.trim() } : {}) }),
+      body: JSON.stringify({ login: login.trim(), password }),
     });
     return normalizeUser(payload);
   }
 
   async me(): Promise<User> { return normalizeUser(await this.request<unknown>('/api/auth/me')); }
-  async authConfig(): Promise<{ access_card_required: boolean }> { return this.request('/api/auth/config'); }
 
   async logout(): Promise<void> { await this.request<unknown>('/api/auth/logout', { method: 'POST' }); }
 
@@ -285,14 +280,6 @@ export class BrowserApi implements EducoderApi {
   async adminCancelJob(id: string): Promise<void> {
     await this.request(`/api/admin/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
   }
-  async adminCards(): Promise<AccessCard[]> {
-    const value = await this.request<unknown>('/api/admin/cards');
-    const row = asRecord(value); return (Array.isArray(value) ? value : row.items ?? []) as AccessCard[];
-  }
-  async adminCreateCard(label: string): Promise<Record<string, unknown>> {
-    return this.request('/api/admin/cards', { method: 'POST', body: JSON.stringify({ label, reusable: false }) });
-  }
-  async adminRevokeCard(id: string): Promise<void> { await this.request(`/api/admin/cards/${encodeURIComponent(id)}/revoke`, { method: 'POST' }); }
 }
 
 export function toApiError(error: unknown): ApiError {

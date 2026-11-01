@@ -16,13 +16,6 @@ import (
 )
 
 func loadPlatformConfig(cfg *Config) error {
-	if value := strings.TrimSpace(os.Getenv("ACCESS_CARD_REQUIRED")); value != "" {
-		var err error
-		cfg.AccessCardRequired, err = strconv.ParseBool(value)
-		if err != nil {
-			return errors.New("invalid ACCESS_CARD_REQUIRED")
-		}
-	}
 	if value := strings.TrimSpace(os.Getenv("PLATFORM_ADMIN_USER_IDS")); value != "" {
 		for _, raw := range strings.Split(value, ",") {
 			id, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
@@ -68,10 +61,6 @@ func (s *Server) platformLoginError(w http.ResponseWriter, requestID string, err
 	switch {
 	case errors.Is(err, platform.ErrDisabled):
 		s.writeError(w, requestID, http.StatusForbidden, "ACCOUNT_DISABLED", "账号服务暂不可用，请联系管理员")
-	case errors.Is(err, platform.ErrCardRequired):
-		s.writeError(w, requestID, http.StatusForbidden, "ACCESS_CODE_REQUIRED", "请输入服务卡密")
-	case errors.Is(err, platform.ErrInvalidCard):
-		s.writeError(w, requestID, http.StatusForbidden, "ACCESS_CODE_INVALID", "卡密暂不可用，请核对或联系管理员")
 	default:
 		s.writeError(w, requestID, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "登录服务暂不可用，请稍后重试")
 	}

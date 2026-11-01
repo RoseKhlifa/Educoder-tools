@@ -20,8 +20,14 @@ for (const [, selector, body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
   }
 }
 
-for (const route of ['/api/auth/login', '/api/auth/me', '/api/auth/config', '/api/courses', '/api/jobs', '/api/admin/overview', '/api/admin/users', '/api/admin/jobs', '/api/admin/cards', '/api/admin/audit']) assert.ok(api.includes(route), `missing route ${route}`);
+for (const route of ['/api/auth/login', '/api/auth/me', '/api/courses', '/api/jobs', '/api/admin/overview', '/api/admin/users', '/api/admin/jobs', '/api/admin/audit']) assert.ok(api.includes(route), `missing route ${route}`);
 assert.match(api, /credentials:\s*'include'/);
+assert.doesNotMatch(api, /access_code|access_card|cardCode|authConfig|adminCards|adminCreateCard|adminRevokeCard|\/api\/admin\/cards|\/api\/auth\/config/, 'retired access-card API must not remain in the browser bundle');
+const admin = await readFile(new URL('./src/admin.ts', import.meta.url), 'utf8');
+const types = await readFile(new URL('./src/types.ts', import.meta.url), 'utf8');
+assert.doesNotMatch(admin, /AccessCard|卡密|create-card|revoke-card|page === 'cards'/, 'administrator view must not retain access-card management');
+assert.doesNotMatch(types, /AccessCard/, 'retired access-card DTO must not remain');
+
 assert.equal(/localStorage|sessionStorage|console\.(log|debug|info)\s*\(/.test(`${source}\n${api}`), false, 'sensitive browser persistence/logging found');
 assert.equal(/error_code|\.message|model_calls|cost_micro_usd|diagnostics|attempts|budget/.test(jobs), false, 'consumer task renderer contains technical details');
 assert.match(css, /@media \(max-width: 620px\)/);

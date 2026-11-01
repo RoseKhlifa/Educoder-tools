@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"time"
 
 	"educoder-cli/internal/jobs"
 	"educoder-cli/internal/platform"
@@ -27,13 +26,6 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, requestID s
 				return
 			}
 			s.writeJSON(w, requestID, 200, map[string]any{"items": users, "limit": 100})
-		case "cards":
-			cards, err := s.platform.ListCards(r.Context(), 100)
-			if err != nil {
-				s.adminError(w, requestID, err)
-				return
-			}
-			s.writeJSON(w, requestID, 200, map[string]any{"items": cards, "limit": 100, "access_card_required": s.config.AccessCardRequired})
 		case "audit":
 			items, err := s.platform.ListAudit(r.Context(), 100)
 			if err != nil {
@@ -76,7 +68,7 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, requestID s
 					}
 				}
 			}
-			s.writeJSON(w, requestID, 200, map[string]any{"usage": usage, "capacity": capacity, "users": users, "access_card_required": s.config.AccessCardRequired})
+			s.writeJSON(w, requestID, 200, map[string]any{"usage": usage, "capacity": capacity, "users": users})
 		default:
 			s.writeError(w, requestID, 404, "NOT_FOUND", "管理接口不存在")
 		}
@@ -109,64 +101,6 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, requestID s
 			return
 		}
 		s.writeJSON(w, requestID, 200, user)
-		return
-	}
-	if len(parts) == 3 && parts[2] == "cards" && r.Method == http.MethodPost {
-		var input struct {
-			Label       string     `json:"label"`
-			BoundUserID string     `json:"bound_user_id"`
-			Reusable    bool       `json:"reusable"`
-			ExpiresAt   *time.Time `json:"expires_at"`
-		}
-		if decodeJSON(r, &input) != nil || len(input.Label) > 120 {
-			s.writeError(w, requestID, 400, "INVALID_REQUEST", "卡密参数无效")
-			return
-		}
-		options := platform.CardOptions{Label: input.Label, BoundUserID: input.BoundUserID, Reusable: input.Reusable}
-		if input.ExpiresAt != nil {
-			options.ExpiresAt = *input.ExpiresAt
-		}
-		if !options.ExpiresAt.IsZero() && !options.ExpiresAt.After(time.Now()) {
-			s.writeError(w, requestID, 400, "INVALID_REQUEST", "有效期需晚于当前时间")
-			return
-		}
-		if options.BoundUserID != "" {
-			if _, err := s.platform.LookupUser(r.Context(), options.BoundUserID); err != nil {
-				s.adminError(w, requestID, err)
-				return
-			}
-		}
-		issued, err := s.platform.IssueCard(r.Context(), actor, options)
-		if err != nil {
-			s.adminError(w, requestID, err)
-			return
-		}
-		s.writeJSON(w, requestID, http.StatusCreated, issued)
-		return
-	}
-	if len(parts) == 5 && parts[2] == "cards" && parts[4] == "revoke" && r.Method == http.MethodPost {
-		if err := s.platform.RevokeCard(r.Context(), actor, parts[3]); err != nil {
-			s.adminError(w, requestID, err)
-			return
-		}
-		// Recheck every connected principal; losing this card need not revoke a
-		// user who has another valid card. No raw code is read back from storage.
-		if s.config.AccessCardRequired {
-			for _, id := range s.store.UserIDs() {
-				user, err := s.platform.LookupUser(r.Context(), id)
-				if err != nil {
-					continue
-				}
-				allowed, err := s.platform.CanAccess(r.Context(), user)
-				if err == nil && !allowed {
-					s.store.DeleteUser(id)
-					if s.jobs != nil {
-						_ = s.jobs.manager.CancelOwner(r.Context(), user.Owner())
-					}
-				}
-			}
-		}
-		s.writeJSON(w, requestID, 200, map[string]bool{"revoked": true})
 		return
 	}
 	if len(parts) == 4 && parts[2] == "jobs" && r.Method == http.MethodGet {

@@ -59,7 +59,7 @@ func TestJobLabelsPersistAcrossRestartAndKeepHomeworkCourseScope(t *testing.T) {
 func TestJobLabelsDoNotChangeIdentityOrAuthorizeOwnership(t *testing.T) {
 	ctx := context.Background()
 	s := openTest(t, Options{AdminUserIDs: []int64{1}})
-	user, err := s.UpsertLogin(ctx, Identity{UpstreamID: 2, Login: "student", Name: "同学"}, "")
+	user, err := s.UpsertLogin(ctx, Identity{UpstreamID: 2, Login: "student", Name: "同学"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -15,7 +15,7 @@ func TestAdminTaskContextUsesVerifiedIdentityBeyondRecentUserPageAndStaysPrivate
 	f := newPlatformHTTPFixture(t, nil)
 	ctx := context.Background()
 	for i := int64(4); i < 109; i++ {
-		if _, err := f.platform.UpsertLogin(ctx, platform.Identity{UpstreamID: i, Login: fmt.Sprintf("fixture%d", i), Name: "其他同学"}, ""); err != nil {
+		if _, err := f.platform.UpsertLogin(ctx, platform.Identity{UpstreamID: i, Login: fmt.Sprintf("fixture%d", i), Name: "其他同学"}); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -24,8 +24,8 @@ func (s *Server) ownerCanRun(ctx context.Context, owner string) bool {
 	return err == nil && allowed
 }
 
-// Jobs outlive browser sessions. Recheck the persisted grant independently of
-// that session so logout cannot leave disabled/expired-card jobs running.
+// Jobs outlive browser sessions. Recheck the persisted account status
+// independently so disabled users cannot keep detached jobs running.
 func (s *Server) runAuthorized(ctx context.Context, owner string, run func(context.Context) (jobs.Outcome, error)) (jobs.Outcome, error) {
 	if !s.ownerCanRun(ctx, owner) {
 		return jobs.Outcome{Status: jobs.Failed, ErrorCode: "ACCESS_REVOKED", Message: "服务权限已更新"}, nil

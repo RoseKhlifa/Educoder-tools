@@ -21,15 +21,12 @@ import (
 var (
 	ErrInvalidIdentity = errors.New("verified upstream numeric identity required")
 	ErrDisabled        = errors.New("platform user disabled")
-	ErrCardRequired    = errors.New("access card required")
-	ErrInvalidCard     = errors.New("access card unavailable")
 	ErrNotFound        = errors.New("platform record not found")
 	ErrForbidden       = errors.New("administrator required")
 )
 
 type Options struct {
-	AdminUserIDs       []int64
-	AccessCardRequired bool
+	AdminUserIDs []int64
 }
 
 type Identity struct {
@@ -75,10 +72,9 @@ func (s *Store) Stats(ctx context.Context) (Stats, error) {
 }
 
 type Store struct {
-	db          *sql.DB
-	admins      map[int64]bool
-	requireCard bool
-	now         func() time.Time
+	db     *sql.DB
+	admins map[int64]bool
+	now    func() time.Time
 }
 
 const schema = `
@@ -89,19 +85,9 @@ CREATE TABLE IF NOT EXISTS platform_users (
  status TEXT NOT NULL CHECK(status IN ('active','disabled')),
  created_at TEXT NOT NULL, last_login_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS access_cards (
- id TEXT PRIMARY KEY, code_hash TEXT NOT NULL UNIQUE, masked_code TEXT NOT NULL,
- label TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('active','revoked')),
- bound_user_id TEXT REFERENCES platform_users(id), reusable INTEGER NOT NULL DEFAULT 0,
- expires_at TEXT NOT NULL, created_at TEXT NOT NULL, redeemed_at TEXT NOT NULL DEFAULT ''
-);
 CREATE TABLE IF NOT EXISTS platform_audit (
  id INTEGER PRIMARY KEY AUTOINCREMENT, actor_id TEXT NOT NULL, action TEXT NOT NULL,
  target_id TEXT NOT NULL, details_json TEXT NOT NULL, created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS access_card_redemptions (
- card_id TEXT NOT NULL REFERENCES access_cards(id), user_id TEXT NOT NULL REFERENCES platform_users(id),
- redeemed_at TEXT NOT NULL, PRIMARY KEY(card_id,user_id)
 );
 CREATE INDEX IF NOT EXISTS platform_audit_created ON platform_audit(created_at);
 CREATE TABLE IF NOT EXISTS job_course_labels (
@@ -146,7 +132,7 @@ func Open(path string, options Options) (*Store, error) {
 			return nil, fmt.Errorf("initialize platform database: %w", err)
 		}
 	}
-	s := &Store{db: db, admins: make(map[int64]bool), requireCard: options.AccessCardRequired, now: time.Now}
+	s := &Store{db: db, admins: make(map[int64]bool), now: time.Now}
 	for _, id := range options.AdminUserIDs {
 		if id > 0 {
 			s.admins[id] = true
@@ -155,37 +141,12 @@ func Open(path string, options Options) (*Store, error) {
 	return s, nil
 }
 
-func (s *Store) Close() error             { return s.db.Close() }
-func (s *Store) AccessCardRequired() bool { return s.requireCard }
+func (s *Store) Close() error { return s.db.Close() }
 
-// CanAccess checks current status, including card revocation and expiry, so
-// revoking a grant also invalidates an existing browser session.
-func (s *Store) CanAccess(ctx context.Context, user User) (bool, error) {
-	if user.Status != "active" {
-		return false, nil
-	}
-	if !s.requireCard || user.IsAdmin() {
-		return true, nil
-	}
-	rows, err := s.db.QueryContext(ctx, "SELECT c.expires_at FROM access_cards c JOIN access_card_redemptions r ON r.card_id=c.id WHERE r.user_id=? AND c.status='active' AND (c.bound_user_id IS NULL OR c.bound_user_id=?)", user.ID, user.ID)
-	if err != nil {
-		return false, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var expiry string
-		if err = rows.Scan(&expiry); err != nil {
-			return false, err
-		}
-		if expiry == "" {
-			return true, nil
-		}
-		t, e := time.Parse(time.RFC3339Nano, expiry)
-		if e == nil && t.After(s.now()) {
-			return true, nil
-		}
-	}
-	return false, rows.Err()
+// CanAccess receives a freshly loaded principal; only active platform users
+// retain service access. Role-specific operations enforce their own permissions.
+func (s *Store) CanAccess(_ context.Context, user User) (bool, error) {
+	return user.Status == "active", nil
 }
 
 const userColumns = "id,tenant_id,upstream_id,login,name,role,status,created_at,last_login_at"
@@ -208,8 +169,8 @@ func scanUser(row scanner) (User, error) {
 }
 
 // UpsertLogin must only receive identity returned by successful Educoder login.
-// Creation, card binding and login audit commit atomically.
-func (s *Store) UpsertLogin(ctx context.Context, identity Identity, accessCode string) (User, error) {
+// Creation, identity refresh and login audit commit atomically.
+func (s *Store) UpsertLogin(ctx context.Context, identity Identity) (User, error) {
 	if identity.UpstreamID <= 0 || strings.TrimSpace(identity.Login) == "" {
 		return User{}, ErrInvalidIdentity
 	}
@@ -246,14 +207,6 @@ func (s *Store) UpsertLogin(ctx context.Context, identity Identity, accessCode s
 	}
 	if err != nil {
 		return User{}, err
-	}
-	if s.requireCard && !u.IsAdmin() {
-		if strings.TrimSpace(accessCode) == "" {
-			return User{}, ErrCardRequired
-		}
-		if err = s.redeemTx(ctx, tx, u.ID, accessCode, now); err != nil {
-			return User{}, err
-		}
 	}
 	if err = appendAudit(ctx, tx, u.ID, "auth.login", u.ID, map[string]string{"role": u.Role}, now); err != nil {
 		return User{}, err

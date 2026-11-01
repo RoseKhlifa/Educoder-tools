@@ -37,7 +37,6 @@ async function app(overrides={}) {
   globalThis.localStorage=globalThis.sessionStorage={setItem(){throw new Error('no browser persistence');}};
   globalThis.fetch=async(url,options)=>{
     requests.push({url,options});if(overrides[url])return overrides[url](options);
-    if(url==='/api/auth/config')return ok({access_card_required:false});
     if(url==='/api/auth/me'||url==='/api/auth/login')return ok({user,platform:{role:'user',status:'active'}});
     if(url==='/api/auth/logout')return ok({loggedOut:true});
     if(url==='/api/courses')return ok(courses);
@@ -84,11 +83,46 @@ await test('consumer course service and administrator boundary',async t=>{
   await t.test('failed API calls use fixed service-facing copy rather than backend text',async()=>{
     const page=await app({'/api/courses':()=>failure(502,'UPSTREAM','INTERNAL_SECRET_TRACE')});assert.match(page.html(),/服务人员会协助处理/);assert.doesNotMatch(page.html(),/INTERNAL_SECRET_TRACE/);
   });
-  await t.test('login uses upstream identity plus access code and clears all private inputs',async()=>{
-    const page=await app({'/api/auth/me':()=>failure(401,'AUTH_REQUIRED','请先登录'),'/api/auth/config':()=>ok({access_card_required:true})});assert.equal(page.get('#card-code').required,true);page.get('#login').value=' demo ';page.get('#password').value='test-only-password';page.get('#card-code').value='test-only-card';page.get('#login-form').dispatch('submit');await settle();const post=page.requests.find(item=>item.url==='/api/auth/login');assert.deepEqual(JSON.parse(post.options.body),{login:'demo',password:'test-only-password',access_code:'test-only-card'});assert.doesNotMatch(page.html(),/test-only-password|test-only-card/);page.get('[data-action="logout"]').dispatch('click');await settle();assert.match(page.html(),/id="login-form"/);assert.equal(page.get('#password').value,'');assert.equal(page.get('#card-code').value,'');assert.equal(page.timers.size,0);
+  await t.test('login uses only upstream account and password and clears private inputs', async () => {
+    const page=await app({'/api/auth/me':()=>failure(401,'AUTH_REQUIRED','请先登录')});
+    assert.doesNotMatch(page.html(), /卡密|access_code|card-code|login-meta|对象：头歌平台|密码不会在本站保存/);
+    page.get('#login').value=' demo ';page.get('#password').value='test-only-password';
+    page.get('#login-form').dispatch('submit');await settle();
+    const post=page.requests.find(item=>item.url==='/api/auth/login');
+    assert.deepEqual(JSON.parse(post.options.body),{login:'demo',password:'test-only-password'});
+    assert.doesNotMatch(page.html(), /test-only-password/);
+    assert.equal(page.requests.some(item=>item.url==='/api/auth/config'||item.url.includes('/api/admin/cards')),false);
+    page.get('[data-action="logout"]').dispatch('click');await settle();
+    assert.match(page.html(), /id="login-form"/);assert.equal(page.get('#password').value,'');assert.equal(page.timers.size,0);
+  });
+  await t.test('guidelines disclose collection and open without authenticating or dropping form drafts', async () => {
+    const page=await app({'/api/auth/me':()=>failure(401,'AUTH_REQUIRED','请先登录')});
+    page.get('#login').value='private-draft-account';page.get('#password').value='private-draft-password';
+    const before=page.requests.length;
+    page.get('[data-action="user-guidelines"]').dispatch('click');
+    assert.match(page.html(), /role="dialog"/);
+    assert.match(page.html(), /平台会收集用户做题数据/);assert.match(page.html(), /题目内容、作答内容或代码、评测结果与通过状态/);
+    assert.match(page.html(), /复用题目及经核验的答案/);assert.match(page.html(), /降低平台成本，维持平台发展/);
+    assert.match(page.html(), /登录后.*扫描账号中已通过的任务/);
+    assert.match(page.html(), /模型服务/);assert.doesNotMatch(page.html(), /private-draft-account|private-draft-password/);
+    assert.equal(page.get('#login').value,'private-draft-account');assert.equal(page.get('#password').value,'private-draft-password');
+    page.get('[data-action="close-modal"]').dispatch('click');
+    assert.doesNotMatch(page.html(), /role="dialog"/);
+    assert.equal(page.get('#login').value,'private-draft-account');assert.equal(page.get('#password').value,'private-draft-password');
+    assert.equal(page.document.activeElement,page.get('[data-action="user-guidelines"]'));
+    page.get('[data-action="user-guidelines"]').dispatch('click');
+    page.document.listeners.get('keydown')({key:'Escape'});
+    assert.doesNotMatch(page.html(), /role="dialog"/);assert.equal(page.get('#password').value,'private-draft-password');
+    assert.equal(page.requests.length,before,'reading guidelines must not send an authentication or task request');
   });
   await t.test('login failure does not expose raw upstream details',async()=>{
     const page=await app({'/api/auth/me':()=>failure(401,'AUTH_REQUIRED','x'),'/api/auth/login':()=>failure(502,'UPSTREAM_ERROR','private-cookie-secret')});page.get('#login').value='demo';page.get('#password').value='wrong';page.get('#login-form').dispatch('submit');await settle();assert.match(page.html(),/登录暂未完成/);assert.doesNotMatch(page.html(),/private-cookie-secret/);assert.equal(page.get('#password').value,'');
+  });
+  await t.test('login rate limits show the service retry message and clear the password', async () => {
+    const page=await app({'/api/auth/me':()=>failure(401,'AUTH_REQUIRED','x'),'/api/auth/login':()=>failure(429,'LOGIN_RATE_LIMITED','internal-rate-details')});
+    page.get('#login').value='demo';page.get('#password').value='synthetic-password';page.get('#login-form').dispatch('submit');await settle();
+    assert.match(page.html(), /登录有点频繁，请稍后再试/);assert.doesNotMatch(page.html(), /internal-rate-details|synthetic-password/);
+    assert.equal(page.get('#password').value,'');
   });
   await t.test('platform administrator permission unlocks genuine admin data, not a local preview role toggle',async()=>{
     const admin=job({status:'failed',error_code:'SELFTEST_FAILED',message:'公开样例未通过',owner_id:'7',result:{model_calls:3,cost_micro_usd:23000,total_levels:5,completed_levels:2}});
@@ -235,15 +269,13 @@ await test('consumer course service and administrator boundary',async t=>{
     assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
   });
 
-  await t.test('late login settings and expired restoration never erase credentials being entered', async () => {
-    const settings = deferred(), session = deferred();
-    const page = await app({ '/api/auth/config': () => settings.promise, '/api/auth/me': () => session.promise });
-    page.get('#login').value = 'typing-user'; page.get('#password').value = 'typing-password';
-    settings.resolve(ok({ access_card_required: true })); session.resolve(failure(401, 'AUTH_REQUIRED', '登录过期'));
-    await settle();
-    assert.equal(page.get('#login').value, 'typing-user'); assert.equal(page.get('#password').value, 'typing-password'); assert.equal(page.get('#card-code').required, true);
+  await t.test('delayed expired session restoration preserves an entered account and password', async () => {
+    const session=deferred();const page=await app({'/api/auth/me':()=>session.promise});
+    page.get('#login').value='typing-user';page.get('#password').value='typing-password';
+    session.resolve(failure(401,'AUTH_REQUIRED','登录过期'));await settle();
+    assert.equal(page.get('#login').value,'typing-user');assert.equal(page.get('#password').value,'typing-password');
+    assert.equal(page.requests.some(item=>item.url==='/api/auth/config'),false);
   });
-
   await t.test('online exams are read-only until a single exam is explicitly confirmed', async () => {
     const exam = { id: 701, name: '数据结构期中测试', status: 'available', available: true, submitted: false, scoreKnown: false, totalQuestions: 20 };
     const page = await app({ '/api/courses/COURSE_A/exercises': () => ok({ items: [exam], courseIdentifier: 'COURSE_A' }) });

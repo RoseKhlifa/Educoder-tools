@@ -42,7 +42,6 @@ type Config struct {
 	ModelAPIKeyFile      string
 	ModelBaseURL         string
 	PlatformAdminUserIDs []int64
-	AccessCardRequired   bool
 }
 
 func DefaultConfig() Config {
@@ -217,18 +216,6 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request, requestID str
 		s.handleAdmin(w, r, requestID)
 		return
 	}
-	if r.URL.Path == "/api/auth/config" {
-		if r.Method != http.MethodGet {
-			s.methodError(w, requestID)
-			return
-		}
-		required := s.config.AccessCardRequired
-		if s.platform != nil {
-			required = s.platform.AccessCardRequired()
-		}
-		s.writeJSON(w, requestID, http.StatusOK, map[string]bool{"access_card_required": required})
-		return
-	}
 	if r.URL.Path == "/api/jobs" || strings.HasPrefix(r.URL.Path, "/api/jobs/") {
 		s.handleJobs(w, r, requestID)
 		return
@@ -320,15 +307,14 @@ func splitPath(path string) []string {
 
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, requestID string) {
 	var input struct {
-		Login      string `json:"login"`
-		Password   string `json:"password"`
-		AccessCode string `json:"access_code"`
+		Login    string `json:"login"`
+		Password string `json:"password"`
 	}
 	if !s.loginLimits.allow("source:"+loginSource(r), 120) {
 		s.loginRateError(w, requestID)
 		return
 	}
-	if err := decodeJSON(r, &input); err != nil || strings.TrimSpace(input.Login) == "" || input.Password == "" || len(input.Login) > 256 || len(input.Password) > 4096 || len(input.AccessCode) > 256 {
+	if err := decodeJSON(r, &input); err != nil || strings.TrimSpace(input.Login) == "" || input.Password == "" || len(input.Login) > 256 || len(input.Password) > 4096 {
 		s.writeError(w, requestID, http.StatusBadRequest, "INVALID_REQUEST", "请输入账号和密码")
 		return
 	}
@@ -346,8 +332,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, requestID s
 	}
 	var principal platform.User
 	if s.platform != nil {
-		principal, err = s.platform.UpsertLogin(ctx, platform.Identity{UpstreamID: user.UserID, Login: user.Login, Name: user.Name}, input.AccessCode)
-		input.AccessCode = ""
+		principal, err = s.platform.UpsertLogin(ctx, platform.Identity{UpstreamID: user.UserID, Login: user.Login, Name: user.Name})
 		if err != nil {
 			s.platformLoginError(w, requestID, err)
 			return

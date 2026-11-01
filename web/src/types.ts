@@ -186,7 +186,6 @@ export interface AdminAudit {
   created_at?: string;
   outcome?: string;
 }
-export interface AccessCard { id: string; masked_code?: string; label?: string; status?: string; bound_user_id?: string | number; reusable?: boolean; created_at?: string; expires_at?: string }
 export interface AdminJobContext {
   user?: { id?: string | number; name?: string; login?: string; linked?: boolean };
   course?: { identifier?: string; name?: string };

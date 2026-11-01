@@ -76,20 +76,6 @@ func (s *SessionStore) DeleteUser(userID string) {
 	}
 }
 
-func (s *SessionStore) UserIDs() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	seen := map[string]bool{}
-	ids := []string{}
-	for _, session := range s.sessions {
-		if id := session.Principal.ID; id != "" && !seen[id] {
-			seen[id] = true
-			ids = append(ids, id)
-		}
-	}
-	return ids
-}
-
 func (s *SessionStore) Get(id string) (Session, bool) {
 	if id == "" {
 		return Session{}, false

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.47 - 2026-11-02
+
+- Retire access cards and add clear login user guidelines with data reuse disclosure
+
 ## 0.1.46 - 2026-11-02
 
 - Make brand logo background transparent and remove white UI backplate

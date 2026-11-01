@@ -20,7 +20,7 @@ const job = (extra = {}) => ({
 
 });
 
-const state = jobs => ({ overview: {}, users: [], jobs, audit: [], cards: [], loading: false, error: false, jobsKind: 'all' });
+const state = jobs => ({ overview: {}, users: [], jobs, audit: [], loading: false, error: false, jobsKind: 'all' });
 const visible = html => html.replace(/<details\b[\s\S]*?<\/details>/g, '').replace(/<[^>]*>/g, ' ');
 
 await test('current operations keep live service targets clear and retain previous attempts in history', async t => {
@@ -131,6 +131,17 @@ await test('current operations keep live service targets clear and retain previo
 });
 
 await test('administrator sees people and work instead of storage identifiers', async t => {
+  await t.test('all administrator pages omit retired access cards and preserve internal usage meaning', () => {
+    const input = { ...state([]), overview: { usage: { model_calls: 17 } } };
+    for (const page of ['overview', 'users', 'operations', 'audit']) {
+      assert.doesNotMatch(renderAdmin(page, input), /卡密|data-action="create-card"|data-revoke-card/);
+    }
+    const overview = visible(renderAdmin('overview', input));
+    assert.match(overview, /模型用量与费用仅供管理员核对服务成本/);
+    assert.match(overview, /不代表用户余额或可用额度/);
+    assert.match(overview, /17/);
+  });
+
   await t.test('course table resolves user, course, assignment, stopped level and units from backend context', () => {
     const html = renderAdmin('overview', state([job()]));
     const shown = visible(html);
