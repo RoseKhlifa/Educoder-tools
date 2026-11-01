@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.41 - 2026-11-01
+
+- Repair failed programming attempts automatically with durable feedback and show current services separately from history
+
 ## 0.1.40 - 2026-11-01
 
 - Clarify that the phase in batch task details belongs to the whole batch

@@ -1,5 +1,5 @@
 import { ApiRequestError, BrowserApi } from './api.js';
-import { renderAdmin, renderAdminJobDetail, type AdminPage, type AdminState } from './admin.js';
+import { partitionAdminJobs, renderAdmin, renderAdminJobDetail, type AdminPage, type AdminState } from './admin.js';
 import { jobProgress, jobTitle, pendingJob, renderJobs, renderServiceDetail, serviceJob, serviceLabels, serviceStatus } from './jobs.js';
 import { count, escapeHtml as e, icon } from './ui.js';
 import type { AnswerJob, Course, Homework, User } from './types.js';
@@ -12,7 +12,7 @@ const state = {
   user: null as User | null, page: 'courses' as Page, courses: [] as Course[], jobs: [] as AnswerJob[],
   selected: [] as string[], cardRequired: false, loading: false, signingIn: false, creating: false, notice: '', loginError: '', search: '',
   modal: '' as string, modalAction: null as (() => Promise<void> | void) | null,
-  admin: { overview: {}, users: [], jobs: [], audit: [], cards: [], loading: false, error: false } as AdminState,
+  admin: { overview: {}, users: [], jobs: [], audit: [], cards: [], loading: false, error: false, jobsView: 'current', jobsKind: 'service' } as AdminState,
 };
 let generation = 0;
 let jobsRevision = 0;
@@ -195,7 +195,22 @@ function bindEvents(): void {
     const job = state.jobs.find(item => item.id === button.dataset.jobDetail); if (job) showModal(`<div id="modal-title">${renderServiceDetail(job, state.courses)}</div>`);
   }));
   document.querySelectorAll<HTMLButtonElement>('[data-admin-job-detail]').forEach(button => button.addEventListener('click', () => {
-    if (!isAdmin()) return; const job = state.admin.jobs.find(item => item.id === button.dataset.adminJobDetail); if (job) showModal(`<div id="modal-title">${renderAdminJobDetail(job)}</div>`);
+    if (!isAdmin()) return;
+    const job = state.admin.jobs.find(item => item.id === button.dataset.adminJobDetail);
+    if (job) showModal(`<div id="modal-title">${renderAdminJobDetail(job, partitionAdminJobs(state.admin.jobs).history.some(item => item.id === job.id))}</div>`);
+  }));
+  document.querySelectorAll<HTMLButtonElement>('[data-admin-jobs-view]').forEach(button => button.addEventListener('click', () => {
+    if (!isAdmin()) return;
+    state.admin.jobsView = button.dataset.adminJobsView === 'history' ? 'history' : 'current'; render();
+  }));
+  document.querySelectorAll<HTMLButtonElement>('[data-admin-jobs-kind]').forEach(button => button.addEventListener('click', () => {
+    if (!isAdmin()) return;
+    const kind = button.dataset.adminJobsKind;
+    state.admin.jobsKind = kind === 'collection' || kind === 'all' ? kind : 'service'; render();
+  }));
+  document.querySelectorAll<HTMLButtonElement>('[data-admin-show-jobs]').forEach(button => button.addEventListener('click', () => {
+    if (!isAdmin()) return;
+    state.admin.jobsView = 'current'; state.admin.jobsKind = button.dataset.adminShowJobs === 'collection' ? 'collection' : 'service'; navigate('admin-operations');
   }));
   document.querySelectorAll<HTMLButtonElement>('[data-user-status]').forEach(button => button.addEventListener('click', () => {
     if (!isAdmin()) return; const id = button.dataset.userStatus!; const status = button.dataset.nextStatus === 'active' ? 'active' : 'disabled';

@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"educoder-cli/internal/answer"
 	"educoder-cli/internal/educoder"
@@ -267,18 +268,20 @@ func (s *Service) lock(ctx context.Context, key string) (func(), error) {
 func validMode(m Mode) bool { return m == ModeGenerateOnly || m == ModeSelfTest || m == ModeSubmit }
 
 type runState struct {
-	Result         Result            `json:"result"`
-	Target         Target            `json:"target"`
-	Mode           Mode              `json:"mode"`
-	Owner          string            `json:"owner,omitempty"`
-	IdempotencyKey string            `json:"idempotency_key,omitempty"`
-	SnapshotRef    questionbank.Ref  `json:"snapshot_ref"`
-	CandidateIDs   []int64           `json:"candidate_ids,omitempty"`
-	Feedback       []answer.Feedback `json:"feedback,omitempty"`
-	Attempts       int               `json:"attempts"`
-	Limits         runLimits         `json:"limits"`
-	LastCandidate  *answer.Candidate `json:"last_candidate,omitempty"`
-	UpdatedAt      time.Time         `json:"updated_at"`
+	Result              Result                 `json:"result"`
+	Target              Target                 `json:"target"`
+	Mode                Mode                   `json:"mode"`
+	Owner               string                 `json:"owner,omitempty"`
+	IdempotencyKey      string                 `json:"idempotency_key,omitempty"`
+	SnapshotRef         questionbank.Ref       `json:"snapshot_ref"`
+	CandidateIDs        []int64                `json:"candidate_ids,omitempty"`
+	Feedback            []answer.Feedback      `json:"feedback,omitempty"`
+	RepairHistory       []answer.RepairAttempt `json:"repair_history,omitempty"`
+	RejectedFilesHashes []string               `json:"rejected_files_hashes,omitempty"`
+	Attempts            int                    `json:"attempts"`
+	Limits              runLimits              `json:"limits"`
+	LastCandidate       *answer.Candidate      `json:"last_candidate,omitempty"`
+	UpdatedAt           time.Time              `json:"updated_at"`
 }
 
 type runLimits struct {
@@ -316,6 +319,8 @@ func (s *Service) persist(ctx context.Context, id string, state runState, status
 }
 
 func sanitizeRunState(state runState) runState {
+	state.Feedback = boundedFeedback(nil, state.Feedback...)
+	state.RepairHistory = boundedRepairHistory(state.RepairHistory)
 	for i := range state.Feedback {
 		f := &state.Feedback[i]
 		f.Kind = publicText(f.Kind)
@@ -329,18 +334,46 @@ func sanitizeRunState(state runState) runState {
 			state.LastCandidate = nil
 		}
 	}
+	for i := range state.RepairHistory {
+		entry := &state.RepairHistory[i]
+		entry.Feedback = boundedFeedback(nil, entry.Feedback...)
+		if entry.Candidate != nil {
+			hash, err := problem.HashFiles(entry.Candidate.Files)
+			if err != nil || hash != entry.FilesHash {
+				entry.Candidate = nil
+			}
+		}
+	}
 	for i, d := range state.Result.Diagnostics {
 		if problem.ValidatePublicText(d) != nil {
 			state.Result.Diagnostics[i] = "diagnostic withheld by public-data validator"
 		}
 	}
 	for i := range state.Result.SelfTests {
-		if problem.ValidatePublicText(state.Result.SelfTests[i].Output) != nil {
-			state.Result.SelfTests[i].Output = "output withheld by public-data validator"
-		}
+		state.Result.SelfTests[i].Output = boundedRepairText(state.Result.SelfTests[i].Output)
 	}
-	if state.Result.Evaluation != nil && problem.ValidatePublicText(state.Result.Evaluation.Feedback) != nil {
-		state.Result.Evaluation.Feedback = "evaluation feedback withheld by public-data validator"
+	// Results repeat the current sample outputs separately from repair history.
+	// Bound that duplicate evidence too while preserving terminal/match/hash
+	// fields for every sample, so long stdout cannot exhaust the run checkpoint.
+	for {
+		raw, _ := json.Marshal(state.Result.SelfTests)
+		if len(raw) <= maxRepairResultEvidenceBytes {
+			break
+		}
+		longest := -1
+		for i := range state.Result.SelfTests {
+			if longest < 0 || len(state.Result.SelfTests[i].Output) > len(state.Result.SelfTests[longest].Output) {
+				longest = i
+			}
+		}
+		if longest < 0 || len(state.Result.SelfTests[longest].Output) <= 64 {
+			break
+		}
+		output := &state.Result.SelfTests[longest].Output
+		*output = truncatedRepairText(*output, len(*output)/2)
+	}
+	if state.Result.Evaluation != nil {
+		state.Result.Evaluation.Feedback = boundedRepairText(state.Result.Evaluation.Feedback)
 	}
 	return state
 }
@@ -498,6 +531,23 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 	if err != nil {
 		return nil, err
 	}
+	// Lookup is a snapshot taken before this run starts. Keep new failures in
+	// durable run state as well so a model cannot oscillate between sources that
+	// this same execution already disproved, including after continuation.
+	rejectedByHash := make(map[string]questionbank.Candidate)
+	for _, hash := range state.RejectedFilesHashes {
+		rejectedByHash[hash] = questionbank.Candidate{}
+	}
+	for _, rejected := range allCandidates {
+		if rejected.Status == "rejected" && rejected.FilesHash != "" {
+			rejectedByHash[rejected.FilesHash] = rejected
+		}
+	}
+	for _, entry := range state.RepairHistory {
+		if _, exists := rejectedByHash[entry.FilesHash]; !exists && entry.FilesHash != "" {
+			rejectedByHash[entry.FilesHash] = questionbank.Candidate{}
+		}
+	}
 	// Verified candidates are reusable. A narrowly identified legacy output-
 	// comparison failure may also be re-tested, with no promotion or skipped
 	// samples: its old rejection is not evidence of wrong source.
@@ -523,12 +573,22 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 	var previous = state.LastCandidate
 	feedback := append([]answer.Feedback(nil), state.Feedback...)
 	compactOutput := false
+	if previous != nil && len(feedback) > 0 && len(state.RepairHistory) == 0 {
+		if hash, err := problem.HashFiles(previous.Files); err == nil {
+			if _, rejected := rejectedByHash[hash]; rejected {
+				// Older checkpoints predate repair_history but already retain the
+				// latest failed source and feedback. Upgrade it without retesting.
+				state.rememberRejection(*previous, feedback)
+			}
+		}
+	}
 	if len(candidates) == 0 && previous == nil && len(feedback) == 0 {
 		for _, rejected := range allCandidates {
 			if rejected.Status == "rejected" {
 				seed := answer.Candidate{Kind: "programming", Language: languageOf(snap), Files: rejected.Files}
 				previous = &seed
 				feedback = candidateFeedback(rejected)
+				state.rememberRejection(seed, feedback)
 				break
 			}
 		}
@@ -590,7 +650,7 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 					previous = nil
 				}
 			}
-			providerReq := answer.Request{Problem: snap, Previous: previous, Feedback: feedback, Profile: profile}
+			providerReq := answer.Request{Problem: snap, Previous: previous, Feedback: feedback, RepairHistory: boundedRepairHistory(state.RepairHistory), Profile: profile}
 			estimate, ee := s.provider.Estimate(providerReq)
 			if ee != nil {
 				result.Status = "budget_unavailable"
@@ -673,7 +733,7 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 					}
 					cancel()
 				}
-				state.Feedback = []answer.Feedback{{Kind: "model", Message: ge.Error()}}
+				state.Feedback = boundedFeedback(feedback, answer.Feedback{Kind: "model", Message: ge.Error()})
 				result.Diagnostics = append(result.Diagnostics, ge.Error())
 				if retryableGenerationError(ge) && attempt+1 < req.MaxEvaluations && result.ModelCalls < req.MaxModelCalls && ctx.Err() == nil {
 					compactOutput = compactOutput || answer.IsTruncatedOutput(ge)
@@ -699,18 +759,22 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			result.Source = "model"
 			result.CodeHash, _ = problem.HashFiles(candidate.Files)
 			if err := validateCandidate(snap, candidate); err != nil {
-				feedback = []answer.Feedback{{Kind: "schema", Message: err.Error()}}
+				feedback = boundedFeedback(feedback, answer.Feedback{Kind: "schema", Message: err.Error()})
 				state.Feedback = append([]answer.Feedback(nil), feedback...)
 				result.Diagnostics = append(result.Diagnostics, err.Error())
 				previous = &candidate
 				continue
 			}
-			bc, ae := s.store.AddCandidate(ctx, ref, questionbank.CandidateInput{Files: candidate.Files, Source: "model", Provider: "deepseek", Model: gen.Model, PromptVersion: "v1"})
-			if ae != nil {
-				return nil, ae
+			// A repeated rejected candidate is intercepted below before it can
+			// cause another database candidate write or upstream editor save.
+			if _, rejected := rejectedByHash[result.CodeHash]; !rejected {
+				bc, ae := s.store.AddCandidate(ctx, ref, questionbank.CandidateInput{Files: candidate.Files, Source: "model", Provider: "deepseek", Model: gen.Model, PromptVersion: "v1"})
+				if ae != nil {
+					return nil, ae
+				}
+				bankID = bc.ID
+				result.CandidateID = bankID
 			}
-			bankID = bc.ID
-			result.CandidateID = bankID
 			previous = &candidate
 			if result.CostMicroUSD+result.ReservedMicroUSD > req.BudgetMicroUSD {
 				result.Status = "budget_exhausted"
@@ -723,7 +787,7 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 		stage(req, "validating", "正在校验候选答案结构")
 		if err := validateCandidate(snap, candidate); err != nil {
 			result.Diagnostics = append(result.Diagnostics, err.Error())
-			feedback = []answer.Feedback{{Kind: "schema", Message: err.Error()}}
+			feedback = boundedFeedback(feedback, answer.Feedback{Kind: "schema", Message: err.Error()})
 			state.Feedback = append([]answer.Feedback(nil), feedback...)
 			state.LastCandidate = &candidate
 			previous = &candidate
@@ -731,16 +795,25 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 		}
 		result.CodeHash, _ = problem.HashFiles(candidate.Files)
 		state.LastCandidate = &candidate
-		for _, rejected := range allCandidates {
-			if rejected.Status == "rejected" && rejected.FilesHash == result.CodeHash && !legacyRetestAttempt {
-				feedback = candidateFeedback(rejected)
-				feedback = append(feedback, answer.Feedback{Kind: "repeated_candidate", Message: "This exact candidate already failed. Produce a corrected candidate; do not repeat unchanged source."})
-				state.Feedback = append([]answer.Feedback(nil), feedback...)
-				previous = &candidate
-				break
+		if rejected, exists := rejectedByHash[result.CodeHash]; exists && !legacyRetestAttempt {
+			rejectedFeedback := candidateFeedback(rejected)
+			for _, entry := range state.RepairHistory {
+				if entry.FilesHash == result.CodeHash {
+					rejectedFeedback = entry.Feedback
+					break
+				}
 			}
-		}
-		if len(feedback) > 0 && feedback[len(feedback)-1].Kind == "repeated_candidate" {
+			state.rememberRejection(candidate, rejectedFeedback)
+			for _, entry := range rejectedFeedback {
+				if entry.Kind != "selftest_passed" {
+					feedback = boundedFeedback(feedback, entry)
+				}
+			}
+			feedback = boundedFeedback(feedback, answer.Feedback{Kind: "repeated_candidate", Message: "Candidate " + result.CodeHash + " already failed. Inspect its bound source and feedback in repair_history. Produce a corrected candidate; do not repeat unchanged source or alternate between earlier failed candidates."})
+			state.Feedback = append([]answer.Feedback(nil), feedback...)
+			previous = &candidate
+			result.CandidateID = rejected.ID
+			result.Diagnostics = append(result.Diagnostics, "已拦截重复失败代码，继续根据历史反馈修复")
 			continue
 		}
 		if req.Mode == ModeGenerateOnly {
@@ -765,13 +838,16 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 		stage(req, "saving", "准备保存候选代码")
 		stage(req, "selftesting", "正在执行公开自测")
 		allPass := true
-		feedback = nil
+		var attemptFeedback []answer.Feedback
 		for _, test := range snap.PublicTests {
 			st, se := adapter.SelfTest(ctx, target, candidate.Files[0], test.Stdin, test.ExpectedStdout)
 			result.SelfTests = append(result.SelfTests, st)
-			ok := se == nil && st.Completed && st.Matches && (st.SavedFilesHash == "" || st.SavedFilesHash == result.CodeHash)
+			ok := se == nil && st.Completed && st.Matches && (st.CompileOK == nil || *st.CompileOK) && (st.SavedFilesHash == "" || st.SavedFilesHash == result.CodeHash)
 			if se == nil && st.SavedFilesHash != "" && st.SavedFilesHash != result.CodeHash {
 				se = errors.New("selftest editor content does not match candidate")
+			}
+			if se == nil && !st.Completed {
+				se = errors.New("selftest did not reach a terminal result")
 			}
 			if !ok {
 				allPass = false
@@ -779,14 +855,16 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				if se != nil {
 					msg = se.Error()
 				}
-				feedback = append(feedback, answer.Feedback{Kind: "selftest", Message: msg, Stdin: test.Stdin, ExpectedStdout: test.ExpectedStdout, ActualStdout: st.Output})
+				attemptFeedback = boundedFeedback(attemptFeedback, answer.Feedback{Kind: "selftest", Message: msg, Stdin: test.Stdin, ExpectedStdout: test.ExpectedStdout, ActualStdout: st.Output})
+			} else {
+				attemptFeedback = boundedFeedback(attemptFeedback, answer.Feedback{Kind: "selftest_passed", Stdin: test.Stdin, ExpectedStdout: test.ExpectedStdout, ActualStdout: st.Output})
 			}
 			validationResult := map[bool]string{true: "passed", false: "failed"}[ok]
 			if se != nil {
 				validationResult = "unknown"
 			}
 			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-			ve := s.store.RecordValidation(cleanup, questionbank.Validation{CandidateID: bankID, Kind: "selftest", Result: validationResult, FilesHash: result.CodeHash, SavedFilesHash: st.SavedFilesHash, RevisionHash: snap.RevisionHash, ContractHash: snap.ContractHash, Feedback: feedbackString(feedback), RunID: result.RunID, Terminal: st.Completed && se == nil, Complete: st.Completed, TestCount: 1, PassedCount: boolInt(ok)})
+			ve := s.store.RecordValidation(cleanup, questionbank.Validation{CandidateID: bankID, Kind: "selftest", Result: validationResult, FilesHash: result.CodeHash, SavedFilesHash: st.SavedFilesHash, RevisionHash: snap.RevisionHash, ContractHash: snap.ContractHash, Feedback: feedbackString(attemptFeedback), RunID: result.RunID, Terminal: st.Completed && se == nil, Complete: st.Completed, TestCount: 1, PassedCount: boolInt(ok)})
 			cancel()
 			if ve != nil {
 				result.Status = "verification_persistence_failed"
@@ -798,11 +876,22 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				result.Diagnostics = append(result.Diagnostics, se.Error())
 				// A failed host/network/save is not evidence of wrong code. Keep
 				// the candidate and avoid spending model calls on that failure.
-				state.Feedback = nil
+				state.Feedback = append([]answer.Feedback(nil), feedback...)
 				return result, se
 			}
-			if !ok {
+			if !ok && st.CompileOK != nil && !*st.CompileOK {
+				// Recompiling the identical invalid file for every sample adds no
+				// evidence; a compiling candidate runs all public samples below.
 				break
+			}
+		}
+		if !allPass {
+			state.rememberRejection(candidate, attemptFeedback)
+			rejectedByHash[result.CodeHash] = questionbank.Candidate{ID: bankID}
+			for _, entry := range attemptFeedback {
+				if entry.Kind != "selftest_passed" {
+					feedback = boundedFeedback(feedback, entry)
+				}
 			}
 		}
 		state.CandidateIDs = append(state.CandidateIDs, bankID)
@@ -914,7 +1003,10 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			_ = s.persist(ctx, result.RunID, state, result.Status, created)
 			return result, ee
 		}
-		feedback = []answer.Feedback{{Kind: "formal", Message: eval.Feedback}}
+		formalFeedback := []answer.Feedback{{Kind: "formal", Message: eval.Feedback}}
+		state.rememberRejection(candidate, formalFeedback)
+		rejectedByHash[result.CodeHash] = questionbank.Candidate{ID: bankID}
+		feedback = boundedFeedback(feedback, formalFeedback...)
 		previous = &candidate
 		state.Feedback = append([]answer.Feedback(nil), feedback...)
 		state.Result = *result
@@ -979,6 +1071,197 @@ func validateCandidate(s problem.Snapshot, c answer.Candidate) error {
 func feedbackString(f []answer.Feedback) string {
 	b, _ := json.Marshal(f)
 	return publicText(string(b))
+}
+
+const (
+	maxRepairHistory                   = 6
+	maxRepairSourceBytes               = 128 << 10
+	maxRepairFeedback                  = 16
+	maxRepairFeedbackTextBytes         = 8 << 10
+	maxRepairFeedbackBytes             = 64 << 10
+	maxRepairHistoryBytes              = 256 << 10
+	maxRepairHistoryEntryFeedbackBytes = 16 << 10
+	maxRepairResultEvidenceBytes       = 128 << 10
+)
+
+// boundedFeedback keeps distinct observed failures across repair rounds. The
+// most recent observations win when the bounded prompt window is full.
+func boundedFeedback(existing []answer.Feedback, added ...answer.Feedback) []answer.Feedback {
+	out := append([]answer.Feedback(nil), existing...)
+	for _, entry := range added {
+		entry.Kind = boundedRepairText(entry.Kind)
+		entry.Message = boundedRepairText(entry.Message)
+		entry.Stdin = boundedRepairText(entry.Stdin)
+		entry.ExpectedStdout = boundedRepairText(entry.ExpectedStdout)
+		entry.ActualStdout = boundedRepairText(entry.ActualStdout)
+		duplicate := false
+		for _, old := range out {
+			if old == entry {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			out = append(out, entry)
+		}
+	}
+	if len(out) > maxRepairFeedback {
+		// Do not let many later successful samples evict the only actual
+		// failing case. Retain recent failures first, then fill with passes,
+		// preserving the original sample order inside that selection.
+		selected := make(map[int]bool)
+		for i := len(out) - 1; i >= 0 && len(selected) < maxRepairFeedback; i-- {
+			if out[i].Kind != "selftest_passed" {
+				selected[i] = true
+			}
+		}
+		for i := len(out) - 1; i >= 0 && len(selected) < maxRepairFeedback; i-- {
+			selected[i] = true
+		}
+		bounded := make([]answer.Feedback, 0, maxRepairFeedback)
+		for i, entry := range out {
+			if selected[i] {
+				bounded = append(bounded, entry)
+			}
+		}
+		out = bounded
+	}
+	return feedbackWithinBytes(out, maxRepairFeedbackBytes)
+}
+
+// Feedback budgets are measured after JSON encoding: control characters,
+// quotes and HTML-significant characters can expand far beyond raw string
+// length. Prefer recent failed samples, then successful samples, while keeping
+// the source-independent sample order in the selected window.
+func feedbackWithinBytes(entries []answer.Feedback, limit int) []answer.Feedback {
+	encoded, _ := json.Marshal(entries)
+	if len(encoded) <= limit {
+		return entries
+	}
+	count := len(entries)
+	if count > 4 {
+		count = 4
+	}
+	if count == 0 {
+		return nil
+	}
+	perEntry := (limit-2)/count - 1
+	selected := make(map[int]answer.Feedback)
+	used := 2
+	for _, failures := range []bool{true, false} {
+		for i := len(entries) - 1; i >= 0; i-- {
+			if (entries[i].Kind != "selftest_passed") != failures {
+				continue
+			}
+			entry := fitFeedbackEntry(entries[i], perEntry)
+			raw, _ := json.Marshal(entry)
+			if used+len(raw)+1 > limit {
+				continue
+			}
+			selected[i] = entry
+			used += len(raw) + 1
+		}
+	}
+	out := make([]answer.Feedback, 0, len(selected))
+	for i := range entries {
+		if entry, ok := selected[i]; ok {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+func fitFeedbackEntry(entry answer.Feedback, limit int) answer.Feedback {
+	for {
+		raw, _ := json.Marshal(entry)
+		if len(raw) <= limit {
+			return entry
+		}
+		fields := []*string{&entry.Kind, &entry.Message, &entry.Stdin, &entry.ExpectedStdout, &entry.ActualStdout}
+		longest := fields[0]
+		for _, field := range fields[1:] {
+			if len(*field) > len(*longest) {
+				longest = field
+			}
+		}
+		if len(*longest) <= 64 {
+			return entry
+		}
+		*longest = truncatedRepairText(*longest, len(*longest)/2)
+	}
+}
+
+func boundedRepairText(s string) string {
+	s = publicText(s)
+	if len(s) <= maxRepairFeedbackTextBytes {
+		return s
+	}
+	return truncatedRepairText(s, maxRepairFeedbackTextBytes)
+}
+
+func truncatedRepairText(s string, end int) string {
+	for end > 0 && !utf8.RuneStart(s[end]) {
+		end--
+	}
+	return s[:end] + "\n[feedback truncated]"
+}
+
+func boundedRepairHistory(entries []answer.RepairAttempt) []answer.RepairAttempt {
+	if len(entries) > maxRepairHistory {
+		entries = entries[len(entries)-maxRepairHistory:]
+	}
+	out := append([]answer.RepairAttempt(nil), entries...)
+	remaining := maxRepairSourceBytes
+	for i := len(out) - 1; i >= 0; i-- {
+		out[i].Feedback = feedbackWithinBytes(boundedFeedback(nil, out[i].Feedback...), maxRepairHistoryEntryFeedbackBytes)
+		if c := out[i].Candidate; c != nil {
+			size := 0
+			for _, file := range c.Files {
+				size += len(file.Path) + len(file.Content)
+			}
+			if size > remaining {
+				out[i].Candidate = nil
+			} else {
+				remaining -= size
+			}
+		}
+	}
+	// Drop older full-source copies first. Hashes and their actual failure
+	// observations survive even when unusually escapable source needs much
+	// more space in JSON than its byte length suggests. Previous retains the
+	// latest complete candidate for generation and continuation.
+	for i := 0; i < len(out); i++ {
+		raw, _ := json.Marshal(out)
+		if len(raw) <= maxRepairHistoryBytes {
+			break
+		}
+		out[i].Candidate = nil
+	}
+	return out
+}
+
+func (state *runState) rememberRejection(c answer.Candidate, feedback []answer.Feedback) {
+	hash, err := problem.HashFiles(c.Files)
+	if err != nil {
+		return
+	}
+	known := false
+	for _, old := range state.RejectedFilesHashes {
+		known = known || old == hash
+	}
+	if !known {
+		state.RejectedFilesHashes = append(state.RejectedFilesHashes, hash)
+	}
+	for i := range state.RepairHistory {
+		if state.RepairHistory[i].FilesHash == hash {
+			state.RepairHistory[i].Feedback = boundedFeedback(state.RepairHistory[i].Feedback, feedback...)
+			state.RepairHistory = boundedRepairHistory(state.RepairHistory)
+			return
+		}
+	}
+	copyCandidate := c
+	copyCandidate.Files = append([]problem.SolutionFile(nil), c.Files...)
+	state.RepairHistory = boundedRepairHistory(append(state.RepairHistory, answer.RepairAttempt{FilesHash: hash, Candidate: &copyCandidate, Feedback: boundedFeedback(nil, feedback...)}))
 }
 func publicText(s string) string {
 	if problem.ValidatePublicText(s) != nil {

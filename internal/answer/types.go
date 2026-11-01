@@ -29,6 +29,15 @@ type Feedback struct {
 	ActualStdout   string `json:"actual_stdout,omitempty"`
 }
 
+// RepairAttempt binds observed feedback to the exact source that produced it.
+// Candidate may be omitted from older entries to bound prompt size; the most
+// recent complete candidate is also supplied through Request.Previous.
+type RepairAttempt struct {
+	FilesHash string     `json:"files_hash"`
+	Candidate *Candidate `json:"candidate,omitempty"`
+	Feedback  []Feedback `json:"feedback"`
+}
+
 type Profile struct {
 	Model           string `json:"model"`
 	Thinking        string `json:"thinking"`
@@ -49,10 +58,11 @@ func ProProfile() Profile {
 }
 
 type Request struct {
-	Problem  problem.Snapshot
-	Previous *Candidate
-	Feedback []Feedback
-	Profile  Profile
+	Problem       problem.Snapshot
+	Previous      *Candidate
+	Feedback      []Feedback
+	RepairHistory []RepairAttempt
+	Profile       Profile
 }
 
 type Usage struct {

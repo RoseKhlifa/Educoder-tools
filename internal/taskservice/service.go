@@ -23,11 +23,12 @@ type Provider interface {
 	answer.ObjectiveProvider
 }
 type Config struct {
-	ModelConcurrency int
-	Timeout          time.Duration
-	MaxModelCalls    int
-	MaxEvaluations   int
-	BudgetMicroUSD   int64
+	ModelConcurrency        int
+	Timeout                 time.Duration
+	MaxModelCalls           int
+	MaxEvaluations          int
+	ProgrammingRepairRounds int
+	BudgetMicroUSD          int64
 }
 type Request struct {
 	Owner, Course, Game, IdempotencyKey string
@@ -94,6 +95,9 @@ func New(store *questionbank.Store, provider Provider, cfg Config) *Service {
 	}
 	if cfg.MaxEvaluations <= 0 || cfg.MaxEvaluations > 10 {
 		cfg.MaxEvaluations = 10
+	}
+	if cfg.ProgrammingRepairRounds <= 0 || cfg.ProgrammingRepairRounds > 10 {
+		cfg.ProgrammingRepairRounds = 4
 	}
 	if cfg.BudgetMicroUSD <= 0 || cfg.BudgetMicroUSD > 50000 {
 		cfg.BudgetMicroUSD = 50000
@@ -229,7 +233,26 @@ func (s *Service) Run(ctx context.Context, client *educoder.Client, req Request,
 				return &Result{Status: "deadline_passed", Kind: "programming", Diagnostics: []string{"deadline_passed"}}, nil
 			}
 		}
-		r, e := s.programming.RunClient(ctx, client, solver.Request{Owner: req.Owner, Course: req.Course, HomeworkID: req.HomeworkID, Game: req.Game, Mode: req.Mode, IdempotencyKey: req.IdempotencyKey, BudgetMicroUSD: req.BudgetMicroUSD, OnProgress: func(st solver.Stage) { emit(st.Phase, "programming", st.Message) }})
+		adapter, adapterErr := solver.NewEducoderAdapter(client)
+		if adapterErr != nil {
+			return nil, adapterErr
+		}
+		solverReq := solver.Request{Owner: req.Owner, Course: req.Course, HomeworkID: req.HomeworkID, Game: req.Game, Mode: req.Mode, IdempotencyKey: req.IdempotencyKey, BudgetMicroUSD: req.BudgetMicroUSD, MaxModelCalls: s.cfg.MaxModelCalls, MaxEvaluations: s.cfg.MaxEvaluations, OnProgress: func(st solver.Stage) { emit(st.Phase, "programming", st.Message) }}
+		if solverReq.BudgetMicroUSD <= 0 {
+			solverReq.BudgetMicroUSD = s.cfg.BudgetMicroUSD
+		}
+		r, e := runProgrammingRecovery(ctx, s.programming, adapter, solverReq, s.cfg.ProgrammingRepairRounds, func() (bool, error) {
+			homeworks, readErr := client.Homeworks(ctx, req.Course, "")
+			if readErr != nil {
+				return false, readErr
+			}
+			for _, homework := range homeworks {
+				if homework.ID == req.HomeworkID {
+					return !homework.IsClosed(time.Now()), nil
+				}
+			}
+			return false, nil
+		})
 		if r == nil {
 			return optionalResult(nil, e)
 		}

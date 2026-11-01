@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { renderAdmin, renderAdminJobDetail } from './dist/admin.js';
+import { partitionAdminJobs, renderAdmin, renderAdminJobDetail } from './dist/admin.js';
 
 const job = (extra = {}) => ({
   id: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', owner_id: 'platform:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
@@ -18,8 +18,82 @@ const job = (extra = {}) => ({
   ...extra,
 
 });
-const state = jobs => ({ overview: {}, users: [], jobs, audit: [], cards: [], loading: false, error: false });
+
+const state = jobs => ({ overview: {}, users: [], jobs, audit: [], cards: [], loading: false, error: false, jobsKind: 'all' });
 const visible = html => html.replace(/<details\b[\s\S]*?<\/details>/g, '').replace(/<[^>]*>/g, ' ');
+
+await test('current operations keep live service targets clear and retain previous attempts in history', async t => {
+  const attempt = (id, day, extra = {}) => job({ id, created_at: `2026-01-${String(day).padStart(2, '0')}T00:00:00Z`, ...extra });
+  const ids = rows => rows.map(row => row.id);
+  await t.test('latest creation replaces a prior failed or successful attempt regardless of later log updates', () => {
+    const older = attempt('old-error', 1, { updated_at: '2026-02-01T00:00:00Z' });
+    const latest = attempt('new-complete', 2, { status: 'succeeded' });
+    const input = [older, latest], parts = partitionAdminJobs(input);
+    assert.deepEqual(ids(parts.current), ['new-complete']); assert.deepEqual(ids(parts.history), ['old-error']);
+    assert.deepEqual(ids(input), ['old-error', 'new-complete'], 'partition must not reorder shared application state');
+    const history = visible(renderAdmin('operations', { ...state(input), jobsView: 'history' }));
+    assert.match(history, /历史执行记录|当次未完成/); assert.doesNotMatch(history, /需要处理/);
+    assert.match(history, /零分值关卡待核验/, 'historical reason remains inspectable');
+    assert.match(renderAdmin('operations', { ...state(input), jobsView: 'history' }), /data-admin-job-detail="old-error"/);
+  });
+  await t.test('all queued and running attempts stay visible while terminal attempts for their target move to history', () => {
+    const rows = [attempt('older-failure', 1), attempt('running', 2, { status: 'running' }), attempt('queued', 3, { status: 'queued' }), attempt('terminal-after-running', 4)];
+    const parts = partitionAdminJobs(rows);
+    assert.deepEqual(ids(parts.current), ['queued', 'running']);
+    assert.deepEqual(ids(parts.history), ['terminal-after-running', 'older-failure']);
+  });
+  await t.test('owner, mode, scope, course, homework and game identities remain separate', () => {
+    const requests = [
+      { scope: 'all', mode: 'submit' },
+      { scope: 'course', course: 'COURSE_A', mode: 'submit' },
+      { scope: 'course', course: 'COURSE_B', mode: 'submit' },
+      { scope: 'homework', course: 'COURSE_A', homework_id: 1, mode: 'submit' },
+      { scope: 'homework', course: 'COURSE_A', homework_id: 2, mode: 'submit' },
+      { scope: 'current', course: 'COURSE_A', homework_id: 1, game: 'GAME_A', mode: 'submit' },
+      { scope: 'current', course: 'COURSE_A', homework_id: 1, game: 'GAME_B', mode: 'submit' },
+      { scope: 'current', course: 'COURSE_A', homework_id: 1, game: 'GAME_A', mode: 'selftest' },
+    ];
+    const rows = requests.map((request, index) => attempt(`target-${index}`, index + 1, { request }));
+    rows.push(attempt('other-owner', 15, { owner_id: 'platform:other', request: requests[0] }));
+    const parts = partitionAdminJobs(rows);
+    assert.equal(parts.current.length, 9); assert.equal(parts.history.length, 0);
+    const a = attempt('same-request-earlier-context', 1), b = attempt('same-request-later-context', 2);
+    b.context.course.identifier = 'HIGHLIGHT_OTHER_COURSE'; b.context.homework.id = 222;
+    assert.deepEqual(ids(partitionAdminJobs([a, b]).current), ['same-request-later-context'], 'displayed failed homework cannot change the submitted service target');
+  });
+  await t.test('unlinked ended accounts are historical, but live work and records with insufficient identity stay visible', () => {
+    const unlinked = { user: { name: '历史账号未关联', linked: false } };
+    const rows = [attempt('unlinked-ended', 1, { context: unlinked }), attempt('unlinked-live', 2, { context: unlinked, status: 'running' }), attempt('anonymous-a', 3, { owner_id: undefined, context: undefined }), attempt('anonymous-b', 4, { owner_id: undefined, context: undefined }), attempt('missing-target-a', 5, { request: { scope: 'homework', mode: 'submit' } }), attempt('missing-target-b', 6, { request: { scope: 'homework', mode: 'submit' } })];
+    const parts = partitionAdminJobs(rows);
+    assert.deepEqual(ids(parts.history), ['unlinked-ended']); assert.equal(parts.current.length, 5);
+  });
+  await t.test('latest unresolved service stays current and contributes exactly once to current follow-up metrics', () => {
+    const old = attempt('old-failure', 1), latest = attempt('latest-failure', 2);
+    latest.context.user.name = '仍需处理同学';
+    const overview = renderAdmin('overview', { ...state([old, latest]), overview: { support_jobs: 999 } });
+    assert.match(overview, /当前需跟进<\/span><strong>1/); assert.match(visible(overview), /仍需处理同学/);
+    assert.doesNotMatch(overview, /data-admin-job-detail="old-failure"|999/);
+  });
+  await t.test('default current service view separates read-only collection and exposes clear reversible filters', () => {
+    const service = attempt('current-service', 2);
+    const old = attempt('historical-service', 1);
+    const collection = attempt('current-collection', 3, { request: { mode: 'collect_verified' }, context: { user: { name: '示例采集账户' } }, result: { collected: 3, duplicates: 6, skipped: 2, failed: 0 } });
+    const input = { ...state([old, collection, service]), jobsKind: undefined };
+    const html = renderAdmin('operations', input), shown = visible(html);
+    assert.match(html, /data-admin-jobs-view="current" aria-pressed="true"/); assert.match(html, /data-admin-jobs-view="history"/);
+    assert.match(html, /data-admin-jobs-kind="collection"/); assert.match(html, /data-admin-job-detail="current-service"/);
+    assert.doesNotMatch(html, /data-admin-job-detail="historical-service"|data-admin-job-detail="current-collection"/);
+    assert.match(shown, /当前任务|历史记录|答题服务|题库采集|基于最近 3 条记录/);
+    const collectionHtml = renderAdmin('operations', { ...input, jobsKind: 'collection' });
+    assert.match(collectionHtml, /data-admin-job-detail="current-collection"/); assert.doesNotMatch(collectionHtml, /data-admin-job-detail="current-service"/);
+    assert.match(visible(collectionHtml), /新增 3 条答案 · 已有 6 条 · 跳过 2 项/);
+    assert.match(renderAdmin('operations', { ...input, jobsView: 'history' }), /data-admin-job-detail="historical-service"/);
+  });
+  await t.test('a capped source is explicitly recent history rather than a claim to list all platform tasks', () => {
+    const rows = Array.from({ length: 100 }, (_, index) => attempt(`record-${index}`, 1, { owner_id: `platform:sample-${index}` }));
+    assert.match(visible(renderAdmin('operations', state(rows))), /基于最近 100 条记录（服务端上限 100 条）/);
+  });
+});
 
 await test('administrator sees people and work instead of storage identifiers', async t => {
   await t.test('course table resolves user, course, assignment, stopped level and units from backend context', () => {
@@ -64,9 +138,9 @@ await test('administrator sees people and work instead of storage identifiers', 
     assert.doesNotMatch(shown, /platform:|bbbbbbbbbbbb|SAMPLE_COURSE|测试同学甲|示例作业/);
   });
   await t.test('course-wide completion and queued batches are not presented as missing a single homework name', () => {
-    const completed = job({ status: 'succeeded', context: undefined, result: { status: 'passed', total_homeworks: 3, completed_homeworks: 3 } });
-    const all = job({ status: 'succeeded', request: { scope: 'all', mode: 'submit' }, context: undefined, result: { status: 'passed' } });
-    const queued = job({ status: 'queued', context: undefined, result: {} });
+    const completed = job({ id: 'done', status: 'succeeded', request: { scope: 'course', course: 'COURSE_DONE', mode: 'submit' }, context: undefined, result: { status: 'passed', total_homeworks: 3, completed_homeworks: 3 } });
+    const all = job({ id: 'all', status: 'succeeded', request: { scope: 'all', mode: 'submit' }, context: undefined, result: { status: 'passed' } });
+    const queued = job({ id: 'queued', status: 'queued', context: undefined, result: {} });
     const html = visible(renderAdmin('operations', state([completed, all, queued])));
     assert.match(html, /课程全部必做作业/); assert.match(html, /所有课程必做作业/); assert.match(html, /等待同步作业/);
     assert.doesNotMatch(html, /作业名称待补充|作业名称未留存/);
@@ -99,7 +173,7 @@ await test('administrator sees people and work instead of storage identifiers', 
     const list = visible(renderAdmin('operations', state([value]))), detail = visible(renderAdminJobDetail(value));
     assert.match(list, /达到采集上限/); assert.match(list, /约 3 分钟/); assert.match(list, /尚未扫描完全部内容/); assert.doesNotMatch(list, /需要处理|采集完成/);
     const overview = renderAdmin('overview', state([value]));
-    assert.doesNotMatch(overview, /data-admin-job-detail=/); assert.match(overview, /近期需跟进<\/span><strong>0/);
+    assert.doesNotMatch(overview, /data-admin-job-detail=/); assert.match(overview, /当前需跟进<\/span><strong>0/);
     for (const expected of ['新增入库答案', '题库已有答案', '12 条', '跳过', '4 项', '其中证据未确认', '3 项', '子集', '1 份作业', '2 个关卡', '不是图片张数', '1 次终止事件', '不计入跳过数量', '已有答案仍可复用']) assert.ok(detail.includes(expected), expected);
     assert.doesNotMatch(detail, /no_confirmed_full_score|programming_submitted_source_unproven|objective_media_content_unproven|request_byte_or_time_limit/);
     assert.match(renderAdminJobDetail(value), /programming_submitted_source_unproven/);
@@ -109,10 +183,10 @@ await test('administrator sees people and work instead of storage identifiers', 
   });
   await t.test('collection failures and unexpected exceptions remain attention items even when a limit was reached', () => {
     const value = job({ request: { mode: 'collect_verified' }, context: { user: { name: '示例采集用户' } }, result: { collected: 2, failed: 1, limit_reached: true, reasons: { progress_read_failed: 1, request_byte_or_time_limit: 1 } } });
-    assert.match(visible(renderAdmin('overview', state([value]))), /示例采集用户/); assert.match(visible(renderAdmin('operations', state([value]))), /需要处理/);
+    assert.match(visible(renderAdmin('overview', state([value]))), /1 项只读采集需核对/); assert.match(visible(renderAdmin('operations', state([value]))), /需要处理/);
     assert.match(visible(renderAdminJobDetail(value)), /作业分数读取失败/);
     value.result.failed = 0; value.error_code = 'DATABASE_WRITE_PANIC';
-    assert.match(visible(renderAdmin('overview', state([value]))), /示例采集用户/);
+    assert.match(visible(renderAdmin('overview', state([value]))), /1 项只读采集需核对/);
     assert.doesNotMatch(visible(renderAdmin('operations', state([value]))), /达到采集上限/);
   });
   await t.test('new collection stop metadata distinguishes scan caps, read budget and collection busy', () => {
@@ -132,16 +206,16 @@ await test('administrator sees people and work instead of storage identifiers', 
       const list = visible(renderAdmin('operations', state([value]))), detail = visible(renderAdminJobDetail(value));
       assert.match(list, /需要处理/); assert.doesNotMatch(list, /达到采集上限|采集完成/);
       assert.match(detail, /需要核对停止原因/);
-      assert.match(visible(renderAdmin('overview', state([value]))), /示例采集用户/);
+      assert.match(visible(renderAdmin('overview', state([value]))), /1 项只读采集需核对/);
     }
     value.result.stop_reason = 'future_unknown_stop';
-    assert.match(visible(renderAdmin('overview', state([value]))), /需要处理/);
+    assert.match(visible(renderAdmin('overview', state([value]))), /1 项只读采集需核对/);
   });
   await t.test('explicit incomplete collection is never displayed as a completed scan', () => {
     const value = job({ status: 'succeeded', request: { mode: 'collect_verified' }, context: { user: { name: '示例采集用户' } }, message: '扫描任务结束', result: { collected: 0, duplicates: 3, skipped: 0, failed: 0, limit_reached: false, scan_complete: false, reasons: {} } });
     const shown = visible(renderAdminJobDetail(value));
     assert.match(shown, /需要处理/); assert.match(shown, /本次扫描尚未完成/); assert.doesNotMatch(shown, /采集完成|已完成本次只读采集/);
-    assert.match(visible(renderAdmin('overview', state([value]))), /示例采集用户/);
+    assert.match(visible(renderAdmin('overview', state([value]))), /1 项只读采集需核对/);
     value.result.scan_complete = true;
     assert.match(visible(renderAdminJobDetail(value)), /采集完成（无新增）/);
   });

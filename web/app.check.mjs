@@ -85,6 +85,26 @@ await test('consumer course service and administrator boundary',async t=>{
   await t.test('a denied administrator request does not log out the user or reveal payload',async()=>{
     const page=await app({'/api/auth/me':()=>ok({user,platform:{role:'admin'}}),'/api/admin/overview':()=>failure(403,'FORBIDDEN','private-permission-trace')});page.get('[data-nav="admin-overview"]').dispatch('click');await settle();assert.match(page.html(),/当前账号未获管理授权/);assert.doesNotMatch(page.html(),/private-permission-trace|id="login-form"/);
   });
+  await t.test('administrator current/history and collection filters remain read-only and survive refresh', async () => {
+    const base = { owner_id: 'platform:sample-owner', request: { scope: 'course', course: 'COURSE_A', mode: 'submit' }, context: { user: { id: 'sample-owner', name: '服务同学', linked: true }, course: { identifier: 'COURSE_A', name: '示例课程' }, homework: { id: 101, name: '示例作业' } } };
+    const old = job({ ...base, id: 'old-error', status: 'failed', created_at: '2026-01-01T00:00:00Z', error_code: 'selftest_failed' });
+    const current = job({ ...base, id: 'current-error', status: 'failed', created_at: '2026-01-02T00:00:00Z', error_code: 'model_rate_limited' });
+    const collection = job({ ...base, id: 'collection-current', status: 'failed', request: { mode: 'collect_verified' }, result: { collected: 2, duplicates: 3, skipped: 1, failed: 1, reasons: { progress_read_failed: 1 } } });
+    const page = await app({ '/api/auth/me': () => ok({ user, platform: { role: 'admin' } }), '/api/admin/jobs': () => ok({ items: [old, collection, current] }) });
+    page.get('[data-nav="admin-overview"]').dispatch('click'); await settle();
+    assert.match(page.html(), /data-admin-job-detail="current-error"/); assert.doesNotMatch(page.html(), /data-admin-job-detail="old-error"|data-admin-job-detail="collection-current"/);
+    assert.match(page.html(), /1 项只读采集需核对/);
+    page.get('[data-admin-show-jobs="service"]').dispatch('click'); await settle();
+    const before = page.requests.length;
+    page.get('[data-admin-jobs-view="history"]').dispatch('click');
+    assert.match(page.html(), /data-admin-job-detail="old-error"/); assert.doesNotMatch(page.html(), /data-admin-job-detail="current-error"/); assert.match(page.html(), /当次未完成/);
+    page.get('[data-admin-jobs-kind="collection"]').dispatch('click'); assert.doesNotMatch(page.html(), /data-admin-job-detail=/);
+    page.get('[data-admin-jobs-view="current"]').dispatch('click'); assert.match(page.html(), /data-admin-job-detail="collection-current"/); assert.match(page.html(), /新增 2 条答案/);
+    assert.equal(page.requests.length, before, 'local filters must not enqueue or cancel tasks or reload all API data');
+    page.get('[data-action="admin-refresh"]').dispatch('click'); await settle();
+    assert.match(page.html(), /data-admin-jobs-kind="collection" aria-pressed="true"/); assert.match(page.html(), /data-admin-jobs-view="current" aria-pressed="true"/);
+    assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
+  });
   await t.test('logout invalidates a delayed private course response',async()=>{
     const late=deferred();const page=await app({'/api/courses':()=>late.promise});page.get('[data-action="logout"]').dispatch('click');late.resolve(ok(courses));await settle();assert.match(page.html(),/id="login-form"/);assert.doesNotMatch(page.html(),/课堂甲|课堂乙/);
   });

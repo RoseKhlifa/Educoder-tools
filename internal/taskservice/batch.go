@@ -258,6 +258,9 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 			out.CostMicroUSD += single.CostMicroUSD
 			out.ReservedMicroUSD += single.ReservedMicroUSD
 			out.Levels[i].Kind = single.Kind
+			if single.Kind == "programming" {
+				out.Levels[i].MaxModelCalls = s.cfg.MaxModelCalls * s.cfg.ProgrammingRepairRounds
+			}
 			out.Levels[i].ModelCalls = single.ModelCalls
 			out.Levels[i].Score = single.Score
 			out.Levels[i].MaxScore = single.MaxScore

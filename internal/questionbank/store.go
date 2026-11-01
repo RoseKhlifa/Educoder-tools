@@ -311,7 +311,7 @@ func (s *Store) candidate(ctx context.Context, id int64) (Candidate, error) {
 			c.Status = "rejected"
 		} else if v.Result == "passed" && v.Kind == "formal" {
 			c.Status = "upstream_verified"
-		} else if v.Result == "passed" && v.Kind == "selftest" && c.Status != "upstream_verified" {
+		} else if v.Result == "passed" && v.Kind == "selftest" && c.Status != "upstream_verified" && c.Status != "rejected" {
 			c.Status = "selftest_passed"
 		}
 	}
