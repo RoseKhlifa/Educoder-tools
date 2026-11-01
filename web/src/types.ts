@@ -43,6 +43,9 @@ export interface Homework {
   status: string;
   challengeCount?: number;
   finishedChallengeCount?: number;
+  requiredChallengeCount?: number;
+  finishedRequiredChallengeCount?: number;
+  requiredProgressKnown?: boolean;
   deadline?: string;
   canEnter?: boolean;
 }

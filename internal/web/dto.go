@@ -60,6 +60,9 @@ type homeworkDTO struct {
 	Category         string   `json:"category,omitempty"`
 	ChallengeCount   int      `json:"challengeCount,omitempty"`
 	FinishedCount    int      `json:"finishedChallengeCount,omitempty"`
+	RequiredCount    *int     `json:"requiredChallengeCount,omitempty"`
+	FinishedRequired *int     `json:"finishedRequiredChallengeCount,omitempty"`
+	RequiredKnown    bool     `json:"requiredProgressKnown"`
 	Deadline         string   `json:"deadline,omitempty"`
 }
 

@@ -185,6 +185,13 @@ func (s *Service) Run(ctx context.Context, client *educoder.Client, req Request,
 		task, err = client.LoadTask(ctx, req.Course, req.HomeworkID, req.Game)
 	}
 	if err != nil {
+		return optionalResult(nil, err)
+	}
+	if task.IsOptional() {
+		return &Result{Status: "skipped_optional", Kind: "service"}, nil
+	}
+	client, err = client.WithRequiredTasks()
+	if err != nil {
 		return nil, err
 	}
 	req.Game = task.Game.Identifier
@@ -224,11 +231,12 @@ func (s *Service) Run(ctx context.Context, client *educoder.Client, req Request,
 		}
 		r, e := s.programming.RunClient(ctx, client, solver.Request{Owner: req.Owner, Course: req.Course, HomeworkID: req.HomeworkID, Game: req.Game, Mode: req.Mode, IdempotencyKey: req.IdempotencyKey, BudgetMicroUSD: req.BudgetMicroUSD, OnProgress: func(st solver.Stage) { emit(st.Phase, "programming", st.Message) }})
 		if r == nil {
-			return nil, e
+			return optionalResult(nil, e)
 		}
-		return &Result{Status: r.Status, Kind: "programming", RunID: r.RunID, CandidateID: r.CandidateID, Source: r.Source, ModelCalls: r.ModelCalls, CostMicroUSD: r.CostMicroUSD, ReservedMicroUSD: r.ReservedMicroUSD, Programming: publicProgramming(r), Diagnostics: r.Diagnostics}, e
+		return optionalResult(&Result{Status: r.Status, Kind: "programming", RunID: r.RunID, CandidateID: r.CandidateID, Source: r.Source, ModelCalls: r.ModelCalls, CostMicroUSD: r.CostMicroUSD, ReservedMicroUSD: r.ReservedMicroUSD, Programming: publicProgramming(r), Diagnostics: r.Diagnostics}, e)
 	case educoder.TaskKindChoice:
-		return s.runObjective(ctx, client, req, func(phase, message string) { emit(phase, "objective", message) }, req.BudgetMicroUSD)
+		r, e := s.runObjective(ctx, client, req, func(phase, message string) { emit(phase, "objective", message) }, req.BudgetMicroUSD)
+		return optionalResult(r, e)
 	default:
 		return nil, errors.New("unsupported task kind")
 	}
@@ -315,6 +323,10 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 		return r, err
 	}
 	defer func() {
+		if errors.Is(err, educoder.ErrOptionalTask) {
+			r.Status = "skipped_optional"
+			r.Diagnostics = nil
+		}
 		if ctx.Err() != nil && r.Status != "uncertain" && r.Status != "passed" {
 			r.Status = "canceled"
 		}
@@ -444,6 +456,22 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 		if req.Mode == solver.ModeGenerateOnly {
 			r.Status = "generated"
 			return r, nil
+		}
+		// Generation can take minutes. Refresh requirement metadata before the
+		// first mutating request so an assignment changed to elective does not
+		// receive an answer prepared while it was required. The client's bound
+		// roster guard also verifies homework, game and challenge identity.
+		freshTask, freshErr := client.LoadTask(ctx, req.Course, req.HomeworkID, req.Game)
+		if freshErr != nil {
+			r.Status = "verification_unconfirmed"
+			return r, freshErr
+		}
+		if freshTask.IsOptional() {
+			return r, educoder.ErrOptionalTask
+		}
+		if freshTask.Challenge.ID != choice.Task.Challenge.ID || freshTask.Kind() != educoder.TaskKindChoice {
+			r.Status = "verification_unconfirmed"
+			return r, errors.New("objective task identity or question kind changed before submission")
 		}
 		r.Status = "submitting"
 		if e = s.persistObjective(ctx, req, r, created); e != nil {

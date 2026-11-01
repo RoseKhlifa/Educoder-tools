@@ -99,6 +99,15 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 	}
 	roster, err := client.HomeworkRoster(ctx, req.Course, *hw)
 	if errors.Is(err, educoder.ErrHomeworkRuntimeMissing) {
+		// A purely elective assignment does not require a runtime at all.
+		// Read its canonical requirement flags before Enter creates one.
+		progress, progressErr := client.HomeworkProgress(ctx, req.Course, req.HomeworkID)
+		if progressErr != nil {
+			return nil, progressErr
+		}
+		if count, valid := requiredHomeworkCount(*hw, progress); valid && count == 0 {
+			return &BatchResult{Kind: "homework", Scope: "homework", Status: "passed", ReasonCode: "no_required_levels", Levels: []BatchLevel{}}, nil
+		}
 		// Enter is allowed only after the selected homework has been positively
 		// resolved from Homeworks; it creates the runtime needed by read APIs.
 		t, enterErr := client.Enter(ctx, req.Course, req.HomeworkID, hw.ShixunIdentifier)
@@ -119,26 +128,39 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 		return out, errors.New("homework roster is empty or exceeds 100 levels")
 	}
 	sort.Slice(roster.Levels, func(i, j int) bool { return roster.Levels[i].Position < roster.Levels[j].Position })
-	out.TotalLevels = len(roster.Levels)
-	out.Levels = make([]BatchLevel, 0, len(roster.Levels))
-	for _, l := range roster.Levels {
-		out.Levels = append(out.Levels, BatchLevel{Position: l.Position, ChallengeID: l.ChallengeID, Title: l.Title, Status: "planned", MaxModelCalls: s.cfg.MaxModelCalls})
-	}
+	levels := make([]educoder.HomeworkLevel, 0, len(roster.Levels))
+	out.Levels = []BatchLevel{}
 	// Load and validate every planned task before the first solver call. This
 	// is deliberately separate from the per-level guard: a stale or partial
 	// roster must fail atomically before any save/submit mutation can happen.
 	for _, l := range roster.Levels {
+		if l.Optional {
+			continue
+		}
 		t, e := client.CollectionLoadTask(ctx, req.Course, req.HomeworkID, l.Game)
 		if e != nil {
+			if errors.Is(e, educoder.ErrOptionalTask) {
+				continue
+			}
 			out.Status = "unsupported_roster"
 			out.Diagnostics = append(out.Diagnostics, e.Error())
 			return out, e
 		}
 		if e = roster.ValidateTask(t, l); e != nil {
+			if errors.Is(e, educoder.ErrOptionalTask) {
+				continue
+			}
 			out.Status = "unsupported_roster"
 			out.Diagnostics = append(out.Diagnostics, e.Error())
 			return out, e
 		}
+		levels = append(levels, l)
+		out.Levels = append(out.Levels, BatchLevel{Position: l.Position, ChallengeID: l.ChallengeID, Title: l.Title, Status: "planned", MaxModelCalls: s.cfg.MaxModelCalls})
+	}
+	out.TotalLevels = len(out.Levels)
+	if out.TotalLevels == 0 {
+		out.Status, out.ReasonCode = "passed", "no_required_levels"
+		return out, nil
 	}
 	// Re-read progress for preflight and use only exact challenge IDs. This is
 	// also the baseline for skip decisions and catches stale roster changes.
@@ -152,7 +174,12 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 			full[p.ChallengeID] = p
 		}
 	}
-	for i, l := range roster.Levels {
+	for _, l := range levels {
+		i := batchLevelIndex(out, l.ChallengeID)
+		if progressOptional(progress, l.ChallengeID) {
+			omitBatchLevel(out, i)
+			continue
+		}
 		if p, ok := full[l.ChallengeID]; ok {
 			out.Levels[i].Status = "skipped"
 			out.Levels[i].Kind = "verified"
@@ -163,7 +190,11 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 		}
 	}
 	emit(BatchProgress{TotalLevels: out.TotalLevels, CompletedLevels: out.CompletedLevels, SkippedLevels: out.SkippedLevels}, "preflight", "已确认作业关卡身份和初始满分状态")
-	for i, l := range roster.Levels {
+	for _, l := range levels {
+		i := batchLevelIndex(out, l.ChallengeID)
+		if i < 0 {
+			continue
+		}
 		if out.Levels[i].Status == "skipped" {
 			continue
 		}
@@ -189,6 +220,10 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 			out.Diagnostics = append(out.Diagnostics, e.Error())
 			return out, e
 		}
+		if progressOptional(fresh, l.ChallengeID) {
+			omitBatchLevel(out, i)
+			continue
+		}
 		if p, ok := findFull(fresh, l.ChallengeID); ok {
 			out.Levels[i].Status = "skipped"
 			out.Levels[i].Kind = "verified"
@@ -203,6 +238,10 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 		emit(BatchProgress{TotalLevels: out.TotalLevels, CompletedLevels: out.CompletedLevels, SkippedLevels: out.SkippedLevels, FailedLevels: out.FailedLevels, CurrentPosition: l.Position, CurrentTitle: l.Title}, "running", fmt.Sprintf("正在完成第 %d 关：%s", l.Position, l.Title))
 		bound, e := client.BindHomeworkLevel(roster, l)
 		if e != nil {
+			if errors.Is(e, educoder.ErrOptionalTask) {
+				omitBatchLevel(out, i)
+				continue
+			}
 			return out, e
 		}
 		remaining := budget - out.CostMicroUSD - out.ReservedMicroUSD
@@ -222,6 +261,10 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 			out.Levels[i].ModelCalls = single.ModelCalls
 			out.Levels[i].Score = single.Score
 			out.Levels[i].MaxScore = single.MaxScore
+		}
+		if errors.Is(runErr, educoder.ErrOptionalTask) || (single != nil && single.Status == "skipped_optional") {
+			omitBatchLevel(out, i)
+			continue
 		}
 		// A returned child result is authoritative. In particular a completed
 		// self-test failure or exhausted repair budget is not an unknown submit.
@@ -264,6 +307,10 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 			out.Diagnostics = append(out.Diagnostics, e.Error())
 			return out, e
 		}
+		if progressOptional(verify, l.ChallengeID) {
+			omitBatchLevel(out, i)
+			continue
+		}
 		p, ok := findFull(verify, l.ChallengeID)
 		if !ok {
 			out.FailedLevels++
@@ -287,7 +334,15 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 		out.Diagnostics = append(out.Diagnostics, finalErr.Error())
 		return out, finalErr
 	}
-	for i, l := range roster.Levels {
+	for _, l := range levels {
+		i := batchLevelIndex(out, l.ChallengeID)
+		if i < 0 {
+			continue
+		}
+		if progressOptional(finalProgress, l.ChallengeID) {
+			omitBatchLevel(out, i)
+			continue
+		}
 		p, ok := findFull(finalProgress, l.ChallengeID)
 		if !ok {
 			out.Status = "verification_unconfirmed"
@@ -302,6 +357,9 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 	out.CurrentTitle = ""
 	if out.CompletedLevels == out.TotalLevels && out.FailedLevels == 0 {
 		out.Status = "passed"
+		if out.TotalLevels == 0 {
+			out.ReasonCode = "no_required_levels"
+		}
 	} else {
 		out.Status = "verification_unconfirmed"
 	}

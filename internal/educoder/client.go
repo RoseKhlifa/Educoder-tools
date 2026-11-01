@@ -255,6 +255,9 @@ func (c *Client) requestWithStatuses(ctx context.Context, method, path string, q
 		if errors.Is(err, ErrCollectionReadOnly) {
 			return ErrCollectionReadOnly
 		}
+		if errors.Is(err, ErrOptionalTask) {
+			return ErrOptionalTask
+		}
 		return fmt.Errorf("%s %s: request failed", method, path)
 	}
 	defer resp.Body.Close()

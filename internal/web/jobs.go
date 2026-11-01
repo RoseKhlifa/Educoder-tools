@@ -225,6 +225,10 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 		if result != nil {
 			out.Result, _ = json.Marshal(result)
 			switch result.Status {
+			case "skipped_optional":
+				out.Status = jobs.Succeeded
+				out.ErrorCode = ""
+				out.Message = "选做关卡已跳过，无需处理"
 			case "passed", "generated", "selftest_passed", "selftest_skipped":
 				out.Status = jobs.Succeeded
 				out.ErrorCode = ""
@@ -272,8 +276,11 @@ func homeworkOutcome(batch *taskservice.BatchResult, err error) (jobs.Outcome, e
 	out := jobs.Outcome{Status: jobs.Failed, Result: raw, ErrorCode: "HOMEWORK_BATCH_FAILED", Message: "整份作业尚未完成，请查看停止关卡和原因"}
 	switch batch.Status {
 	case "passed":
-		if err == nil && batch.TotalLevels > 0 && batch.CompletedLevels == batch.TotalLevels && batch.FailedLevels == 0 {
+		if err == nil && (batch.TotalLevels > 0 || batch.ReasonCode == "no_required_levels") && batch.CompletedLevels == batch.TotalLevels && batch.FailedLevels == 0 {
 			out.Status, out.ErrorCode, out.Message = jobs.Succeeded, "", "全部关卡已核验满分"
+			if batch.ReasonCode == "no_required_levels" {
+				out.Message = "没有需要处理的必做关卡"
+			}
 		}
 	case "uncertain", "verification_unconfirmed":
 		out.Status, out.ErrorCode, out.Message = jobs.Uncertain, "RESULT_UNCONFIRMED", "当前关卡的评测结果待复核，已保留已完成关卡"

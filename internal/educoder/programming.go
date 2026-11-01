@@ -562,6 +562,7 @@ func (c *Client) SubmitCode(ctx context.Context, t *Task, filePath, content stri
 type ChallengeProgress struct {
 	ChallengeID    int64  `json:"challenge_id"`
 	Name           string `json:"challenge_name"`
+	RequiredStatus string `json:"status"`
 	ST             *int   `json:"challenge_st"`
 	PassedStatus   int    `json:"passed_status"`
 	EvaluateCount  int    `json:"evaluate_count"`

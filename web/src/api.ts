@@ -113,6 +113,9 @@ function normalizeHomework(value: unknown): Homework {
     status,
     challengeCount: number(item.challengeCount || item.challenge_count),
     finishedChallengeCount: number(item.finishedChallengeCount || item.finished_challenge_count),
+    requiredChallengeCount: number(item.requiredChallengeCount),
+    finishedRequiredChallengeCount: number(item.finishedRequiredChallengeCount),
+    requiredProgressKnown: item.requiredProgressKnown === true,
     deadline: text(item.deadline || item.end_time) || undefined,
     canEnter: item.canEnter === undefined && item.is_enter_shixun === undefined
       ? undefined

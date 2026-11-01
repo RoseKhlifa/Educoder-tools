@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.37 - 2026-11-01
+
+- Exclude optional levels from execution and required-work progress
+
 ## 0.1.36 - 2026-10-31
 
 - Exclude expired homework from active service lists and execution

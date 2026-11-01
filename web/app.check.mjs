@@ -42,7 +42,7 @@ async function app(overrides={}) {
     if(url==='/api/auth/logout')return ok({loggedOut:true});
     if(url==='/api/courses')return ok(courses);
     if(url==='/api/jobs')return options.method==='POST'?ok(job({request:JSON.parse(options.body)})):ok({jobs:[]});
-    if(url.endsWith('/homeworks'))return ok([{id:1,name:'测试作业',challengeCount:2,finishedChallengeCount:1}]);
+    if(url.endsWith('/homeworks'))return ok([{id:1,name:'测试作业',challengeCount:2,finishedChallengeCount:1,requiredProgressKnown:true,requiredChallengeCount:2,finishedRequiredChallengeCount:1}]);
     if(url.startsWith('/api/admin/'))return ok(url==='/api/admin/overview'?{total_users:3,running_jobs:1,capacity:{model_concurrency:8}}:{items:[]});
     throw new Error(`Unexpected URL ${url}`);
   };
@@ -89,7 +89,17 @@ await test('consumer course service and administrator boundary',async t=>{
     const late=deferred();const page=await app({'/api/courses':()=>late.promise});page.get('[data-action="logout"]').dispatch('click');late.resolve(ok(courses));await settle();assert.match(page.html(),/id="login-form"/);assert.doesNotMatch(page.html(),/课堂甲|课堂乙/);
   });
   await t.test('read-only course detail does not enter or submit an upstream task',async()=>{
-    const page=await app();page.get('[data-course-detail="COURSE_A"]').dispatch('click');await settle();assert.match(page.html(),/测试作业/);assert.match(page.html(),/1 \/ 2 关/);assert.equal(page.requests.some(item=>item.url.endsWith('/enter')||item.options.method==='POST'),false);page.get('[data-action="close-modal"]').dispatch('click');assert.doesNotMatch(page.html(),/role="dialog"/);
+    const page=await app();page.get('[data-course-detail="COURSE_A"]').dispatch('click');await settle();assert.match(page.html(),/测试作业/);assert.match(page.html(),/1 \/ 2 必做关卡/);assert.equal(page.requests.some(item=>item.url.endsWith('/enter')||item.options.method==='POST'),false);page.get('[data-action="close-modal"]').dispatch('click');assert.doesNotMatch(page.html(),/role="dialog"/);
+  });
+  await t.test('course detail counts only required levels and never presents optional levels as unfinished', async () => {
+    const page = await app({'/api/courses/COURSE_A/homeworks': () => ok([{id:1,name:'必做已全部完成',challengeCount:10,finishedChallengeCount:5,requiredProgressKnown:true,requiredChallengeCount:5,finishedRequiredChallengeCount:5}])});
+    page.get('[data-course-detail="COURSE_A"]').dispatch('click'); await settle();
+    assert.match(page.html(),/已完成 · 5 \/ 5 必做关卡/); assert.doesNotMatch(page.html(),/5 \/ 10|待完成/); assert.match(page.html(),/只安排必做关卡/);
+  });
+  await t.test('missing required progress does not reuse upstream totals as a completion oracle', async () => {
+    const page = await app({'/api/courses/COURSE_A/homeworks': () => ok([{id:1,name:'进度待核验',challengeCount:10,finishedChallengeCount:5,requiredProgressKnown:false}])});
+    page.get('[data-course-detail="COURSE_A"]').dispatch('click'); await settle();
+    assert.match(page.html(),/安排时核验必做进度/); assert.doesNotMatch(page.html(),/5 \/ 10|待完成/);
   });
   await t.test('administrator details retain nested assignment and level failure reasons while consumer details omit them', async () => {
     const details = { status: 'needs_service', reason_code: 'SERVICE_REQUIRED', homeworks: [{ title: '二叉树作业', status: 'needs_service', reason_code: 'attempts_exhausted', result: { diagnostics: ['operator-only diagnostic'], levels: [{ title: '第 4 关', status: 'failed', reason_code: 'model_output_truncated' }] } }] };

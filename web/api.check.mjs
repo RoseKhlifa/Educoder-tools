@@ -48,6 +48,12 @@ await test('browser API uses the Go workbench contract', async t => {
     globalThis.fetch = async () => new Response(JSON.stringify({ data: null, error: { code: 'AUTH_REQUIRED', message: '请先登录' } }), { status: 401 });
     await assert.rejects(new BrowserApi().courses(), error => error.isSessionExpired);
   });
+  await t.test('required-level progress keeps explicit zeroes and does not fall back to raw totals', async () => {
+    globalThis.fetch = async () => envelope([{id:1,name:'必做未完成',challengeCount:10,finishedChallengeCount:5,requiredProgressKnown:true,requiredChallengeCount:5,finishedRequiredChallengeCount:0},{id:2,name:'读取未完成',challengeCount:10,finishedChallengeCount:5,requiredProgressKnown:false}]);
+    const [known, unknown] = await new BrowserApi().homeworks('COURSE_A');
+    assert.equal(known.requiredProgressKnown,true); assert.equal(known.requiredChallengeCount,5); assert.equal(known.finishedRequiredChallengeCount,0);
+    assert.equal(unknown.requiredProgressKnown,false); assert.equal(unknown.requiredChallengeCount,undefined); assert.equal(unknown.finishedRequiredChallengeCount,undefined);
+  });
   await t.test('HTML responses fail visibly instead of becoming an empty successful result', async () => {
     globalThis.fetch = async () => new Response('<html>proxy error</html>');
     await assert.rejects(new BrowserApi().courses(), error => error.code === 'INVALID_RESPONSE');

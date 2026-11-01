@@ -23,6 +23,7 @@ type HomeworkLevel struct {
 	Game, Title string
 	Position    int
 	ST          *int
+	Optional    bool
 }
 
 type HomeworkRoster struct {
@@ -31,6 +32,21 @@ type HomeworkRoster struct {
 	Shixun, MyShixun string
 	MyShixunID       int64
 	Levels           []HomeworkLevel
+}
+
+// RequiredLevels is the execution roster. Optional levels remain in Levels
+// for identity checks and historical views, but never enter a solver plan.
+func (r *HomeworkRoster) RequiredLevels() []HomeworkLevel {
+	if r == nil {
+		return nil
+	}
+	levels := make([]HomeworkLevel, 0, len(r.Levels))
+	for _, level := range r.Levels {
+		if !level.Optional {
+			levels = append(levels, level)
+		}
+	}
+	return levels
 }
 
 // HomeworkRoster joins three observed read endpoints. The homework progress
@@ -121,17 +137,42 @@ func (c *Client) HomeworkRoster(ctx context.Context, course string, hw Homework)
 			return nil, errors.New("ambiguous selected homework game")
 		}
 		seenSelected[ch.ChallengeID] = true
-		r.Levels = append(r.Levels, HomeworkLevel{ChallengeID: ch.ChallengeID, Game: g.Identifier, Title: g.Name, Position: g.Position, ST: ch.ST})
+		r.Levels = append(r.Levels, HomeworkLevel{ChallengeID: ch.ChallengeID, Game: g.Identifier, Title: g.Name, Position: g.Position, ST: ch.ST, Optional: ch.IsOptional()})
 	}
-	if len(r.Levels) != len(canonical) {
-		return nil, errors.New("homework runtime mapping is incomplete")
+	for _, ch := range canonical {
+		if seenSelected[ch.ChallengeID] {
+			continue
+		}
+		// An elective level does not need an executable runtime game. Its
+		// canonical identity is retained, while every required level must map.
+		if !ch.IsOptional() {
+			return nil, errors.New("homework runtime mapping is incomplete")
+		}
+		r.Levels = append(r.Levels, HomeworkLevel{ChallengeID: ch.ChallengeID, Title: ch.Name, ST: ch.ST, Optional: true})
 	}
-	sort.Slice(r.Levels, func(i, j int) bool { return r.Levels[i].Position < r.Levels[j].Position })
+	sort.Slice(r.Levels, func(i, j int) bool {
+		if r.Levels[i].Position == r.Levels[j].Position {
+			return r.Levels[i].ChallengeID < r.Levels[j].ChallengeID
+		}
+		if r.Levels[i].Position == 0 {
+			return false
+		}
+		if r.Levels[j].Position == 0 {
+			return true
+		}
+		return r.Levels[i].Position < r.Levels[j].Position
+	})
 	return r, nil
 }
 
 func (r *HomeworkRoster) ValidateTask(t *Task, level HomeworkLevel) error {
-	if t == nil || t.HomeworkID != r.HomeworkID || (t.CourseIdentifier != "" && t.CourseIdentifier != r.Course) || t.Game.Identifier != level.Game || t.Game.ID < 1 || t.Challenge.ID != level.ChallengeID || t.Challenge.Subject != level.Title || t.Challenge.Position != level.Position || t.Shixun.Identifier != r.Shixun || t.MyShixun.Identifier != r.MyShixun || t.MyShixun.ID < 1 || t.Game.MyShixunID != t.MyShixun.ID || (r.MyShixunID > 0 && t.MyShixun.ID != r.MyShixunID) || t.Kind() == TaskKindUnknown || (level.ST != nil && (t.Challenge.ST == nil || *t.Challenge.ST != *level.ST)) {
+	if r == nil || t == nil || t.HomeworkID != r.HomeworkID || (t.CourseIdentifier != "" && t.CourseIdentifier != r.Course) || t.Game.Identifier != level.Game || t.Game.ID < 1 || t.Challenge.ID != level.ChallengeID || t.Challenge.Subject != level.Title || t.Challenge.Position != level.Position || t.Shixun.Identifier != r.Shixun || t.MyShixun.Identifier != r.MyShixun || t.MyShixun.ID < 1 || t.Game.MyShixunID != t.MyShixun.ID || (r.MyShixunID > 0 && t.MyShixun.ID != r.MyShixunID) {
+		return errors.New("homework task identity or question kind mismatches planned roster")
+	}
+	if level.Optional || t.IsOptional() {
+		return ErrOptionalTask
+	}
+	if t.Kind() == TaskKindUnknown || (level.ST != nil && (t.Challenge.ST == nil || *t.Challenge.ST != *level.ST)) {
 		return errors.New("homework task identity or question kind mismatches planned roster")
 	}
 	return nil
@@ -142,8 +183,11 @@ func (r *HomeworkRoster) ValidateTask(t *Task, level HomeworkLevel) error {
 // by either solver is checked against the preflight identity before it can be
 // used for generation or a write. This also guards mid-run upstream changes.
 func (c *Client) BindHomeworkLevel(r *HomeworkRoster, level HomeworkLevel) (*Client, error) {
-	if c.HTTP == nil || r == nil {
+	if c == nil || c.HTTP == nil || r == nil {
 		return nil, errors.New("missing homework bound client context")
+	}
+	if level.Optional {
+		return nil, ErrOptionalTask
 	}
 	clone := *c
 	httpClone := *c.HTTP

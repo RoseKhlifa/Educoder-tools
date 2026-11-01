@@ -82,6 +82,15 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 		scope = "course"
 	}
 	out := &CourseBatchResult{Kind: "service", Scope: scope, Status: "running", Homeworks: []CourseHomeworkResult{}}
+	defer func() {
+		visible := out.Homeworks[:0]
+		for _, homework := range out.Homeworks {
+			if homework.Status != "skipped_optional" {
+				visible = append(visible, homework)
+			}
+		}
+		out.Homeworks = visible
+	}()
 	current := ServiceProgress{}
 	emit := func(phase, message string, batch *BatchProgress) {
 		if report == nil {
@@ -203,6 +212,12 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 			emit("service_pending", "这份作业已转交服务人员处理", nil)
 			continue
 		}
+		if required, valid := requiredHomeworkCount(p.hw, progress); valid && required == 0 {
+			h.Status, h.ReasonCode = "skipped_optional", "no_required_levels"
+			out.TotalHomeworks--
+			emit("verified", "这份作业没有需要安排的必做关卡", nil)
+			continue
+		}
 		if homeworkExactlyComplete(p.hw, progress) {
 			h.Status = "skipped"
 			out.CompletedHomeworks++
@@ -232,6 +247,12 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 			out.NeedsServiceHomeworks++
 			return stop(childErr, "canceled")
 		}
+		if childErr == nil && batch != nil && batch.Status == "passed" && batch.TotalLevels == 0 && batch.ReasonCode == "no_required_levels" {
+			h.Status, h.ReasonCode = "skipped_optional", "no_required_levels"
+			out.TotalHomeworks--
+			emit("verified", "这份作业没有需要安排的必做关卡", nil)
+			continue
+		}
 		if childErr == nil && batch != nil && batch.Status == "passed" && batch.TotalLevels > 0 && batch.CompletedLevels == batch.TotalLevels && batch.FailedLevels == 0 {
 			h.Status = "passed"
 			out.CompletedHomeworks++
@@ -259,15 +280,13 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 }
 
 func homeworkExactlyComplete(hw educoder.Homework, progress *educoder.HomeworkProgress) bool {
-	if progress == nil || hw.ChallengeCount < 1 || hw.ChallengeCount > 100 || len(progress.Challenges) != hw.ChallengeCount {
+	if _, valid := requiredHomeworkCount(hw, progress); !valid {
 		return false
 	}
-	seen := map[int64]bool{}
 	for _, p := range progress.Challenges {
-		if p.ChallengeID <= 0 || seen[p.ChallengeID] || p.Name == "" || !p.HasFullScore() {
+		if !p.IsOptional() && !p.HasFullScore() {
 			return false
 		}
-		seen[p.ChallengeID] = true
 	}
 	return true
 }

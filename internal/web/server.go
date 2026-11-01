@@ -451,10 +451,7 @@ func (s *Server) handleHomeworks(w http.ResponseWriter, r *http.Request, request
 		return
 	}
 	homeworks = educoder.OpenHomeworks(homeworks, time.Now())
-	result := make([]homeworkDTO, 0, len(homeworks))
-	for _, homework := range homeworks {
-		result = append(result, toHomeworkDTO(homework))
-	}
+	result := serviceHomeworks(r.Context(), session.Client, course, homeworks)
 	s.writeJSON(w, requestID, http.StatusOK, result)
 }
 
