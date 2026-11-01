@@ -1,12 +1,14 @@
 package web
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 
 	"educoder-cli/internal/jobs"
+	"educoder-cli/internal/taskservice"
 )
 
 func TestAdminJobContextNestedFailureTargetsAndZeroScore(t *testing.T) {
@@ -93,5 +95,65 @@ func TestAdminJobContextNoIssueForPlannedPassedOrOptionalLevels(t *testing.T) {
 	out := deriveJobContext(job)
 	if len(out.Summary.AttentionHomeworks) != 0 || out.Summary.ReasonCode != "" || out.Level.Title != "" {
 		t.Fatalf("healthy/untouched levels should not manufacture a failure: %+v", out)
+	}
+}
+
+func TestAdminJobContextRosterFailureDoesNotBorrowLaterHomeworkLevel(t *testing.T) {
+	job := jobs.Job{Request: jobs.Request{Scope: "all"}, Progress: &jobs.BatchProgress{CurrentCourse: "PYTHON", CurrentHomeworkID: 22, CurrentHomeworkTitle: "计算器", CurrentTitle: "函数调用", CurrentPosition: 1, TotalLevels: 4, CompletedLevels: 2}, Result: json.RawMessage(`{"homeworks":[{"course":"LINUX","course_name":"操作系统","homework_id":11,"title":"进程管理","status":"needs_service","reason_code":"execution_failed","result":{"status":"unsupported_roster","diagnostics":["ambiguous runtime game roster"]}}]}`)}
+	out := deriveJobContext(job)
+	if out.Homework.ID != 11 || out.Course.Identifier != "LINUX" || out.Level.Title != "" || out.Level.Position != 0 || out.Summary.ProgressLabel != "" || out.Summary.ReasonCode != "unsupported_roster" {
+		t.Fatalf("roster failure mixed targets or hid specific cause: %+v", out)
+	}
+	if out.Summary.AttentionHomeworks[0].ReasonCode != "unsupported_roster" {
+		t.Fatalf("attention reason lost: %+v", out.Summary)
+	}
+}
+
+func TestAdminJobContextOnlyBorrowsProgressFromSameTarget(t *testing.T) {
+	for _, course := range []string{"OTHER", "COURSE"} {
+		for _, homework := range []int64{11, 22} {
+			job := jobs.Job{Request: jobs.Request{Scope: "homework", Course: "COURSE", HomeworkID: 11}, Progress: &jobs.BatchProgress{CurrentCourse: course, CurrentHomeworkID: homework, CurrentHomeworkTitle: "同一作业", CurrentTitle: "同一关卡", CurrentPosition: 1, TotalLevels: 3}}
+			out := deriveJobContext(job)
+			matched := course == "COURSE" && homework == 11
+			if (out.Level.Title != "") != matched || (out.Homework.Name != "") != matched || (out.Summary.ProgressLabel != "") != matched {
+				t.Fatalf("incompatible progress was borrowed: %+v => %+v", job.Progress, out)
+			}
+		}
+	}
+}
+
+func TestAdminJobContextBatchDeadlineAndUnstartedAssignments(t *testing.T) {
+	job := jobs.Job{Request: jobs.Request{Scope: "all"}, Result: json.RawMessage(`{"status":"canceled","reason_code":"canceled","total_homeworks":4,"completed_homeworks":1,"homeworks":[{"homework_id":11,"status":"passed"},{"homework_id":12,"status":"needs_service","reason_code":"interrupted","result":{"status":"uncertain","diagnostics":["自测等待结束: context deadline exceeded"]}},{"homework_id":13,"status":"planned"},{"homework_id":14,"status":"planned"}]}`)}
+	out := deriveJobContext(job)
+	if out.Summary.StopReason != "deadline_observed" || out.Summary.PendingHomeworks != 2 || len(out.Summary.AttentionHomeworks) != 1 {
+		t.Fatalf("batch deadline/pending summary missing: %+v", out)
+	}
+	job.Result = json.RawMessage(`{"status":"canceled","reason_code":"canceled","homeworks":[{"homework_id":11,"status":"planned"}]}`)
+	out = deriveJobContext(job)
+	if out.Summary.StopReason != "" || out.Summary.PendingHomeworks != 1 {
+		t.Fatalf("manual cancellation was inferred to be a timeout: %+v", out)
+	}
+	job.Result = json.RawMessage(`{"status":"canceled","reason_code":"canceled","homeworks":[{"homework_id":11,"status":"needs_service","result":{"status":"selftest_failed","diagnostics":["context deadline exceeded"]}},{"homework_id":12,"status":"passed"},{"homework_id":13,"status":"planned"}]}`)
+	if out = deriveJobContext(job); out.Summary.StopReason != "" {
+		t.Fatalf("earlier local timeout must not become the batch stop cause: %+v", out)
+	}
+}
+
+func TestAdminJobContextTypedBatchStopAndLiveHomeworkProgress(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		stop string
+	}{{context.DeadlineExceeded, "time_limit"}, {context.Canceled, "canceled"}} {
+		outcome, _ := courseOutcome(&taskservice.CourseBatchResult{Status: "canceled", Homeworks: []taskservice.CourseHomeworkResult{{HomeworkID: 11, Status: "planned"}}}, tc.err)
+		out := deriveJobContext(jobs.Job{Request: jobs.Request{Scope: "all"}, Result: outcome.Result})
+		if out.Summary.StopReason != tc.stop || out.Summary.PendingHomeworks != 1 {
+			t.Fatalf("typed batch context cause lost: %+v", out.Summary)
+		}
+	}
+	req := jobs.Request{Scope: "homework", Course: "COURSE", HomeworkID: 11}
+	progress := jobHomeworkProgress(req, &taskservice.BatchProgress{TotalLevels: 3, CompletedLevels: 1, CurrentPosition: 2, CurrentTitle: "同一目标关卡"})
+	out := deriveJobContext(jobs.Job{Request: req, Progress: progress})
+	if out.Level.Title != "同一目标关卡" || out.Summary.ProgressLabel != "1 / 3 个关卡" {
+		t.Fatalf("live single-homework progress must retain target identity: %+v", out)
 	}
 }

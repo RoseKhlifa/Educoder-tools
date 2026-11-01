@@ -171,17 +171,7 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 		result, e := collector.Scan(ctx, reader, owner, func(summary taskservice.CollectionSummary) {
 			report(jobs.Event{Phase: "collecting", Kind: "collection", Message: taskservice.CollectionMessage(summary)})
 		})
-		raw, _ := json.Marshal(result)
-		out := jobs.Outcome{Status: jobs.Succeeded, Result: raw, Message: taskservice.CollectionMessage(result)}
-		if e != nil {
-			out.Status = jobs.Failed
-			out.ErrorCode = "collection_stopped"
-			out.Message = "采集已停止，已记录统计和跳过原因"
-			// Do not persist upstream error text (which may include an account
-			// path). Public reasons and counters already explain the stopped scan.
-			return out, errors.New("Read-only collection stopped; inspect its summary")
-		}
-		return out, e
+		return collectionOutcome(result, e)
 	}
 	runtime.run = func(ctx context.Context, client EducoderClient, owner string, req jobs.Request, report func(jobs.Event)) (jobs.Outcome, error) {
 		protocol, ok := client.(*educoder.Client)
@@ -208,7 +198,7 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 			batch, err := service.RunHomework(ctx, protocol, taskservice.Request{Owner: owner, Course: req.Course, HomeworkID: req.HomeworkID, Mode: solver.ModeSubmit, IdempotencyKey: req.IdempotencyKey}, func(progress taskservice.Progress) {
 				e := jobs.Event{Phase: progress.Phase, Kind: progress.Kind, Message: progress.Message}
 				if progress.Batch != nil {
-					e.Progress = &jobs.BatchProgress{TotalLevels: progress.Batch.TotalLevels, CompletedLevels: progress.Batch.CompletedLevels, SkippedLevels: progress.Batch.SkippedLevels, FailedLevels: progress.Batch.FailedLevels, CurrentPosition: progress.Batch.CurrentPosition, CurrentTitle: progress.Batch.CurrentTitle}
+					e.Progress = jobHomeworkProgress(req, progress.Batch)
 				}
 				report(e)
 			})
@@ -217,7 +207,7 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 		result, err := service.Run(ctx, protocol, taskservice.Request{Owner: owner, Course: req.Course, HomeworkID: req.HomeworkID, Game: req.Game, Mode: solver.Mode(req.Mode), IdempotencyKey: req.IdempotencyKey}, func(progress taskservice.Progress) {
 			e := jobs.Event{Phase: progress.Phase, Kind: progress.Kind, Message: progress.Message}
 			if progress.Batch != nil {
-				e.Progress = &jobs.BatchProgress{TotalLevels: progress.Batch.TotalLevels, CompletedLevels: progress.Batch.CompletedLevels, SkippedLevels: progress.Batch.SkippedLevels, FailedLevels: progress.Batch.FailedLevels, CurrentPosition: progress.Batch.CurrentPosition, CurrentTitle: progress.Batch.CurrentTitle}
+				e.Progress = jobHomeworkProgress(req, progress.Batch)
 			}
 			report(e)
 		})
@@ -250,11 +240,26 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 	return runtime, nil
 }
 
+func jobHomeworkProgress(req jobs.Request, batch *taskservice.BatchProgress) *jobs.BatchProgress {
+	return &jobs.BatchProgress{CurrentCourse: req.Course, CurrentHomeworkID: req.HomeworkID, TotalLevels: batch.TotalLevels, CompletedLevels: batch.CompletedLevels, SkippedLevels: batch.SkippedLevels, FailedLevels: batch.FailedLevels, CurrentPosition: batch.CurrentPosition, CurrentTitle: batch.CurrentTitle}
+}
+
 func courseOutcome(result *taskservice.CourseBatchResult, err error) (jobs.Outcome, error) {
 	if result == nil {
 		return jobs.Outcome{}, err
 	}
-	raw, _ := json.Marshal(result)
+	stopReason := ""
+	if result.Status == "canceled" {
+		if errors.Is(err, context.DeadlineExceeded) {
+			stopReason = "time_limit"
+		} else if errors.Is(err, context.Canceled) {
+			stopReason = "canceled"
+		}
+	}
+	raw, _ := json.Marshal(struct {
+		*taskservice.CourseBatchResult
+		StopReason string `json:"stop_reason,omitempty"`
+	}{result, stopReason})
 	out := jobs.Outcome{Status: jobs.Failed, Result: raw, ErrorCode: "SERVICE_REQUIRED", Message: "部分作业需要服务人员处理"}
 	if result.Status == "passed" && err == nil && result.CompletedHomeworks == result.TotalHomeworks && result.NeedsServiceHomeworks == 0 {
 		out.Status, out.ErrorCode, out.Message = jobs.Succeeded, "", "全部作业已完成"

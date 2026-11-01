@@ -269,3 +269,73 @@ func TestCollectionLimitsCancelAndNoRuntimeDiscovery(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+type collectionCoursePageFixture struct {
+	*collectionFixture
+	read func(context.Context) error
+}
+
+func (f *collectionCoursePageFixture) CollectionCoursesPage(ctx context.Context, _ string, _ int) ([]educoder.Course, error) {
+	return nil, f.read(ctx)
+}
+
+func TestCollectionCoursePageErrorsDistinguishLimitsFromFailures(t *testing.T) {
+	readFailure := errors.New("synthetic course read failure")
+	for _, tc := range []struct {
+		name        string
+		read        func(context.Context) error
+		wantErr     error
+		wantFailed  int
+		wantLimited bool
+		deadline    bool
+	}{
+		{
+			name:        "read_budget",
+			read:        func(context.Context) error { return educoder.ErrCollectionLimit },
+			wantErr:     educoder.ErrCollectionLimit,
+			wantLimited: true,
+		},
+		{
+			name: "actual_deadline",
+			read: func(ctx context.Context) error {
+				<-ctx.Done()
+				return ctx.Err()
+			},
+			wantErr:     context.DeadlineExceeded,
+			wantLimited: true,
+			deadline:    true,
+		},
+		{
+			name:       "ordinary_read_failure",
+			read:       func(context.Context) error { return readFailure },
+			wantErr:    readFailure,
+			wantFailed: 1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, f, owner := collectionTestSetup(t)
+			if tc.deadline {
+				h.Limits.Timeout = 200 * time.Millisecond
+			}
+			called := false
+			reader := &collectionCoursePageFixture{collectionFixture: f, read: func(ctx context.Context) error {
+				called = true
+				return tc.read(ctx)
+			}}
+			s, err := h.Scan(context.Background(), reader, owner, nil)
+			if !called || !errors.Is(err, tc.wantErr) || s.Failed != tc.wantFailed || s.LimitReached != tc.wantLimited {
+				t.Fatalf("called=%t summary=%+v err=%v", called, s, err)
+			}
+			if s.Reasons["course_read_failed"] != tc.wantFailed {
+				t.Fatalf("course failure count does not match actual read failures: %+v", s)
+			}
+			wantLimitEvents := 0
+			if tc.wantLimited {
+				wantLimitEvents = 1
+			}
+			if s.Reasons["request_byte_or_time_limit"] != wantLimitEvents || s.Collected != 0 || s.Duplicates != 0 {
+				t.Fatalf("unexpected limit or answer counts: %+v", s)
+			}
+		})
+	}
+}

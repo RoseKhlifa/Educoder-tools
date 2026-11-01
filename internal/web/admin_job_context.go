@@ -49,6 +49,8 @@ type AdminJobSummary struct {
 	Message            string                   `json:"message,omitempty"`
 	Diagnostics        []string                 `json:"diagnostics"`
 	ProgressLabel      string                   `json:"progress_label,omitempty"`
+	StopReason         string                   `json:"stop_reason,omitempty"`
+	PendingHomeworks   int                      `json:"pending_homeworks,omitempty"`
 	AttentionHomeworks []AdminAttentionHomework `json:"attention_homeworks"`
 }
 
@@ -69,6 +71,7 @@ type AdminAttentionHomework struct {
 type adminContextResult struct {
 	Status             string                 `json:"status"`
 	ReasonCode         string                 `json:"reason_code"`
+	StopReason         string                 `json:"stop_reason"`
 	Course             string                 `json:"course"`
 	CourseName         string                 `json:"course_name"`
 	HomeworkID         int64                  `json:"homework_id"`
@@ -163,10 +166,11 @@ func deriveJobContext(j jobs.Job) AdminJobContext {
 		if out.Homework.ID == 0 {
 			out.Homework.ID = p.CurrentHomeworkID
 		}
-		if out.Homework.Name == "" {
+		compatibleTarget := (p.CurrentHomeworkID == 0 || out.Homework.ID == p.CurrentHomeworkID) && (p.CurrentCourse == "" || out.Course.Identifier == p.CurrentCourse)
+		if out.Homework.Name == "" && compatibleTarget {
 			out.Homework.Name = adminContextText(p.CurrentHomeworkTitle, 500)
 		}
-		if out.Level.Title == "" {
+		if out.Level.Title == "" && compatibleTarget {
 			out.Level.Title = adminContextText(p.CurrentTitle, 500)
 			out.Level.Position = p.CurrentPosition
 		}
@@ -189,9 +193,25 @@ func deriveJobContext(j jobs.Job) AdminJobContext {
 	// The first failed assignment is more informative than the last progress
 	// event, which may point at a subsequently completed assignment.
 	var firstIssue bool
+	lastInterruptedDeadline := false
 	for i, h := range result.Homeworks {
 		if i >= 100 {
 			break
+		}
+		if h.Status == "planned" {
+			out.Summary.PendingHomeworks++
+		}
+		if h.Status != "planned" {
+			lastInterruptedDeadline = false
+		}
+		if h.Result != nil && h.ReasonCode == "interrupted" {
+			lastInterruptedDeadline = adminContextDeadline(h.Result.Diagnostics)
+			for n, level := range h.Result.Levels {
+				if n >= 100 {
+					break
+				}
+				lastInterruptedDeadline = lastInterruptedDeadline || adminContextDeadline(level.Diagnostics)
+			}
 		}
 		if out.Course.Name == "" && (out.Course.Identifier == "" || out.Course.Identifier == h.Course) {
 			out.Course.Identifier, out.Course.Name = adminContextText(h.Course, 100), adminContextText(h.CourseName, 500)
@@ -219,6 +239,19 @@ func deriveJobContext(j jobs.Job) AdminJobContext {
 			primaryBatch = h.Result
 		}
 	}
+	if (j.Request.Scope == "course" || j.Request.Scope == "all") && (result.Status == "canceled" || result.ReasonCode == "canceled") {
+		switch result.StopReason {
+		case "time_limit", "canceled":
+			out.Summary.StopReason = result.StopReason
+		default:
+			// Historical batches did not retain the typed context error. A
+			// deadline in the final interrupted assignment is useful evidence,
+			// but does not by itself prove the outer batch timed out.
+			if lastInterruptedDeadline {
+				out.Summary.StopReason = "deadline_observed"
+			}
+		}
+	}
 	if !firstIssue {
 		if level, found := adminContextProblemLevel(batch); found {
 			out.Level = adminContextLevelRef(level)
@@ -243,7 +276,7 @@ func deriveJobContext(j jobs.Job) AdminJobContext {
 			} else {
 				out.Summary.ProgressLabel = levelLabel
 			}
-		} else if out.Summary.ProgressLabel == "" && j.Progress != nil && j.Progress.TotalLevels > 0 {
+		} else if out.Summary.ProgressLabel == "" && j.Progress != nil && j.Progress.TotalLevels > 0 && adminContextProgressMatches(out, j.Progress) {
 			out.Summary.ProgressLabel = fmt.Sprintf("%d / %d 个关卡", j.Progress.CompletedLevels, j.Progress.TotalLevels)
 		}
 	}
@@ -255,12 +288,12 @@ func adminContextIssue(h adminContextHomework) (AdminAttentionHomework, AdminJob
 	var level AdminJobLevel
 	if h.Result != nil {
 		b := *h.Result
-		issue.ReasonCode = adminContextFirst(b.ReasonCode, h.ReasonCode, b.Status, h.Status)
+		issue.ReasonCode = adminContextSpecificReason(b.ReasonCode, h.ReasonCode, b.Status, h.Status)
 		issue.Diagnostics = adminContextDiagnostics(b.Diagnostics)
 		level = AdminJobLevel{Title: adminContextText(b.CurrentTitle, 500), Position: b.CurrentPosition}
 		if l, found := adminContextProblemLevel(b); found {
 			level = adminContextLevelRef(l)
-			issue.ReasonCode = adminContextFirst(l.ReasonCode, b.ReasonCode, h.ReasonCode, l.Status, b.Status, h.Status)
+			issue.ReasonCode = adminContextSpecificReason(l.ReasonCode, b.ReasonCode, h.ReasonCode, l.Status, b.Status, h.Status)
 			issue.Diagnostics = adminContextDiagnostics(append(l.Diagnostics, b.Diagnostics...))
 		}
 	}
@@ -308,6 +341,33 @@ func adminContextFirst(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func adminContextSpecificReason(values ...string) string {
+	for _, value := range values {
+		switch strings.ToLower(strings.TrimSpace(value)) {
+		case "", "execution_failed", "service_required", "needs_service", "failed", "uncertain", "interrupted", "canceled", "passed", "succeeded", "completed", "skipped", "planned", "pending", "running":
+			continue
+		}
+		return adminContextText(value, 120)
+	}
+	return adminContextFirst(values...)
+}
+
+func adminContextProgressMatches(out AdminJobContext, progress *jobs.BatchProgress) bool {
+	return out.Homework.ID > 0 && out.Homework.ID == progress.CurrentHomeworkID && out.Course.Identifier != "" && out.Course.Identifier == progress.CurrentCourse
+}
+
+func adminContextDeadline(diagnostics []string) bool {
+	for i, diagnostic := range diagnostics {
+		if i >= 100 {
+			break
+		}
+		if strings.Contains(strings.ToLower(diagnostic), "context deadline exceeded") {
+			return true
+		}
+	}
+	return false
 }
 
 func adminContextText(value string, max int) string {

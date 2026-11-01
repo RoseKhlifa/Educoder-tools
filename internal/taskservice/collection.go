@@ -105,6 +105,9 @@ func (h *Collector) Scan(ctx context.Context, c CollectionReader, owner string, 
 			}
 			courses, e := c.CollectionCoursesPage(ctx, status, page)
 			if e != nil {
+				if errors.Is(e, educoder.ErrCollectionLimit) || ctx.Err() != nil {
+					return summary, e
+				}
 				summary.Failed++
 				summary.Reasons["course_read_failed"]++
 				return summary, e

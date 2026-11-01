@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.39 - 2026-11-01
+
+- Explain collection outcomes and skip reasons; bind admin assignment details and preserve precise batch stop causes
+
 ## 0.1.38 - 2026-11-01
 
 - Show readable user course homework and failure details in admin
