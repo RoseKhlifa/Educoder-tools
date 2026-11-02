@@ -60,9 +60,12 @@ func normalizeExternalIdentity(s string) string { return strings.Join(strings.Fi
 // The browser editor saves LF text. Normalize before creating the candidate,
 // leaving the source record and its provenance hashes byte-exact. Evaluation
 // still verifies the exact bytes of this new candidate, never an equivalent hash.
-func externalExecutionContent(kind, content string) string {
+func externalExecutionContent(kind, content string, target problem.File) string {
 	if kind == "programming" {
-		return strings.ReplaceAll(content, "\r\n", "\n")
+		content = strings.ReplaceAll(content, "\r\n", "\n")
+		if isExternalPythonFile(target) {
+			return normalizeExternalPythonWhitespace(content)
+		}
 	}
 	return content
 }
@@ -169,9 +172,9 @@ func (s *Store) BindExternalCandidates(ctx context.Context, ref Ref, identity Ex
 	if err != nil || len(matches) == 0 {
 		return nil, err
 	}
-	content := externalExecutionContent(kind, matches[0].Files[0].Content)
+	content := externalExecutionContent(kind, matches[0].Files[0].Content, prepared.Files[0])
 	for _, e := range matches[1:] {
-		if externalExecutionContent(kind, e.Files[0].Content) != content {
+		if externalExecutionContent(kind, e.Files[0].Content, prepared.Files[0]) != content {
 			return nil, nil
 		}
 	}
@@ -191,7 +194,8 @@ func (s *Store) BindExternalCandidates(ctx context.Context, ref Ref, identity Ex
 
 // IsExternalCandidate checks durable provenance and the executable content,
 // rather than trusting a caller-controlled Source label. Pre-normalization
-// candidates remain in history but must not be selected ahead of LF candidates.
+// candidates remain in history but must not be selected ahead of candidates
+// whose exact bytes reflect the current editor normalization.
 func (s *Store) IsExternalCandidate(ctx context.Context, candidateID int64) (bool, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT e.kind,e.files_json FROM external_candidate_bindings b JOIN external_entries e ON e.id=b.external_entry_id WHERE b.candidate_id=? AND e.kind IN ('programming','diagram') AND e.status='candidate'`, candidateID)
 	if err != nil {
@@ -230,8 +234,15 @@ func (s *Store) IsExternalCandidate(ctx context.Context, candidateID int64) (boo
 	if len(candidate.Files) != 1 {
 		return false, nil
 	}
+	snapshot, err := s.Snapshot(ctx, candidate.Ref)
+	if err != nil {
+		return false, err
+	}
+	if len(snapshot.Files) != 1 || snapshot.Files[0].Path != candidate.Files[0].Path {
+		return false, nil
+	}
 	for _, source := range sources {
-		if len(source.files) == 1 && (source.files[0].Path == "" || source.files[0].Path == candidate.Files[0].Path) && externalExecutionContent(source.kind, source.files[0].Content) == candidate.Files[0].Content {
+		if len(source.files) == 1 && (source.files[0].Path == "" || source.files[0].Path == candidate.Files[0].Path) && externalExecutionContent(source.kind, source.files[0].Content, snapshot.Files[0]) == candidate.Files[0].Content {
 			return true, nil
 		}
 	}

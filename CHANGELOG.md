@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.62 - 2026-11-03
+
+- Normalize external Python editor whitespace before candidate hashing while preserving strings provenance and exact readback verification
+
 ## 0.1.61 - 2026-11-03
 
 - Classify completed formal environment startup failures as unknown and retry the same bound candidate once within evaluation limits
