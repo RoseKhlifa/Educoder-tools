@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
-	"time"
 
 	"educoder-cli/internal/educoder"
 	"educoder-cli/internal/jobs"
@@ -18,9 +17,10 @@ func collectionTarget(t *educoder.Task) questionbank.CollectionTarget {
 // Admission is a local bounded database operation; no upstream scan is performed
 // on the login goroutine, and admission failure never invalidates a login.
 func (s *Server) enqueueCollection(ctx context.Context, client EducoderClient, owner, key string) map[string]any {
-	if key == "" {
-		key = "collection-v1-" + time.Now().UTC().Format("2006-01-02")
-	}
+	// Login passes no durable key: repeated requests reuse the active target,
+	// but a new authenticated login after an incomplete/finished scan can read
+	// current upstream work with its current in-memory client. Explicit callers
+	// may still opt into durable replay using the Idempotency-Key header.
 	job, reused, err := s.jobs.manager.Submit(ctx, owner, jobs.Request{Mode: "collect_verified", IdempotencyKey: key}, func(ctx context.Context, _ jobs.Request, report func(jobs.Event)) (jobs.Outcome, error) {
 		return s.runAuthorized(ctx, owner, func(ctx context.Context) (jobs.Outcome, error) { return s.jobs.collect(ctx, client, owner, report) })
 	})
@@ -31,8 +31,9 @@ func (s *Server) enqueueCollection(ctx context.Context, client EducoderClient, o
 }
 
 // Existing /api/jobs/{id} and /cancel provide owner-scoped status/events and
-// cancellation for these jobs too. POST allows an explicit retry after a stop;
-// the daily login key never silently replays a job interrupted by restart.
+// cancellation for these jobs too. A fresh authenticated login or a POST with
+// no reused explicit key can retry after a stop, but never replays credentials
+// or executable closures after service restart.
 func (s *Server) handleCollection(w http.ResponseWriter, r *http.Request, requestID string) {
 	session, ok := s.sessionFromRequest(r)
 	if !ok {
@@ -70,7 +71,7 @@ func (s *Server) handleCollection(w http.ResponseWriter, r *http.Request, reques
 		}
 		result := s.enqueueCollection(r.Context(), session.Client, owner, r.Header.Get("Idempotency-Key"))
 		if result["queued"] == false {
-			s.writeError(w, requestID, http.StatusServiceUnavailable,"SERVICE_UNAVAILABLE","服务人员正在处理，请稍后再试")
+			s.writeError(w, requestID, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "服务人员正在处理，请稍后再试")
 			return
 		}
 		w.Header().Set("Location", "/api/jobs/"+result["job_id"].(string))

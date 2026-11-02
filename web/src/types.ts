@@ -162,6 +162,7 @@ export interface CollectionSummary {
   limit_reached?: boolean;
   stop_reason?: string;
   scan_complete?: boolean;
+  scan_exhausted?: boolean;
   reasons?: Record<string, number>;
 }
 export interface AnswerJob {

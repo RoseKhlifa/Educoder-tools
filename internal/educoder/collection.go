@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -18,6 +19,8 @@ import (
 var ErrCollectionLimit = errors.New("collection request or response budget exceeded")
 var ErrCollectionReadOnly = errors.New("collection endpoint is not a supported read")
 
+// Zero Requests or TotalBytes means no aggregate scan ceiling; each individual
+// response and request remain bounded and all reads remain cancellable.
 type CollectionBudget struct {
 	Requests                  int
 	ResponseBytes, TotalBytes int64
@@ -25,7 +28,7 @@ type CollectionBudget struct {
 }
 
 func DefaultCollectionBudget() CollectionBudget {
-	return CollectionBudget{Requests: 1200, ResponseBytes: 2 << 20, TotalBytes: 64 << 20, Interval: 100 * time.Millisecond}
+	return CollectionBudget{ResponseBytes: 2 << 20, Interval: 100 * time.Millisecond}
 }
 
 type collectionTransport struct {
@@ -36,12 +39,13 @@ type collectionTransport struct {
 	requests int
 	bytes    int64
 	last     time.Time
+	pages    map[string]*collectionPageState
 }
 
 // CollectionReader shares only the authenticated cookie jar. It neither edits
 // the original client's transport nor follows redirects to unreviewed URLs.
 func (c *Client) CollectionReader(b CollectionBudget) (*Client, error) {
-	if c.HTTP == nil || c.LoginName == "" || b.Requests < 1 || b.Requests > 1200 || b.ResponseBytes < 1 || b.ResponseBytes > 2<<20 || b.TotalBytes < 1 || b.TotalBytes > 64<<20 || b.Interval < 0 {
+	if c.HTTP == nil || c.LoginName == "" || b.Requests < 0 || b.ResponseBytes < 1 || b.ResponseBytes > 2<<20 || b.TotalBytes < 0 || b.Interval < 0 {
 		return nil, errors.New("invalid collection budget or session")
 	}
 	u, err := url.Parse(c.BaseURL)
@@ -75,7 +79,41 @@ func (t *collectionTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	if err := req.Context().Err(); err != nil {
 		return nil, err
 	}
-	if t.requests >= t.budget.Requests || t.bytes >= t.budget.TotalBytes {
+	for attempt := 0; ; attempt++ {
+		resp, err := t.readAttempt(req)
+		if req.Context().Err() != nil {
+			return nil, req.Context().Err()
+		}
+		transient := err != nil && collectionTransientError(err)
+		if resp != nil {
+			transient = resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500
+		}
+		if !transient || attempt == 2 {
+			return resp, err
+		}
+		if resp != nil {
+			resp.Body.Close()
+		}
+		// Small, bounded retries repair intermittent reads; no credentials,
+		// authorization failures or mutating requests are ever retried here.
+		timer := time.NewTimer(time.Duration(1<<attempt) * 200 * time.Millisecond)
+		select {
+		case <-timer.C:
+		case <-req.Context().Done():
+			timer.Stop()
+			return nil, req.Context().Err()
+		}
+	}
+}
+
+func collectionTransientError(err error) bool {
+	var network net.Error
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		(errors.As(err, &network) && (network.Timeout() || network.Temporary()))
+}
+
+func (t *collectionTransport) readAttempt(req *http.Request) (*http.Response, error) {
+	if (t.budget.Requests > 0 && t.requests >= t.budget.Requests) || (t.budget.TotalBytes > 0 && t.bytes >= t.budget.TotalBytes) {
 		return nil, ErrCollectionLimit
 	}
 	if wait := t.budget.Interval - time.Since(t.last); wait > 0 {
@@ -94,8 +132,10 @@ func (t *collectionTransport) RoundTrip(req *http.Request) (*http.Response, erro
 		return nil, err
 	}
 	limit := t.budget.ResponseBytes
-	if remain := t.budget.TotalBytes - t.bytes; remain < limit {
-		limit = remain
+	if t.budget.TotalBytes > 0 {
+		if remain := t.budget.TotalBytes - t.bytes; remain < limit {
+			limit = remain
+		}
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	resp.Body.Close()
@@ -110,35 +150,104 @@ func (t *collectionTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	return resp, nil
 }
 
-// Page APIs have an explicit bounded page, unlike the interactive aggregate
-// APIs. They query all homework statuses and both active/ended classroom lists.
+// Page APIs leave exhaustion to the caller: any positive page is valid. They
+// query all homework statuses and both active/ended classroom lists.
 func (c *Client) CollectionCoursesPage(ctx context.Context, status string, page int) ([]Course, error) {
-	if c.LoginName == "" || (status != "processing" && status != "end") || page < 1 || page > 5 {
+	if c.LoginName == "" || (status != "processing" && status != "end") || page < 1 {
 		return nil, ErrCollectionLimit
 	}
 	var data struct {
 		Courses []Course `json:"courses"`
+		Count   *int     `json:"count"`
 	}
 	q := url.Values{"category": {""}, "status": {status}, "page": {strconv.Itoa(page)}, "per_page": {"15"}, "sort_by": {"updated_at"}, "sort_direction": {"desc"}, "username": {c.LoginName}}
 	err := c.request(ctx, http.MethodGet, "/api/users/"+url.PathEscape(c.LoginName)+"/courses.json", q, nil, "/users/"+c.LoginName+"/classrooms", &data)
+	if err != nil {
+		return nil, err
+	}
+	if data.Courses == nil {
+		return nil, errors.New("collection courses list missing or null")
+	}
+	ids := make([]string, 0, len(data.Courses))
 	for i := range data.Courses {
 		if data.Courses[i].Identifier == "" {
 			data.Courses[i].Identifier = CourseIdentifier(data.Courses[i].FirstCategoryURL)
 		}
+		ids = append(ids, data.Courses[i].Identifier)
 	}
-	return data.Courses, err
+	if err = c.collectionPageExhaustion("courses:"+status, page, 15, data.Count, ids); err != nil {
+		return nil, err
+	}
+	return data.Courses, nil
 }
 
 func (c *Client) CollectionHomeworksPage(ctx context.Context, course string, page int) ([]Homework, error) {
-	if validIdentifier(course) != nil || page < 1 || page > 5 {
+	if validIdentifier(course) != nil || page < 1 {
 		return nil, ErrCollectionLimit
 	}
 	var data struct {
 		Homeworks []Homework `json:"homeworks"`
+		Count     *int       `json:"query_total_count"`
 	}
 	q := url.Values{"id": {course}, "limit": {"20"}, "page": {strconv.Itoa(page)}, "status": {"0"}, "order": {"0"}}
 	err := c.request(ctx, http.MethodGet, "/api/courses/"+course+"/homework_commons.json", q, nil, "/classrooms/"+course+"/shixun_homework", &data)
-	return data.Homeworks, err
+	if err != nil {
+		return nil, err
+	}
+	if data.Homeworks == nil {
+		return nil, errors.New("collection homeworks list missing or null")
+	}
+	ids := make([]string, 0, len(data.Homeworks))
+	for _, hw := range data.Homeworks {
+		ids = append(ids, strconv.FormatInt(hw.ID, 10))
+	}
+	if err = c.collectionPageExhaustion("homeworks:"+course, page, 20, data.Count, ids); err != nil {
+		return nil, err
+	}
+	return data.Homeworks, nil
+}
+
+type collectionPageState struct {
+	total int
+	seen  map[string]bool
+}
+
+// Preserve advertised totals across pages within this isolated reader. A
+// missing/null list or an early empty page is not valid proof of exhaustion.
+func (c *Client) collectionPageExhaustion(scope string, page, pageSize int, total *int, ids []string) error {
+	if total != nil && *total < 0 {
+		return errors.New("invalid collection advertised total")
+	}
+	transport, ok := c.HTTP.Transport.(*collectionTransport)
+	if !ok {
+		if len(ids) == 0 && total != nil && *total > (page-1)*pageSize {
+			return errors.New("collection page ended before advertised total")
+		}
+		return nil
+	}
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	if transport.pages == nil {
+		transport.pages = map[string]*collectionPageState{}
+	}
+	state := transport.pages[scope]
+	if state == nil || page == 1 {
+		state = &collectionPageState{seen: map[string]bool{}}
+		transport.pages[scope] = state
+	}
+	if total != nil && *total > state.total {
+		state.total = *total
+	}
+	for _, id := range ids {
+		state.seen[id] = true
+	}
+	if len(ids) == 0 {
+		if len(state.seen) < state.total {
+			return errors.New("collection page ended before advertised total")
+		}
+		delete(transport.pages, scope)
+	}
+	return nil
 }
 
 // Unlike the interactive loader, collection must not fill in a missing upstream

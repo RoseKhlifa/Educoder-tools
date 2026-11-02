@@ -98,28 +98,38 @@ type Outcome struct {
 type Executor func(context.Context, Request, func(Event)) (Outcome, error)
 
 type Config struct {
-	Path            string
-	Workers         int
-	QueueSize       int
-	PerOwnerPending int
-	// PerOwnerRunning limits simultaneous executions for one account. A value
-	// of one preserves strict account serialization; web deployments can raise
-	// it for independent homework targets.
+	Path    string
+	Workers int
+	// CollectionWorkers is a separate read-only lane. Long scans do not consume
+	// answer workers or their per-account execution allowance.
+	CollectionWorkers int
+	QueueSize         int
+	PerOwnerPending   int
+	// PerOwnerRunning limits simultaneous answer executions for one account.
+	// A value of one serializes answers; collections have their separate lane.
+	// Web deployments can raise it for independent homework targets.
 	PerOwnerRunning int
-	Timeout         time.Duration
-	Retention       time.Duration
-	EventLimit      int
-	MaxResultBytes  int
+	// Timeout bounds answer jobs only. Collection scans are cancelable but have
+	// no total execution deadline; individual upstream requests stay bounded.
+	Timeout        time.Duration
+	Retention      time.Duration
+	EventLimit     int
+	MaxResultBytes int
 }
 
 type Stats struct {
-	Workers         int  `json:"workers"`
-	Running         int  `json:"running"`
-	Queued          int  `json:"queued"`
-	QueueCapacity   int  `json:"queue_size"`
-	PerOwnerPending int  `json:"per_owner_pending"`
-	PerOwnerRunning int  `json:"per_owner_running"`
-	Accepting       bool `json:"accepting"`
+	Workers           int  `json:"workers"`
+	CollectionWorkers int  `json:"collection_workers"`
+	Running           int  `json:"running"`
+	Queued            int  `json:"queued"`
+	AnswerRunning     int  `json:"answer_running"`
+	AnswerQueued      int  `json:"answer_queued"`
+	CollectionRunning int  `json:"collection_running"`
+	CollectionQueued  int  `json:"collection_queued"`
+	QueueCapacity     int  `json:"queue_size"`
+	PerOwnerPending   int  `json:"per_owner_pending"`
+	PerOwnerRunning   int  `json:"per_owner_running"`
+	Accepting         bool `json:"accepting"`
 }
 
 type Error struct {
@@ -161,6 +171,9 @@ func (c Config) defaults() (Config, error) {
 	if c.Workers == 0 {
 		c.Workers = 8
 	}
+	if c.CollectionWorkers == 0 {
+		c.CollectionWorkers = 1
+	}
 	if c.QueueSize == 0 {
 		c.QueueSize = 128
 	}
@@ -182,7 +195,7 @@ func (c Config) defaults() (Config, error) {
 	if c.MaxResultBytes == 0 {
 		c.MaxResultBytes = 256 * 1024
 	}
-	if c.Workers < 1 || c.Workers > 256 || c.QueueSize < 1 || c.QueueSize > 100000 || c.PerOwnerPending < 1 || c.PerOwnerRunning < 1 || c.PerOwnerRunning > c.Workers || c.Timeout < time.Millisecond || c.Retention < time.Millisecond || c.EventLimit < 1 || c.EventLimit > 64 || c.MaxResultBytes < 1 || c.MaxResultBytes > 4*1024*1024 {
+	if c.Workers < 1 || c.Workers > 256 || c.CollectionWorkers < 1 || c.CollectionWorkers > 16 || c.QueueSize < 1 || c.QueueSize > 100000 || c.PerOwnerPending < 1 || c.PerOwnerRunning < 1 || c.PerOwnerRunning > c.Workers || c.Timeout < time.Millisecond || c.Retention < time.Millisecond || c.EventLimit < 1 || c.EventLimit > 64 || c.MaxResultBytes < 1 || c.MaxResultBytes > 4*1024*1024 {
 		return c, fmt.Errorf("invalid jobs configuration")
 	}
 	return c, nil

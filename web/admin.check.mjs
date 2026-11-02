@@ -23,6 +23,21 @@ const job = (extra = {}) => ({
 const state = jobs => ({ overview: {}, users: [], jobs, audit: [], loading: false, error: false, jobsKind: 'all' });
 const visible = html => html.replace(/<details\b[\s\S]*?<\/details>/g, '').replace(/<[^>]*>/g, ' ');
 
+await test('collection capacity and exhaustive completion stay distinct from answer execution and verified captures', () => {
+  const screen = state([]);
+  screen.overview = { capacity: { jobs: { workers: 16, collection_workers: 1, answer_running: 2, collection_running: 1, collection_queued: 3 } } };
+  const capacity = visible(renderAdmin('overview', screen));
+  for (const label of ['答题执行并发', '采集执行并发', '答题正在运行', '采集正在运行', '采集等待中']) assert.match(capacity, new RegExp(label));
+  const collected = job({ status: 'succeeded', request: { mode: 'collect_verified' }, result: { scan_exhausted: true, scan_complete: true, collected: 0, duplicates: 12, skipped: 1, unconfirmed: 1, failed: 0, limit_reached: false, reasons: { programming_submitted_source_unproven: 1 } } });
+  const detail = visible(renderAdminJobDetail(collected));
+  assert.match(detail, /完整扫描完成/);
+  assert.match(detail, /其中证据未确认/);
+  assert.match(detail, /已有答案仍可复用/);
+  collected.status = 'failed'; collected.result.scan_complete = false; collected.result.stop_reason = 'request_timeout'; collected.result.failed = 1; collected.result.reasons = { request_timeout: 1 };
+  const failed = visible(renderAdminJobDetail(collected));
+  assert.match(failed, /需要处理/); assert.match(failed, /单次采集请求超时/); assert.doesNotMatch(failed, /完整扫描完成|达到采集上限/);
+});
+
 await test('current operations keep live service targets clear and retain previous attempts in history', async t => {
   await t.test('a confirmed exam submission is not a follow-up alert when the outer worker expired after reconciliation', () => {
     const value = job({ status: 'uncertain', request: { scope: 'exercise', course: 'SAMPLE_COURSE', exercise_id: 12, mode: 'submit' }, result: { title: '示例考试', submitted: true, score_known: false, total_questions: 50, completed_questions: 0 } });

@@ -19,13 +19,15 @@ import (
 	"educoder-cli/internal/questionbank"
 )
 
+// Zero values mean exhaustive traversal without an aggregate scan deadline.
+// Positive values remain available for explicitly bounded callers.
 type CollectionLimits struct {
 	Pages, Courses, Homeworks, Levels int
 	Timeout                           time.Duration
 }
 
 func DefaultCollectionLimits() CollectionLimits {
-	return CollectionLimits{5, 20, 100, 500, 3 * time.Minute}
+	return CollectionLimits{}
 }
 
 // CollectionReader has no save/build/submit/model operation by construction.
@@ -48,6 +50,7 @@ type CollectionSummary struct {
 	Unconfirmed            int            `json:"unconfirmed"`
 	Failed                 int            `json:"failed"`
 	LimitReached           bool           `json:"limit_reached"`
+	ScanExhausted          bool           `json:"scan_exhausted"`
 	Reasons                map[string]int `json:"reasons"`
 	FullScoreLevels        int            `json:"full_score_levels"`
 	LocatedLevels          int            `json:"located_levels"`
@@ -74,32 +77,44 @@ type Collector struct {
 func (h *Collector) Scan(ctx context.Context, c CollectionReader, owner string, emit func(CollectionSummary)) (summary CollectionSummary, err error) {
 	summary.Reasons = map[string]int{}
 	l := h.Limits
-	if h.Bank == nil || c == nil || l.Pages < 1 || l.Pages > 5 || l.Courses < 1 || l.Courses > 20 || l.Homeworks < 1 || l.Homeworks > 100 || l.Levels < 1 || l.Levels > 500 || l.Timeout <= 0 || l.Timeout > 3*time.Minute {
+	if h.Bank == nil || c == nil || l.Pages < 0 || l.Courses < 0 || l.Homeworks < 0 || l.Levels < 0 || l.Timeout < 0 {
 		return summary, errors.New("invalid collection limits")
 	}
-	ctx, cancel := context.WithTimeout(ctx, l.Timeout)
-	defer cancel()
+	if l.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, l.Timeout)
+		defer cancel()
+	}
 	defer func() {
 		if ctx.Err() != nil {
 			err = ctx.Err()
 		}
-		if errors.Is(err, educoder.ErrCollectionLimit) || errors.Is(err, context.DeadlineExceeded) {
+		if errors.Is(err, educoder.ErrCollectionLimit) || (l.Timeout > 0 && errors.Is(ctx.Err(), context.DeadlineExceeded)) {
 			summary.LimitReached = true
 			summary.Reasons["request_byte_or_time_limit"]++
+		}
+		if errors.Is(err, context.DeadlineExceeded) && !summary.LimitReached && summary.Failed == 0 {
+			summary.Failed++
+			summary.Reasons["request_timeout"]++
+		}
+		if err != nil {
+			summary.ScanExhausted = false
 		}
 		if emit != nil {
 			emit(summary)
 		}
 	}()
-	seeds, e := h.Bank.CollectionTargets(ctx, owner, 500)
-	if e != nil {
-		return summary, e
-	}
 	seenCourses := map[string]bool{}
 	seenHomework := map[string]bool{}
 	seenGame := map[string]bool{}
 	for _, status := range []string{"processing", "end"} {
-		for page := 1; page <= l.Pages; page++ {
+		coursePages := map[string]bool{}
+		for page := 1; ; page++ {
+			if l.Pages > 0 && page > l.Pages {
+				summary.LimitReached = true
+				summary.Reasons["course_page_limit"]++
+				break
+			}
 			if err = ctx.Err(); err != nil {
 				return summary, err
 			}
@@ -112,13 +127,29 @@ func (h *Collector) Scan(ctx context.Context, c CollectionReader, owner string, 
 				summary.Reasons["course_read_failed"]++
 				return summary, e
 			}
-			added := 0
+			if len(courses) == 0 {
+				break
+			}
+			coursePageIDs := make([]string, 0, len(courses))
+			for _, row := range courses {
+				id := row.Identifier
+				if id == "" {
+					id = educoder.CourseIdentifier(row.FirstCategoryURL)
+				}
+				coursePageIDs = append(coursePageIDs, id)
+			}
+			if collectionRepeatedPage(coursePages, coursePageIDs) {
+				summary.Failed++
+				summary.Reasons["course_pagination_stalled"]++
+				return summary, errors.New("collection course pagination repeated a nonempty page")
+			}
 			for _, course := range courses {
 				courseID := course.Identifier
 				if courseID == "" {
 					courseID = educoder.CourseIdentifier(course.FirstCategoryURL)
 				}
 				if courseID == "" {
+					summary.Failed++
 					summary.skip("classroom_identifier_missing", false)
 					continue
 				}
@@ -126,13 +157,18 @@ func (h *Collector) Scan(ctx context.Context, c CollectionReader, owner string, 
 					continue
 				}
 				seenCourses[courseID] = true
-				added++
-				if summary.Courses >= l.Courses {
+				if l.Courses > 0 && summary.Courses >= l.Courses {
 					summary.LimitReached = true
 					return summary, nil
 				}
 				summary.Courses++
-				for hp := 1; hp <= l.Pages; hp++ {
+				homeworkPages := map[string]bool{}
+				for hp := 1; ; hp++ {
+					if l.Pages > 0 && hp > l.Pages {
+						summary.LimitReached = true
+						summary.Reasons["homework_page_limit"]++
+						break
+					}
 					hws, e := c.CollectionHomeworksPage(ctx, courseID, hp)
 					if e != nil {
 						if errors.Is(e, educoder.ErrCollectionLimit) || ctx.Err() != nil {
@@ -142,15 +178,25 @@ func (h *Collector) Scan(ctx context.Context, c CollectionReader, owner string, 
 						summary.Reasons["homework_read_failed"]++
 						break
 					}
-					hwAdded := 0
+					if len(hws) == 0 {
+						break
+					}
+					homeworkPageIDs := make([]string, 0, len(hws))
+					for _, row := range hws {
+						homeworkPageIDs = append(homeworkPageIDs, strconv.FormatInt(row.ID, 10))
+					}
+					if collectionRepeatedPage(homeworkPages, homeworkPageIDs) {
+						summary.Failed++
+						summary.Reasons["homework_pagination_stalled"]++
+						return summary, errors.New("collection homework pagination repeated a nonempty page")
+					}
 					for _, hw := range hws {
 						key := courseID + ":" + strconv.FormatInt(hw.ID, 10)
 						if seenHomework[key] {
 							continue
 						}
 						seenHomework[key] = true
-						hwAdded++
-						if summary.Homeworks >= l.Homeworks {
+						if l.Homeworks > 0 && summary.Homeworks >= l.Homeworks {
 							summary.LimitReached = true
 							return summary, nil
 						}
@@ -207,6 +253,7 @@ func (h *Collector) Scan(ctx context.Context, c CollectionReader, owner string, 
 								if errors.Is(resolveErr, educoder.ErrCollectionLimit) || ctx.Err() != nil {
 									return summary, resolveErr
 								}
+								summary.Failed++
 								summary.Reasons["readonly_locator_read_failed"]++
 							} else {
 								for reason, n := range result.Reasons {
@@ -217,6 +264,10 @@ func (h *Collector) Scan(ctx context.Context, c CollectionReader, owner string, 
 									targets = append(targets, questionbank.CollectionTarget{Course: courseID, HomeworkID: hw.ID, Game: target.Game, ChallengeID: target.ChallengeID, Shixun: hw.ShixunIdentifier})
 								}
 							}
+						}
+						seeds, e := h.Bank.CollectionTargetsForHomework(ctx, owner, courseID, hw.ID)
+						if e != nil {
+							return summary, e
 						}
 						for _, s := range seeds {
 							if s.Course == courseID && s.HomeworkID == hw.ID && (s.Shixun == "" || s.Shixun == hw.ShixunIdentifier) {
@@ -248,7 +299,7 @@ func (h *Collector) Scan(ctx context.Context, c CollectionReader, owner string, 
 									break
 								}
 								seenGame[gkey] = true
-								if summary.Levels >= l.Levels {
+								if l.Levels > 0 && summary.Levels >= l.Levels {
 									summary.LimitReached = true
 									return summary, nil
 								}
@@ -300,25 +351,35 @@ func (h *Collector) Scan(ctx context.Context, c CollectionReader, owner string, 
 							}
 						}
 					}
-					if len(hws) == 0 || hwAdded == 0 {
-						break
-					}
-					if hp == l.Pages {
-						summary.LimitReached = true
-						summary.Reasons["homework_page_limit"]++
+					if emit != nil {
+						emit(summary)
 					}
 				}
 			}
-			if len(courses) == 0 || added == 0 {
-				break
-			}
-			if page == l.Pages {
-				summary.LimitReached = true
-				summary.Reasons["course_page_limit"]++
+			if emit != nil {
+				emit(summary)
 			}
 		}
 	}
+	// Only arrival here proves both classroom streams and each homework
+	// pager were exhausted. Budget/cancellation/error paths never set this.
+	summary.ScanExhausted = !summary.LimitReached && summary.Failed == 0
 	return summary, nil
+}
+
+// A page with only globally seen IDs is not exhaustion (active/ended lists and
+// shifting pages may overlap). Canonical row identities ignore mutable
+// labels/counts and ordering, so a broken pager cannot hide an endless repeated
+// page behind changing metadata. Fail explicitly rather than call the scan done.
+func collectionRepeatedPage(seen map[string]bool, ids []string) bool {
+	sort.Strings(ids)
+	b, _ := json.Marshal(ids)
+	key := problem.HashContent(string(b))
+	if seen[key] {
+		return true
+	}
+	seen[key] = true
+	return false
 }
 
 func collectionIdentity(t *educoder.Task, course string, hw educoder.Homework, game string, challenge int64) bool {
@@ -407,8 +468,11 @@ func (h *Collector) collectLevel(ctx context.Context, c CollectionReader, owner 
 			return nil
 		}
 		if err = collectionFreshScore(ctx, c, t, p); err != nil {
-			s.skip("score_changed_or_unconfirmed", true)
-			return nil
+			if errors.Is(err, errCollectionScoreUnconfirmed) {
+				s.skip("score_changed_or_unconfirmed", true)
+				return nil
+			}
+			return err
 		}
 		again, err := c.ReadProgramming(ctx, t)
 		if err != nil {
@@ -437,8 +501,11 @@ func (h *Collector) collectLevel(ctx context.Context, c CollectionReader, owner 
 			return nil
 		}
 		if err := collectionFreshScore(ctx, c, t, p); err != nil {
-			s.skip("score_changed_or_unconfirmed", true)
-			return nil
+			if errors.Is(err, errCollectionScoreUnconfirmed) {
+				s.skip("score_changed_or_unconfirmed", true)
+				return nil
+			}
+			return err
 		}
 		fresh, err := c.CollectionLoadTask(ctx, t.CourseIdentifier, t.HomeworkID, t.Game.Identifier)
 		if err != nil {
@@ -498,22 +565,27 @@ func (h *Collector) collectLevel(ctx context.Context, c CollectionReader, owner 
 	}
 }
 
+var errCollectionScoreUnconfirmed = errors.New("collection score changed, missing or ambiguous")
+
 func collectionFreshScore(ctx context.Context, c CollectionReader, t *educoder.Task, before educoder.ChallengeProgress) error {
 	p, err := c.HomeworkProgress(ctx, t.CourseIdentifier, t.HomeworkID)
 	if err != nil {
 		return err
+	}
+	if p == nil {
+		return errCollectionScoreUnconfirmed
 	}
 	count := 0
 	for _, v := range p.Challenges {
 		if v.ChallengeID == t.Challenge.ID {
 			count++
 			if !v.HasFullScore() || v.GameScore != before.GameScore || v.ChallengeScore != before.ChallengeScore {
-				return errors.New("score changed")
+				return errCollectionScoreUnconfirmed
 			}
 		}
 	}
 	if count != 1 {
-		return errors.New("target score missing or ambiguous")
+		return errCollectionScoreUnconfirmed
 	}
 	return nil
 }

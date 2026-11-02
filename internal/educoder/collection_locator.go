@@ -65,10 +65,6 @@ func (c *Client) CollectionLocate(ctx context.Context, course string, hw Homewor
 		out.Reasons["locator_homework_identity_mismatch"]++
 		return out, nil
 	}
-	if len(h.Challenges) > 500 {
-		out.Reasons["locator_challenge_roster_invalid"]++
-		return out, nil
-	}
 	// Validate before any runtime request: malformed/duplicate canonical IDs or
 	// names could otherwise make a passed row point to another challenge.
 	ids := map[int64]bool{}
@@ -104,13 +100,10 @@ func (c *Client) CollectionLocate(ctx context.Context, course string, hw Homewor
 	if err := c.request(ctx, http.MethodGet, "/api/myshixuns/"+h.MyShixun+"/challenges.json", q, nil, ref, &games); err != nil {
 		return out, err
 	}
-	if len(games) > 500 {
-		return out, ErrCollectionLimit
-	}
 	seenGame := map[string]bool{}
 	seenPosition := map[int]bool{}
 	for _, g := range games {
-		if validIdentifier(g.Identifier) != nil || g.Position < 1 || g.Position > 500 || (len(h.Challenges) > 0 && g.Position > len(h.Challenges)) || seenGame[g.Identifier] || seenPosition[g.Position] {
+		if validIdentifier(g.Identifier) != nil || g.Position < 1 || (len(h.Challenges) > 0 && g.Position > len(h.Challenges)) || seenGame[g.Identifier] || seenPosition[g.Position] {
 			out.Reasons["locator_game_roster_ambiguous"]++
 			return out, nil
 		}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"regexp"
+	"strconv"
 
 	"educoder-cli/internal/problem"
 )
@@ -39,33 +40,75 @@ func (s *Store) RememberCollectionTarget(ctx context.Context, owner string, t Co
 	return err
 }
 
+// CollectionTargets preserves the legacy query API. A zero limit means all
+// targets; production collection uses the narrower owner/homework query below.
 func (s *Store) CollectionTargets(ctx context.Context, owner string, limit int) ([]CollectionTarget, error) {
-	if !collectionOwner.MatchString(owner) || limit < 1 || limit > 500 {
+	if !collectionOwner.MatchString(owner) || limit < 0 {
 		return nil, errors.New("invalid target query")
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT course,homework_id,game,challenge_id,shixun FROM collection_targets WHERE owner=? ORDER BY course,homework_id,game LIMIT ?`, owner, limit)
+	return s.collectionTargets(ctx, owner, "", 0, limit)
+}
+
+// CollectionTargetsForHomework does not truncate another course's or a newer
+// run's evidence into the first global page. Both sources remain owner-bound.
+func (s *Store) CollectionTargetsForHomework(ctx context.Context, owner, course string, homeworkID int64) ([]CollectionTarget, error) {
+	if !collectionOwner.MatchString(owner) || !collectionID.MatchString(course) || homeworkID < 1 {
+		return nil, errors.New("invalid target query")
+	}
+	return s.collectionTargets(ctx, owner, course, homeworkID, 0)
+}
+
+func (s *Store) collectionTargets(ctx context.Context, owner, course string, homeworkID int64, limit int) ([]CollectionTarget, error) {
+	query := `SELECT course,homework_id,game,challenge_id,shixun FROM collection_targets WHERE owner=?`
+	args := []any{owner}
+	if course != "" {
+		query += ` AND course=? AND homework_id=?`
+		args = append(args, course, homeworkID)
+	}
+	query += ` ORDER BY course,homework_id,game`
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
 	var out []CollectionTarget
+	seen := map[string]bool{}
+	appendTarget := func(t CollectionTarget) {
+		key := t.Course + ":" + strconv.FormatInt(t.HomeworkID, 10) + ":" + t.Game
+		if !seen[key] {
+			seen[key] = true
+			out = append(out, t)
+		}
+	}
 	for rows.Next() {
 		var t CollectionTarget
 		if err = rows.Scan(&t.Course, &t.HomeworkID, &t.Game, &t.ChallengeID, &t.Shixun); err != nil {
 			break
 		}
-		out = append(out, t)
+		appendTarget(t)
 	}
 	if err == nil {
 		err = rows.Err()
 	}
 	rows.Close()
-	if err != nil {
-		return nil, err
+	if err != nil || (limit > 0 && len(out) >= limit) {
+		return out, err
 	}
-	// Older versions persisted successful task targets in owner-bound runs.
-	// These legacy seeds have no challenge ID and require an entirely full-score
-	// homework before the collector may read their details.
-	rows, err = s.db.QueryContext(ctx, `SELECT data_json FROM solver_runs WHERE owner=? AND status='passed' ORDER BY updated_at DESC LIMIT ?`, problem.HashContent(owner), limit-len(out))
+	// Legacy solver.Target had CamelCase JSON fields; newer remembered targets
+	// use snake_case. Scope at the database before decoding without a global
+	// newest-500 window. The full Go identity check below is still decisive.
+	query = `SELECT data_json FROM solver_runs WHERE owner=? AND status='passed'`
+	args = []any{problem.HashContent(owner)}
+	if course != "" {
+		query += ` AND CASE WHEN json_valid(data_json) THEN COALESCE(json_extract(data_json,'$.target.course'),json_extract(data_json,'$.target.Course')) END=?
+		AND CASE WHEN json_valid(data_json) THEN COALESCE(json_extract(data_json,'$.target.homework_id'),json_extract(data_json,'$.target.HomeworkID')) END=?`
+		args = append(args, course, homeworkID)
+	}
+	query += ` ORDER BY updated_at DESC,id`
+	rows, err = s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -75,14 +118,36 @@ func (s *Store) CollectionTargets(ctx context.Context, owner string, limit int) 
 		if err = rows.Scan(&raw); err != nil {
 			return nil, err
 		}
-		var v struct {
-			Target CollectionTarget `json:"target"`
+		t, ok := collectionRunTarget(raw)
+		if !ok || (course != "" && (t.Course != course || t.HomeworkID != homeworkID)) {
+			continue
 		}
-		if json.Unmarshal([]byte(raw), &v) == nil && collectionID.MatchString(v.Target.Game) && collectionID.MatchString(v.Target.Course) && v.Target.HomeworkID > 0 {
-			out = append(out, v.Target)
+		appendTarget(t)
+		if limit > 0 && len(out) >= limit {
+			break
 		}
 	}
 	return out, rows.Err()
+}
+
+func collectionRunTarget(raw string) (CollectionTarget, bool) {
+	var v struct {
+		Target CollectionTarget `json:"target"`
+	}
+	if json.Unmarshal([]byte(raw), &v) != nil {
+		return CollectionTarget{}, false
+	}
+	// encoding/json matches Course/Game case-insensitively, but HomeworkID
+	// does not match the snake_case tag. Preserve exact legacy field support.
+	if v.Target.HomeworkID == 0 {
+		var legacy struct {
+			Target struct{ HomeworkID int64 } `json:"target"`
+		}
+		if json.Unmarshal([]byte(raw), &legacy) == nil {
+			v.Target.HomeworkID = legacy.Target.HomeworkID
+		}
+	}
+	return v.Target, collectionID.MatchString(v.Target.Game) && collectionID.MatchString(v.Target.Course) && v.Target.HomeworkID > 0
 }
 
 // HasCollectionCodeEvidence requires an existing formal submission from THIS
@@ -93,7 +158,11 @@ func (s *Store) HasCollectionCodeEvidence(ctx context.Context, owner string, t C
 	if !collectionOwner.MatchString(owner) || !objectiveSHA256Pattern.MatchString(hash) {
 		return false, errors.New("invalid collection evidence query")
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,data_json FROM solver_runs WHERE owner=? AND status='passed' ORDER BY updated_at DESC LIMIT 500`, problem.HashContent(owner))
+	rows, err := s.db.QueryContext(ctx, `SELECT id,data_json FROM solver_runs WHERE owner=? AND status='passed'
+	AND CASE WHEN json_valid(data_json) THEN COALESCE(json_extract(data_json,'$.target.course'),json_extract(data_json,'$.target.Course')) END=?
+	AND CASE WHEN json_valid(data_json) THEN COALESCE(json_extract(data_json,'$.target.homework_id'),json_extract(data_json,'$.target.HomeworkID')) END=?
+	AND CASE WHEN json_valid(data_json) THEN COALESCE(json_extract(data_json,'$.target.game'),json_extract(data_json,'$.target.Game')) END=?
+	ORDER BY updated_at DESC,id`, problem.HashContent(owner), t.Course, t.HomeworkID, t.Game)
 	if err != nil {
 		return false, err
 	}
@@ -115,7 +184,8 @@ func (s *Store) HasCollectionCodeEvidence(ctx context.Context, owner string, t C
 				CodeHash    string `json:"code_hash"`
 			} `json:"result"`
 		}
-		if json.Unmarshal([]byte(raw), &state) == nil && state.Target.Course == t.Course && state.Target.HomeworkID == t.HomeworkID && state.Target.Game == t.Game && state.Ref == ref && state.Result.CodeHash == hash && state.Result.CandidateID > 0 {
+		target, validTarget := collectionRunTarget(raw)
+		if json.Unmarshal([]byte(raw), &state) == nil && validTarget && target.Course == t.Course && target.HomeworkID == t.HomeworkID && target.Game == t.Game && state.Ref == ref && state.Result.CodeHash == hash && state.Result.CandidateID > 0 {
 			matches = append(matches, saved{id, state.Result.CandidateID})
 		}
 	}

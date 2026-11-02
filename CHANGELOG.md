@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.55 - 2026-11-02
+
+- Run verified collection to exhaustion without overall deadlines or aggregate caps using a dedicated worker lane
+
 ## 0.1.54 - 2026-11-02
 
 - Simplify user guidance and keep every dialog close control visible while content scrolls

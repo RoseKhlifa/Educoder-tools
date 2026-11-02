@@ -79,7 +79,7 @@ func TestCollectionPageLimitsAndCancellation(t *testing.T) {
 	var count atomic.Int32
 	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		count.Add(1)
-		if r.URL.Query().Get("page") != "1" {
+		if r.URL.Query().Get("page") != "1" && r.URL.Query().Get("page") != "6" {
 			t.Error("page")
 		}
 		if strings.Contains(r.URL.Path, "homework_commons") && r.URL.Query().Has("type") {
@@ -99,11 +99,14 @@ func TestCollectionPageLimitsAndCancellation(t *testing.T) {
 	if _, e := reader.CollectionHomeworksPage(ctx, "C", 1); !errors.Is(e, context.Canceled) {
 		t.Fatal(e)
 	}
-	if _, e := reader.CollectionCoursesPage(context.Background(), "processing", 6); !errors.Is(e, ErrCollectionLimit) {
+	if _, e := reader.CollectionCoursesPage(context.Background(), "processing", 6); e != nil {
 		t.Fatal(e)
 	}
-	if count.Load() != 1 {
+	if count.Load() != 2 {
 		t.Fatal(count.Load())
+	}
+	if _, e := reader.CollectionCoursesPage(context.Background(), "processing", 0); !errors.Is(e, ErrCollectionLimit) {
+		t.Fatal("accepted nonpositive page", e)
 	}
 	reader2, _ := c.CollectionReader(CollectionBudget{Requests: 4, ResponseBytes: 1024, TotalBytes: 10})
 	if _, e := reader2.CollectionHomeworksPage(context.Background(), "C", 1); !errors.Is(e, ErrCollectionLimit) {

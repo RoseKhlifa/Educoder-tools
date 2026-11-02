@@ -147,18 +147,9 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 	service := taskservice.New(bank, provider, taskservice.Config{ModelConcurrency: cfg.ModelConcurrency, Timeout: cfg.JobTimeout})
 	runtime := &JobRuntime{manager: manager, bank: bank, modelConfigured: key != "", modelConcurrency: cfg.ModelConcurrency}
 	collector := &taskservice.Collector{Bank: bank, Limits: taskservice.DefaultCollectionLimits()}
-	scanSlot := make(chan struct{}, 1)
 	runtime.collect = func(ctx context.Context, client EducoderClient, owner string, report func(jobs.Event)) (jobs.Outcome, error) {
-		select {
-		case scanSlot <- struct{}{}:
-			defer func() { <-scanSlot }()
-		case <-ctx.Done():
-			return jobs.Outcome{}, ctx.Err()
-		default:
-			// Background collection must never occupy answer workers while
-			// waiting on its separate upstream-scan limit.
-			return jobs.Outcome{Status: jobs.Succeeded, Result: json.RawMessage(`{"status":"skipped","reason_code":"collector_busy"}`), Message: "其他采集正在进行，本次后台采集已跳过"}, nil
-		}
+		// The manager reserves a dedicated collection lane. Other accounts wait
+		// there without taking answer workers or being silently skipped.
 		protocol, ok := client.(*educoder.Client)
 		if !ok {
 			return jobs.Outcome{Status: jobs.Failed, ErrorCode: "collection_client_unsupported", Message: "当前会话不支持只读采集"}, nil

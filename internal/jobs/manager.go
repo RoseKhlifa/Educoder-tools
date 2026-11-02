@@ -53,7 +53,11 @@ func Open(ctx context.Context, cfg Config) (*Manager, error) {
 	m := &Manager{cfg: cfg, db: db, ctx: runctx, cancel: cancel, active: make(map[string]*execution), owners: make(map[string]int), wake: make(chan struct{}), done: make(chan struct{}), lastPruned: time.Now()}
 	for i := 0; i < cfg.Workers; i++ {
 		m.wg.Add(1)
-		go m.worker()
+		go m.worker(false)
+	}
+	for i := 0; i < cfg.CollectionWorkers; i++ {
+		m.wg.Add(1)
+		go m.worker(true)
 	}
 	return m, nil
 }
@@ -224,13 +228,18 @@ func (m *Manager) Cancel(ctx context.Context, owner, id string) (Job, error) {
 func (m *Manager) Stats() Stats {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	running := 0
+	running, collectionRunning, collectionQueued := 0, 0, 0
 	for _, r := range m.active {
 		if r.Status == Running {
 			running++
+			if r.Request.Mode == "collect_verified" {
+				collectionRunning++
+			}
+		} else if r.Status == Queued && r.Request.Mode == "collect_verified" {
+			collectionQueued++
 		}
 	}
-	return Stats{Workers: m.cfg.Workers, Running: running, Queued: len(m.queue), QueueCapacity: m.cfg.QueueSize, PerOwnerPending: m.cfg.PerOwnerPending, PerOwnerRunning: m.cfg.PerOwnerRunning, Accepting: !m.closed}
+	return Stats{Workers: m.cfg.Workers, CollectionWorkers: m.cfg.CollectionWorkers, Running: running, Queued: len(m.queue), AnswerRunning: running - collectionRunning, AnswerQueued: len(m.queue) - collectionQueued, CollectionRunning: collectionRunning, CollectionQueued: collectionQueued, QueueCapacity: m.cfg.QueueSize, PerOwnerPending: m.cfg.PerOwnerPending, PerOwnerRunning: m.cfg.PerOwnerRunning, Accepting: !m.closed}
 }
 
 func (m *Manager) removeQueuedLocked(id string) {
@@ -278,7 +287,10 @@ func (m *Manager) overlapsRunningLocked(candidate *execution) bool {
 	return false
 }
 
-func (m *Manager) claim() (*execution, context.Context, <-chan struct{}) {
+// Both lanes share bounded admission and cancellation, but reserve separate
+// workers. A collection waits in the queue instead of succeeding without a scan.
+// A read-only scan also does not block the same owner's answer execution budget.
+func (m *Manager) claim(collection bool) (*execution, context.Context, <-chan struct{}) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
@@ -291,7 +303,11 @@ func (m *Manager) claim() (*execution, context.Context, <-chan struct{}) {
 			m.queue = append(m.queue[:i], m.queue[i+1:]...)
 			continue
 		}
-		if m.owners[r.owner] >= m.cfg.PerOwnerRunning || m.overlapsRunningLocked(r) {
+		if (r.Request.Mode == "collect_verified") != collection {
+			i++
+			continue
+		}
+		if !collection && (m.owners[r.owner] >= m.cfg.PerOwnerRunning || m.overlapsRunningLocked(r)) {
 			i++
 			continue
 		}
@@ -307,18 +323,24 @@ func (m *Manager) claim() (*execution, context.Context, <-chan struct{}) {
 			m.notifyLocked()
 			continue
 		}
-		ctx, cancel := context.WithTimeout(m.ctx, m.cfg.Timeout)
+		var ctx context.Context
+		var cancel context.CancelFunc
+		if collection {
+			ctx, cancel = context.WithCancel(m.ctx)
+		} else {
+			ctx, cancel = context.WithTimeout(m.ctx, m.cfg.Timeout)
+			m.owners[r.owner]++
+		}
 		r.cancel = cancel
-		m.owners[r.owner]++
 		return r, ctx, nil
 	}
 	return nil, nil, m.wake
 }
 
-func (m *Manager) worker() {
+func (m *Manager) worker(collection bool) {
 	defer m.wg.Done()
 	for {
-		r, ctx, wake := m.claim()
+		r, ctx, wake := m.claim(collection)
 		if r == nil {
 			if wake == nil {
 				return
@@ -373,9 +395,11 @@ func (m *Manager) worker() {
 			out.ErrorCode = "submission_uncertain"
 			out.Message = "Submission may have reached the upstream service; check its result before retrying"
 		}
-		m.owners[r.owner]--
-		if m.owners[r.owner] == 0 {
-			delete(m.owners, r.owner)
+		if !collection {
+			m.owners[r.owner]--
+			if m.owners[r.owner] == 0 {
+				delete(m.owners, r.owner)
+			}
 		}
 		m.terminalLocked(r, status, publicLabel(out.ErrorCode, ""), publicText(out.Message, defaultMessage(status)), result)
 		m.notifyLocked()
