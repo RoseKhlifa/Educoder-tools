@@ -229,6 +229,111 @@ await test('consumer course service and administrator boundary',async t=>{
     const old=await app({'/api/service/today-summary':()=>ok({date:'2020-01-01',timezone:'Asia/Shanghai',completed_students:999,completed_questions:999,total_served_students:999,total_completed_questions:999})});
     assert.match(old.html(),/服务统计暂未同步/);assert.doesNotMatch(old.html(),/完成 <strong>999|已为 <strong>999/);
   });
+  await t.test('course table uses prefetched required unfinished work instead of raw classroom totals', async () => {
+    const page = await app({
+      '/api/courses/COURSE_A/homeworks': () => ok([
+        { id: 1, name: '未完成一', requiredProgressKnown: true, requiredChallengeCount: 3, finishedRequiredChallengeCount: 1 },
+        { id: 2, name: '未完成二', requiredProgressKnown: true, requiredChallengeCount: 2, finishedRequiredChallengeCount: 0 },
+        { id: 3, name: '已完成', requiredProgressKnown: true, requiredChallengeCount: 4, finishedRequiredChallengeCount: 4 },
+      ]),
+    });
+    const row = page.html().match(/<tr class="course-row[\s\S]*?data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '';
+    assert.match(row, /class="table-number homework-count"[^>]*>2<\/span>/);
+    assert.match(row, /可安排/); assert.doesNotMatch(row, /3 份/);
+    assert.match(page.html(), /<th>未完成作业<\/th>/); assert.doesNotMatch(page.html(), /<th>作业<\/th>/);
+  });
+  await t.test('empty successful required list is an authoritative completed course and disables scheduling', async () => {
+    const page = await app({
+      '/api/courses/COURSE_A/homeworks': () => ok([]),
+      '/api/courses/COURSE_B/homeworks': () => ok([]),
+    });
+    const row = page.html().match(/<tr class="course-row[\s\S]*?data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '';
+    assert.match(row, /homework-count"[^>]*>0<\/span>/); assert.match(row, /已完成/);
+    assert.equal(page.get('[data-select-course="COURSE_A"]').disabled, true);
+    assert.equal(page.get('[data-action="start-all"]').disabled, true);
+  });
+  await t.test('unknown required evidence stays one unresolved assignment and is never shown as zero', async () => {
+    const page = await app({ '/api/courses/COURSE_A/homeworks': () => ok([{ id: 1, name: '待核验', requiredProgressKnown: false }]) });
+    const row = page.html().match(/<tr class="course-row[\s\S]*?data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '';
+    assert.match(row, /homework-count"[^>]*>1<\/span>/); assert.match(row, /可安排/);
+    assert.equal(page.get('[data-select-course="COURSE_A"]').disabled, false);
+  });
+  await t.test('manual course refresh and terminal job refresh update the cached actionable count', async () => {
+    let step = 0;
+    const page = await app({
+      '/api/courses/COURSE_A/homeworks': () => ok(step === 0 ? [{ id: 1, name: '待完成', requiredProgressKnown: true, requiredChallengeCount: 2, finishedRequiredChallengeCount: 0 }] : []),
+      '/api/courses/COURSE_B/homeworks': () => ok([]),
+    });
+    assert.match(page.html(), /homework-count"[^>]*>1<\/span>/);
+    step = 1; page.get('[data-action="refresh"]').dispatch('click'); await settle();
+    assert.match(page.html(), /homework-count"[^>]*>0<\/span>/); assert.match(page.html(), /已完成/);
+  });
+  await t.test('a terminal job transition forces a fresh homework list and updates the course row', async () => {
+    let jobStep = 0, homeworkStep = 0;
+    const running = job({ id: 'terminal-refresh', status: 'running', request: { scope: 'course', course: 'COURSE_A', mode: 'submit' }, result: { service_status: 'processing' } });
+    const done = job({ id: 'terminal-refresh', status: 'completed', request: running.request, result: { service_status: 'completed' } });
+    const page = await app({
+      '/api/jobs': () => ok({ jobs: [jobStep === 0 ? running : done] }),
+      '/api/courses/COURSE_A/homeworks': () => ok(homeworkStep === 0 ? [{ id: 1, name: '最后一份', requiredProgressKnown: true, requiredChallengeCount: 1, finishedRequiredChallengeCount: 0 }] : []),
+      '/api/courses/COURSE_B/homeworks': () => ok([]),
+    });
+    assert.match(page.html(), /homework-count"[^>]*>1<\/span>/);
+    jobStep = 1; homeworkStep = 1; await page.tick();
+    assert.match(page.html(), /homework-count"[^>]*>0<\/span>/); assert.match(page.html(), /已完成/);
+    assert.ok(page.requests.filter(item => item.url === '/api/courses/COURSE_A/homeworks').length >= 2);
+  });
+  await t.test('a terminal refresh updates an already open course dialog and keeps its active tab focused', async () => {
+    let complete = false;
+    const running = job({ id: 'open-dialog-refresh', status: 'running', result: { service_status: 'processing' } });
+    const page = await app({
+      '/api/jobs': () => ok({ jobs: [{ ...running, status: complete ? 'completed' : 'running', result: { service_status: complete ? 'completed' : 'processing' } }] }),
+      '/api/courses/COURSE_A/homeworks': () => ok([{ id: 1, name: complete ? '已核验的新结果' : '旧的未完成结果', requiredProgressKnown: true, requiredChallengeCount: 1, finishedRequiredChallengeCount: complete ? 1 : 0 }]),
+    });
+    page.get('[data-course-detail="COURSE_A"]').dispatch('click');
+    page.get('[data-detail-tab="homework"]').focus(); complete = true; await page.tick();
+    const modal = page.html().slice(page.html().indexOf('role="dialog"'));
+    assert.match(modal, /已核验的新结果/); assert.match(modal, /已完成 · 1 \/ 1 必做关卡/); assert.doesNotMatch(modal, /旧的未完成结果|正在更新列表/);
+    assert.equal(page.document.activeElement, page.get('[data-detail-tab="homework"]')); assert.equal(page.document.activeElement.isConnected, true);
+    page.get('[data-action="close-modal"]').dispatch('click');
+    const row = page.html().match(/<tr class="course-row[\s\S]*?data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '';
+    assert.match(row, /homework-count"[^>]*>0<\/span>/); assert.match(row, /已完成/);
+  });
+  await t.test('a late background result never replaces a different confirmation modal', async () => {
+    const pending = deferred();
+    const page = await app({
+      '/api/courses/COURSE_A/homeworks': () => pending.promise,
+      '/api/courses/COURSE_A/exercises': () => ok({items:[{id:701,name:'待确认考试',available:true,submitted:false,scoreKnown:false}]}),
+    });
+    page.get('[data-course-detail="COURSE_A"]').dispatch('click');
+    page.get('[data-detail-tab="exercise"]').dispatch('click');
+    page.get('[data-exam-submit="701"]').dispatch('click');
+    assert.match(page.html(), /data-action="modal-confirm"/);
+    pending.resolve(ok([{id:1,name:'不应覆盖确认框的作业'}])); await settle();
+    const modal = page.html().slice(page.html().indexOf('role="dialog"'));
+    assert.match(modal, /待确认考试|data-action="modal-confirm"/); assert.doesNotMatch(modal, /不应覆盖确认框的作业|data-detail-tab/);
+    assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
+  });
+  await t.test('stale or failed zero counts remain visible but no longer claim completion or block scheduling', async () => {
+    let failed = false;
+    const page = await app({ '/api/courses/COURSE_A/homeworks': () => failed ? failure(503,'UPSTREAM','private stale data') : ok([]), '/api/courses/COURSE_B/homeworks': () => ok([]) });
+    assert.equal(page.get('[data-select-course="COURSE_A"]').disabled, true);
+    failed = true; page.get('[data-action="refresh"]').dispatch('click'); await settle();
+    const row = page.html().match(/<tr class="course-row[\s\S]*?data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '';
+    assert.match(row, /homework-count stale"[^>]*>0<\/span>/); assert.match(row, /待更新/); assert.doesNotMatch(row, /badge completed|>已完成</);
+    assert.equal(page.get('[data-select-course="COURSE_A"]').disabled, false); assert.equal(page.get('[data-action="start-all"]').disabled, false);
+    assert.doesNotMatch(page.html(), /private stale data/);
+  });
+  await t.test('expiration of a verified zero exposes stale status and permits a new arrangement', async () => {
+    const actualNow = Date.now; let now = actualNow(); Date.now = () => now;
+    try {
+      const page = await app({ '/api/courses/COURSE_A/homeworks': () => ok([]), '/api/courses/COURSE_B/homeworks': () => ok([]) });
+      assert.equal(page.get('[data-select-course="COURSE_A"]').disabled, true);
+      now += 120_001; await page.tick();
+      const row = page.html().match(/<tr class="course-row[\s\S]*?data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '';
+      assert.match(row, /homework-count stale"[^>]*>0<\/span>/); assert.match(row, /待更新/); assert.doesNotMatch(row, /badge completed|>已完成</);
+      assert.equal(page.get('[data-select-course="COURSE_A"]').disabled, false); assert.equal(page.get('[data-action="start-all"]').disabled, false);
+    } finally { Date.now = actualNow; }
+  });
   await t.test('login prefetches both lists and opening cached details does not wait or request again', async () => {
     const page=await app();
     for(const id of ['COURSE_A','COURSE_B'])for(const kind of ['homeworks','exercises'])assert.equal(page.requests.filter(item=>item.url===`/api/courses/${id}/${kind}`).length,1);

@@ -3,7 +3,7 @@ import { partitionAdminJobs, renderAdmin, renderAdminJobDetail, type AdminPage, 
 import { canCancelJob, canRetryJob, serviceLabel, type JobActionState, currentServiceJobs, jobProgress, jobTitle, pendingJob, renderJobs, renderServiceDetail, serviceJob, serviceStatus } from './jobs.js';
 import { count, escapeHtml as e, icon } from './ui.js';
 import { renderUserGuidelines } from './guidelines.js';
-import { CourseDetailsCache } from './course-cache.js';
+import { CourseDetailsCache, type CourseCacheEvent } from './course-cache.js';
 import { renderTickets, renderTicketDetail, type TicketState } from './tickets.js';
 import type { AnswerJob, Course, Exercise, Homework, User, QuestionBankSummary, DailyServiceSummary, SupportTicketDetail, TicketCategory, TicketStatus } from './types.js';
 
@@ -20,7 +20,7 @@ const ticketFormDrafts = new Map<string, TicketFormDraft>();
 const state = {
   user: null as User | null, page: 'courses' as Page, courses: [] as Course[], jobs: [] as AnswerJob[],
   selected: [] as string[], loading: false, signingIn: false, creating: false, notice: '', loginError: '', search: '',
-  modal: '' as string, modalKind: '' as '' | 'guidelines' | 'ticket' | 'job', modalAction: null as (() => Promise<void> | void) | null,
+  modal: '' as string, modalKind: '' as '' | 'guidelines' | 'ticket' | 'job' | 'course', modalAction: null as (() => Promise<void> | void) | null,
   progressHistoryOpen: false, questionBank: null as QuestionBankSummary | null, bankLoading: false, bankUnavailable: false, todaySummary: null as DailyServiceSummary | null, todayLoading: false, todayUnavailable: false,
   admin: { overview: {}, users: [], jobs: [], audit: [], loading: false, error: false, jobsView: 'current', jobsKind: 'service' } as AdminState,
 };
@@ -43,12 +43,39 @@ interface CourseDialog {
   loading: Record<DetailTab, boolean>; failed: Record<DetailTab, boolean>; updatedAt: Record<DetailTab, number>;
 }
 let courseDialog: CourseDialog | null = null;
+type HomeworkSync = { state: 'loading' | 'ready' | 'error'; hasPreviousData: boolean };
+const homeworkSync = new Map<string, HomeworkSync>();
 let jobDialog: { id: string; historical: boolean } | null = null;
 const jobActions = new Map<string, JobActionState>();
 const courseCache = new CourseDetailsCache({
   homeworks: id => readCourseData(() => api.homeworks(id)),
   exercises: id => readCourseData(async () => (await api.exercises(id)).items),
-});
+}, { onChange: handleCourseCacheChange });
+function handleCourseCacheChange(event: CourseCacheEvent): void {
+  if (!state.user || !state.courses.some(course => course.identifier === event.identifier)) return;
+  if (event.kind === 'homeworks') {
+    homeworkSync.set(event.identifier, {
+      state: event.state === 'success' ? 'ready' : event.state,
+      hasPreviousData: event.hasPreviousData || Boolean(courseCache.peekHomeworks(event.identifier)),
+    });
+    state.selected = state.selected.filter(id => courseSelectable(id));
+  }
+  const dialog = courseDialog;
+  if (dialog && state.modalKind === 'course' && dialog.course.identifier === event.identifier) {
+    const tab: DetailTab = event.kind === 'homeworks' ? 'homework' : 'exercise';
+    if (event.kind === 'homeworks') {
+      const cached = courseCache.peekHomeworks(event.identifier);
+      if (cached) { dialog.homeworks = cached.data; dialog.updatedAt.homework = cached.updatedAt; }
+    } else {
+      const cached = courseCache.peekExercises(event.identifier);
+      if (cached) { dialog.exercises = cached.data; dialog.updatedAt.exercise = cached.updatedAt; }
+    }
+    dialog.loading[tab] = event.state === 'loading';
+    dialog.failed[tab] = event.state === 'error';
+    renderCourseDialog();
+  } else if (!state.modal) render();
+}
+
 async function readCourseData<T>(read: () => Promise<T>): Promise<T> {
   const session = generation;
   try { return await read(); }
@@ -59,7 +86,7 @@ const accessible = (): boolean => state.user?.service_access !== false && state.
 const activeJobs = (): AnswerJob[] => state.jobs.filter(job => serviceJob(job) && pendingJob(job));
 function stopPoll(): void { if (pollTimer !== undefined) clearTimeout(pollTimer); pollTimer = undefined; }
 function resetSession(message = ''): void {
-  jobActions.clear(); jobDialog = null;
+  jobActions.clear(); jobDialog = null; homeworkSync.clear();
   userTickets = emptyTickets(); adminTickets = emptyTickets(); ticketDialog = null; ticketRetryKeys.clear(); ticketFormDrafts.clear();
   generation++; jobsRevision++; coursesRevision++; adminRevision++; modalRevision++; bankRevision++; bankLoadedAt = 0; todayRevision++; todayLoadedAt = 0; todayLoadedDate = ''; guidelinesSource = 'login'; stopPoll(); courseDialog = null; courseCache.clear();
   Object.assign(state, { user: null, page: 'courses', courses: [], jobs: [], selected: [], loading: false, signingIn: false, creating: false, notice: '', loginError: message, modal: '', modalKind: '', modalAction: null, search: '', progressHistoryOpen: false, questionBank: null, bankLoading: false, bankUnavailable: false, todaySummary: null, todayLoading: false, todayUnavailable: false, admin: { overview: {}, users: [], jobs: [], audit: [], loading: false, error: false, userSearch: '', userFilter: 'all' } });
@@ -118,6 +145,31 @@ function matchingCourseJobs(course: string): AnswerJob[] {
 function blocksCourseScheduling(job: AnswerJob): boolean {
   return jobActions.has(job.id) || pendingJob(job) || serviceStatus(job) === 'support' && !canRetryJob(job);
 }
+interface HomeworkSummary {
+  ready: boolean;
+  count: number;
+  sync: 'loading' | 'ready' | 'error';
+  stale: boolean;
+}
+function homeworkSummary(course: Course): HomeworkSummary {
+  const cached = courseCache.peekHomeworks(course.identifier);
+  const sync = homeworkSync.get(course.identifier);
+  if (!cached) return { ready: false, count: 0, sync: sync?.state ?? 'loading', stale: false };
+  let count = 0;
+  for (const homework of cached.data) {
+    const total = homework.requiredChallengeCount;
+    const finished = homework.finishedRequiredChallengeCount;
+    const known = homework.requiredProgressKnown === true && Number.isSafeInteger(total) && Number.isSafeInteger(finished) && (total as number) >= 0 && (finished as number) >= 0;
+    if (!known || (finished as number) < (total as number)) count++;
+  }
+  return { ready: true, count, sync: sync?.state ?? 'ready', stale: sync?.state === 'error' || cached.stale };
+}
+function courseSelectable(course: string): boolean {
+  const item = state.courses.find(value => value.identifier === course);
+  if (!item || coursePending(course)) return false;
+  const summary = homeworkSummary(item);
+  return !summary.ready || summary.stale || summary.count > 0;
+}
 function courseService(course: string): AnswerJob | undefined {
   const matching = matchingCourseJobs(course);
   return matching.find(pendingJob) ?? matching.find(blocksCourseScheduling) ?? matching[0];
@@ -128,6 +180,18 @@ function coursePending(course: string): boolean {
 function allServicePending(): boolean {
   return currentServiceJobs(state.jobs).some(job => job.request.scope !== 'exercise' && blocksCourseScheduling(job));
 }
+function prefetchCourseDetails(courses: Course[], force = false): void {
+  const identifiers = courses.map(course => course.identifier).filter(Boolean);
+  if (!force) {
+    courseCache.prefetch(identifiers);
+    return;
+  }
+  for (const identifier of new Set(identifiers)) {
+    void courseCache.getHomeworks(identifier, true).catch(() => {});
+    void courseCache.getExercises(identifier, true).catch(() => {});
+  }
+}
+
 function renderCourses(): string {
   const visible = state.courses.filter(course => !state.search || course.name.toLowerCase().includes(state.search.toLowerCase()));
   const active = activeJobs();
@@ -135,10 +199,11 @@ function renderCourses(): string {
   const latest = active[0] ?? current.find(job => serviceStatus(job) === 'support') ?? current.find(job => ['completed', 'submitted', 'awaiting_review', 'graded'].includes(serviceStatus(job)));
   const completed = current.filter(job => serviceStatus(job) === 'completed').length;
   const examSubmitted = latest?.request.scope === 'exercise' && ['submitted', 'awaiting_review', 'graded'].includes(serviceStatus(latest));
-  const selectable = state.courses.filter(course => !coursePending(course.identifier));
+  const selectable = state.courses.filter(course => courseSelectable(course.identifier));
   const selectedAll = selectable.length > 0 && selectable.every(course => state.selected.includes(course.identifier));
+  const actionableCourses = state.courses.filter(course => courseSelectable(course.identifier));
   const latestProgress = latest ? jobProgress(latest) : null;
-  return `<div class="page-head page-heading"><div><span class="eyebrow">我的学习</span><h1>今天，也轻松一点。</h1><p>${e(state.user?.name || '同学')}，选好课程，我们来完成。</p></div><div class="head-actions"><button class="btn button" data-action="refresh" ${state.loading ? 'disabled' : ''}>${icon('refresh')}刷新课程</button><button class="btn accent button primary" data-action="start-all" ${state.loading || state.creating || !state.courses.length || !accessible() || allServicePending() ? 'disabled' : ''}>一键完成全部未完成作业 ${icon('arrow')}</button></div></div>${!accessible() ? '<div class="service-notice">你的服务暂未开通，请联系服务人员。已有完成进度仍可查看。</div>' : ''}<section class="strip" aria-label="课程摘要"><div class="strip-item"><div class="k">我的课程</div><div class="v">${state.courses.length}</div><div class="h">头歌平台同步</div></div><div class="strip-item"><div class="k">当前安排</div><div class="v">${current.length}</div><div class="h">后台持续处理</div></div><div class="strip-item"><div class="k">已选中</div><div class="v">${selectedCount(state.selected)}</div><div class="h">可多选后安排</div></div><div class="strip-item"><div class="k">最近安排进度</div><div class="v">${latestProgress?.percent ?? (completed ? 100 : 0)}%</div><div class="h">当前服务记录</div></div></section><div class="content-grid"><section class="panel-box course-panel"><div class="panel-toolbar"><div><h2>我的课程 <span class="count">${state.courses.length}</span></h2><p class="muted">选择课程，安排其中尚未完成的必做作业。</p></div><div class="toolbar-row"><label class="search-input"><span class="sr-only">搜索课程</span><input data-search placeholder="搜索课程" value="${e(state.search)}"></label><button class="btn button" data-action="select-all" ${state.creating || !accessible() ? 'disabled' : ''}>${selectedAll ? '清空选择' : '全选可安排'}</button></div></div>${state.loading ? '<div class="loading" role="status"><span class="spinner"></span>正在同步你的课程…</div>' : visible.length ? `<div class="course-table-wrap"><table class="course-table" aria-label="我的课程列表"><thead><tr><th class="select-col">选</th><th>课程</th><th>作业</th><th>状态</th><th></th></tr></thead><tbody>${visible.map((course, index) => { const pending = coursePending(course.identifier); const selected = state.selected.includes(course.identifier); return `<tr class="course-row ${selected ? 'selected' : ''}" data-course-row="${e(course.identifier)}"><td class="select-col"><label class="course-select"><input type="checkbox" data-select-course="${e(course.identifier)}" ${selected ? 'checked' : ''} ${pending || state.creating || !accessible() ? 'disabled' : ''}><span class="sr-only">选择${e(course.name)}</span></label></td><td><div class="course-name"><span class="course-index">${String(index + 1).padStart(2, '0')}</span><div><strong>${e(course.name)}</strong>${renderCourseMeta(course)}</div></div></td><td><span class="table-number">${course.homeworkCount === undefined ? '—' : `${course.homeworkCount} 份`}</span></td><td><span class="badge ${pending ? 'processing' : 'waiting'}">${pending ? serviceStatus(courseService(course.identifier)!) === 'support' ? '服务处理中' : '服务已安排' : '可安排'}</span></td><td><button class="text-button" data-course-detail="${e(course.identifier)}">查看详情 ${icon('arrow')}</button></td></tr>`; }).join('')}</tbody></table></div>` : `<div class="panel empty"><h3>${state.search ? '没有找到这门课程' : '还没有课程'}</h3><p>${state.search ? '试试其他课程名称。' : '加入头歌课堂后，刷新这里即可同步。'}</p></div>`}<div class="selection-bar"><label class="select-all"><input type="checkbox" data-action="select-all" ${selectedAll ? 'checked' : ''} ${state.creating || !accessible() ? 'disabled' : ''}> 全选可安排课程</label><span>已选 ${selectedCount(state.selected)} 门课程</span><button class="button primary" data-action="start-selected" ${!state.selected.length || state.creating || !accessible() ? 'disabled' : ''}>${state.creating ? '正在安排…' : '完成所选课程'}</button></div></section><aside class="status-rail side-card"><section class="current-service"><div class="rail-label"><i></i> 我的完成进度</div><h2>${latest ? serviceLabel(latest) : completed ? '安排已完成' : '一切准备就绪'}</h2><p>${latest ? e(jobTitle(latest, state.courses)) : '选好课程后，我们会在这里跟进。'}</p>${latest && examSubmitted ? `<p class="rail-exam-status">已交卷${jobProgress(latest).total ? ` · 共 ${jobProgress(latest).total} 道题` : ''}</p>` : latest ? `<div class="large-progress"><strong>${jobProgress(latest).completed}</strong><span>/ ${jobProgress(latest).total || '—'} ${jobProgress(latest).unit}</span></div><div class="rail-track"><span style="width:${jobProgress(latest).percent}%"></span></div>` : '<div class="ready-mark" aria-hidden="true">✓</div>'}<p class="rail-note">${latest && canRetryJob(latest) ? '本次安排已停止处理，可在完成进度中重新执行。' : latest && serviceStatus(latest) === 'support' ? '放心，服务人员正在处理，无需重复提交。' : '关闭页面也没关系，进度会为你保留。'}</p><button class="text-button" data-nav="progress">查看全部进度 ${icon('arrow')}</button></section><section class="panel reassurance"><h3>只需要三步</h3><ol><li><b>选择课程</b><p>按需要选择，或一键安排全部。</p></li><li><b>交给我们</b><p>处理过程中无需守候。</p></li><li><b>查看进度</b><p>完成后，结果清楚可见。</p></li></ol></section></aside></div>`;
+  return `<div class="page-head page-heading"><div><span class="eyebrow">我的学习</span><h1>今天，也轻松一点。</h1><p>${e(state.user?.name || '同学')}，选好课程，我们来完成。</p></div><div class="head-actions"><button class="btn button" data-action="refresh" ${state.loading ? 'disabled' : ''}>${icon('refresh')}刷新课程</button><button class="btn accent button primary" data-action="start-all" ${state.loading || state.creating || !state.courses.length || !actionableCourses.length || !accessible() || allServicePending() ? 'disabled' : ''}>一键完成全部未完成作业 ${icon('arrow')}</button></div></div>${!accessible() ? '<div class="service-notice">你的服务暂未开通，请联系服务人员。已有完成进度仍可查看。</div>' : ''}<section class="strip" aria-label="课程摘要"><div class="strip-item"><div class="k">我的课程</div><div class="v">${state.courses.length}</div><div class="h">头歌平台同步</div></div><div class="strip-item"><div class="k">当前安排</div><div class="v">${current.length}</div><div class="h">后台持续处理</div></div><div class="strip-item"><div class="k">已选中</div><div class="v">${selectedCount(state.selected)}</div><div class="h">可多选后安排</div></div><div class="strip-item"><div class="k">最近安排进度</div><div class="v">${latestProgress?.percent ?? (completed ? 100 : 0)}%</div><div class="h">当前服务记录</div></div></section><div class="content-grid"><section class="panel-box course-panel"><div class="panel-toolbar"><div><h2>我的课程 <span class="count">${state.courses.length}</span></h2><p class="muted">选择课程，安排其中尚未完成的必做作业。</p></div><div class="toolbar-row"><label class="search-input"><span class="sr-only">搜索课程</span><input data-search placeholder="搜索课程" value="${e(state.search)}"></label><button class="btn button" data-action="select-all" ${state.creating || !accessible() ? 'disabled' : ''}>${selectedAll ? '清空选择' : '全选可安排'}</button></div></div>${state.loading ? '<div class="loading" role="status"><span class="spinner"></span>正在同步你的课程…</div>' : visible.length ? `<div class="course-table-wrap"><table class="course-table" aria-label="我的课程列表"><thead><tr><th class="select-col">选</th><th>课程</th><th>未完成作业</th><th>状态</th><th></th></tr></thead><tbody>${visible.map((course, index) => { const pending = coursePending(course.identifier); const summary = homeworkSummary(course); const selectableCourse = courseSelectable(course.identifier); const selected = state.selected.includes(course.identifier); const countLabel = summary.ready ? String(summary.count) : summary.sync === 'error' ? '未同步' : '同步中…'; const countTitle = summary.stale ? '刷新未完成，显示上次同步结果' : summary.ready ? summary.count === 0 ? '已核验没有未完成的必做作业' : '未完成的必做作业' : summary.sync === 'error' ? '作业列表同步失败，请刷新重试' : '正在同步作业列表'; const statusLabel = pending ? serviceStatus(courseService(course.identifier)!) === 'support' ? '服务处理中' : '服务已安排' : summary.ready && summary.stale ? '待更新' : summary.ready && summary.count === 0 ? '已完成' : summary.sync === 'error' && !summary.ready ? '未同步' : summary.ready ? '可安排' : '同步中'; return `<tr class="course-row ${selected ? 'selected' : ''}" data-course-row="${e(course.identifier)}"><td class="select-col"><label class="course-select"><input type="checkbox" data-select-course="${e(course.identifier)}" ${selected ? 'checked' : ''} ${!selectableCourse || state.creating || !accessible() ? 'disabled' : ''}><span class="sr-only">选择${e(course.name)}</span></label></td><td><div class="course-name"><span class="course-index">${String(index + 1).padStart(2, '0')}</span><div><strong>${e(course.name)}</strong>${renderCourseMeta(course)}</div></div></td><td><span class="table-number homework-count${summary.stale ? ' stale' : ''}" title="${e(countTitle)}">${e(countLabel)}</span></td><td><span class="badge ${pending ? 'processing' : summary.ready && !summary.stale && summary.count === 0 ? 'completed' : 'waiting'}" title="${e(countTitle)}">${statusLabel}</span></td><td><button class="text-button" data-course-detail="${e(course.identifier)}">查看详情 ${icon('arrow')}</button></td></tr>`; }).join('')}</tbody></table></div>` : `<div class="panel empty"><h3>${state.search ? '没有找到这门课程' : '还没有课程'}</h3><p>${state.search ? '试试其他课程名称。' : '加入头歌课堂后，刷新这里即可同步。'}</p></div>`}<div class="selection-bar"><label class="select-all"><input type="checkbox" data-action="select-all" ${selectedAll ? 'checked' : ''} ${state.creating || !accessible() ? 'disabled' : ''}> 全选可安排课程</label><span>已选 ${selectedCount(state.selected)} 门课程</span><button class="button primary" data-action="start-selected" ${!state.selected.length || state.creating || !accessible() ? 'disabled' : ''}>${state.creating ? '正在安排…' : '完成所选课程'}</button></div></section><aside class="status-rail side-card"><section class="current-service"><div class="rail-label"><i></i> 我的完成进度</div><h2>${latest ? serviceLabel(latest) : completed ? '安排已完成' : '一切准备就绪'}</h2><p>${latest ? e(jobTitle(latest, state.courses)) : '选好课程后，我们会在这里跟进。'}</p>${latest && examSubmitted ? `<p class="rail-exam-status">已交卷${jobProgress(latest).total ? ` · 共 ${jobProgress(latest).total} 道题` : ''}</p>` : latest ? `<div class="large-progress"><strong>${jobProgress(latest).completed}</strong><span>/ ${jobProgress(latest).total || '—'} ${jobProgress(latest).unit}</span></div><div class="rail-track"><span style="width:${jobProgress(latest).percent}%"></span></div>` : '<div class="ready-mark" aria-hidden="true">✓</div>'}<p class="rail-note">${latest && canRetryJob(latest) ? '本次安排已停止处理，可在完成进度中重新执行。' : latest && serviceStatus(latest) === 'support' ? '放心，服务人员正在处理，无需重复提交。' : '关闭页面也没关系，进度会为你保留。'}</p><button class="text-button" data-nav="progress">查看全部进度 ${icon('arrow')}</button></section><section class="panel reassurance"><h3>只需要三步</h3><ol><li><b>选择课程</b><p>按需要选择，或一键安排全部。</p></li><li><b>交给我们</b><p>处理过程中无需守候。</p></li><li><b>查看进度</b><p>完成后，结果清楚可见。</p></li></ol></section></aside></div>`;
 }
 function selectedCount(values: string[]): number { return values.length; }
 function renderProgress(): string {
@@ -244,7 +309,8 @@ function restoreTicketForm(draft: TicketFormDraft | null): void {
     }
   }
 }
-function showModal(content: string, action: (() => Promise<void> | void) | null = null, kind: '' | 'guidelines' | 'ticket' | 'job' = ''): void {
+function showModal(content: string, action: (() => Promise<void> | void) | null = null, kind: '' | 'guidelines' | 'ticket' | 'job' | 'course' = ''): void {
+  if (kind !== 'course') courseDialog = null;
   if (kind !== 'ticket') ticketDialog = null;
   if (kind !== 'job') jobDialog = null;
   previousFocus = document.activeElement as HTMLElement | null; modalRevision++;
@@ -271,7 +337,7 @@ async function loadJobs(): Promise<void> {
     const changed = result.jobs.filter(job => !pendingJob(job) && state.jobs.some(previous => previous.id === job.id && pendingJob(previous)));
     state.jobs = result.jobs;
     for (const job of state.jobs) if (jobActions.get(job.id) === 'stopping' && !pendingJob(job)) jobActions.delete(job.id);
-    state.selected = state.selected.filter(id => !coursePending(id));
+    state.selected = state.selected.filter(id => courseSelectable(id));
     if (jobDialog && state.modalKind === 'job') {
       const job = state.jobs.find(item => item.id === jobDialog?.id);
       if (job) state.modal = jobDetailContent(job, jobDialog.historical);
@@ -317,12 +383,15 @@ async function loadTodaySummary(): Promise<void> {
   if (session !== generation || revision !== todayRevision) return;
   todayLoadedAt = Date.now(); todayLoadedDate = serviceDate(); state.todayLoading = false; if (!state.modal) render();
 }
-async function loadCourses(): Promise<void> {
+async function loadCourses(forceDetails = false): Promise<void> {
   const revision = ++coursesRevision; const session = generation; state.loading = true; render();
   try {
     const courses = await api.courses();
     if (session !== generation || revision !== coursesRevision) return;
-    state.courses = courses; courseCache.prefetch(courses.map(course => course.identifier)); state.selected = state.selected.filter(id => courses.some(course => course.identifier === id));
+    state.courses = courses;
+    for (const id of [...homeworkSync.keys()]) if (!courses.some(course => course.identifier === id)) homeworkSync.delete(id);
+    prefetchCourseDetails(courses, forceDetails);
+    state.selected = state.selected.filter(id => courseSelectable(id));
     state.notice = '';
   } catch (error) {
     if (session !== generation || revision !== coursesRevision) return;
@@ -384,7 +453,7 @@ function currentJob(id: string): AnswerJob | undefined { return currentServiceJo
 function refreshJobCourseCache(job: AnswerJob): void {
   if (job.request.scope === 'exercise') return;
   const identifiers = job.request.scope === 'all' ? state.courses.map(course => course.identifier) : job.request.course ? [job.request.course] : [];
-  for (const id of identifiers) void courseCache.getHomeworks(id, true).catch(() => {});
+  for (const id of identifiers) void courseCache.refreshHomeworksAfterPending(id).catch(() => {});
 }
 function confirmJobAction(id: string, action: 'retry' | 'cancel'): void {
   const job = currentJob(id);
@@ -402,7 +471,7 @@ async function performJobAction(id: string, action: 'retry' | 'cancel'): Promise
     if (!job || typeof job.id !== 'string' || !job.id || typeof job.status !== 'string' || !job.request) throw new Error('Invalid job response');
     state.jobs = [job, ...state.jobs.filter(previous => previous.id !== job.id)];
     if (action === 'cancel' && pendingJob(job)) jobActions.set(id, 'stopping'); else jobActions.delete(id);
-    state.page = 'progress'; state.selected = state.selected.filter(course => !coursePending(course));
+    state.page = 'progress'; state.selected = state.selected.filter(course => courseSelectable(course));
     state.notice = action === 'retry' ? pendingJob(job) ? '已重新安排，已完成的关卡会自动跳过。' : '已找到这次重新安排的结果，请查看完成进度。' : pendingJob(job) ? '已请求停止，正在等待任务确认。停止后可重新执行。' : '任务已停止，已完成的结果会保留。';
     render(); refreshJobCourseCache(source); scheduleJobs();
   } catch (error) {
@@ -418,7 +487,7 @@ function cachedCourseDialog(course: Course, tab: DetailTab): CourseDialog {
     updatedAt: { homework: homeworks?.updatedAt ?? 0, exercise: exercises?.updatedAt ?? 0 } };
 }
 function renderCourseDialog(): void {
-  if (!courseDialog) return;
+  if (!courseDialog || state.modalKind !== 'course') return;
   const focus = document.activeElement as HTMLElement | null;
   const tabFocus = focus?.dataset.detailTab; const actionFocus = focus?.dataset.action; const examFocus = focus?.dataset.examSubmit;
   state.modal = renderCourseDetail(courseDialog); render();
@@ -454,7 +523,7 @@ async function loadDialogTab(tab: DetailTab, force: boolean, revision: number, s
 async function courseDetail(id: string): Promise<void> {
   const course = state.courses.find(item => item.identifier === id); if (!course) return;
   courseDialog = cachedCourseDialog(course, 'homework');
-  showModal(renderCourseDetail(courseDialog));
+  showModal(renderCourseDetail(courseDialog), null, 'course');
   await loadDialogTab('homework', false, modalRevision, generation);
 }
 async function switchCourseDetailTab(tab: DetailTab): Promise<void> {
@@ -737,7 +806,7 @@ function bindEvents(): void {
   document.querySelectorAll<HTMLElement>('[data-action]').forEach(button => button.addEventListener(button instanceof HTMLInputElement ? 'change' : 'click', () => {
     switch (button.dataset.action) {
       case 'logout': void logout(); break;
-      case 'refresh': void loadCourses(); break;
+      case 'refresh': void loadCourses(true); break;
       case 'jobs-refresh': void loadJobs(); break;
       case 'user-guidelines': guidelinesSource = button.dataset.guidelinesSource || 'login'; showModal(renderUserGuidelines(), null, 'guidelines'); break;
       case 'detail-refresh': refreshCourseDetail(); break;
@@ -746,8 +815,8 @@ function bindEvents(): void {
       case 'start-all': confirmStart(true); break;
       case 'start-selected': confirmStart(false); break;
       case 'select-all': {
-        const checked = button instanceof HTMLInputElement ? button.checked : !(state.selected.length && state.selected.length === state.courses.filter(course => !coursePending(course.identifier)).length);
-        state.selected = checked ? state.courses.filter(course => !coursePending(course.identifier)).map(course => course.identifier) : [];
+        const checked = button instanceof HTMLInputElement ? button.checked : !(state.selected.length && state.selected.length === state.courses.filter(course => courseSelectable(course.identifier)).length);
+        state.selected = checked ? state.courses.filter(course => courseSelectable(course.identifier)).map(course => course.identifier) : [];
         render(); break;
       }
       case 'close-modal': closeModal(); break;

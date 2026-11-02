@@ -91,6 +91,54 @@ await test('course details cache keeps course reads within the current browser s
     assert.equal((await nextClick)[0].name, 'X');
   });
 
+  await t.test('homework force refresh after a background read is coalesced once and emits cache state changes', async () => {
+    const events = [], h = harness({ onChange: event => events.push(event) });
+    h.cache.prefetch(['A']); await tick();
+    const forced = h.cache.getHomeworks('A', true); assert.equal(h.cache.getHomeworks('A', true), forced);
+    assert.equal(h.calls.filter(call => call.kind === 'homeworks').length, 1); const first = h.calls.find(call => call.kind === 'homeworks'); first.resolve(homework('initial')); await tick();
+    assert.equal(h.calls.filter(call => call.kind === 'homeworks').length, 2); const second = h.calls.filter(call => call.kind === 'homeworks')[1]; second.resolve(homework('refreshed')); await forced;
+    assert.deepEqual(h.cache.peekHomeworks('A').data, homework('refreshed'));
+    const homeworkEvents = events.filter(event => event.kind === 'homeworks');
+    assert.deepEqual(homeworkEvents.map(event => event.state), ['loading', 'success', 'loading', 'success']);
+    assert.equal(homeworkEvents.filter(event => event.state === 'loading').length, 2);
+  });
+  await t.test('clearing a prefetched forced refresh never starts its follow-up in the next session', async () => {
+    const h = harness();
+    h.cache.prefetch(['A']); await tick();
+    const forced = h.cache.getHomeworks('A', true);
+    const rejected = assert.rejects(forced, CourseCacheClearedError);
+    h.cache.clear(); await rejected; await tick();
+    assert.deepEqual(h.keys(), ['homeworks:A', 'exercises:A']);
+    await h.finish();
+    assert.deepEqual(h.keys(), ['homeworks:A', 'exercises:A']);
+    assert.equal(h.cache.peekHomeworks('A'), undefined);
+    const current = h.cache.getHomeworks('NEW'); await tick();
+    assert.deepEqual(h.keys(), ['homeworks:A', 'exercises:A', 'homeworks:NEW']);
+    h.calls[2].resolve(homework('new session')); await current;
+  });
+  await t.test('a settled old read cannot enqueue a forced follow-up after the session clears', async () => {
+    let clearOnSuccess = false;
+    const h = harness({ onChange: event => {
+      if (clearOnSuccess && event.kind === 'homeworks' && event.state === 'success') queueMicrotask(() => h.cache.clear());
+    } });
+    h.cache.prefetch(['A']); await tick();
+    const forced = h.cache.getHomeworks('A', true), rejected = assert.rejects(forced, CourseCacheClearedError);
+    clearOnSuccess = true; h.calls[0].resolve(homework('old settled result')); await rejected; await tick();
+    assert.deepEqual(h.keys(), ['homeworks:A', 'exercises:A']);
+    await h.finish(); assert.equal(h.cache.peekHomeworks('A'), undefined);
+  });
+  await t.test('terminal revalidation follows an already forced read while duplicate terminal events coalesce', async () => {
+    const h = harness();
+    const manual = h.cache.getHomeworks('A', true); await tick();
+    assert.equal(h.cache.getHomeworks('A', true), manual);
+    const terminal = h.cache.refreshHomeworksAfterPending('A');
+    assert.notEqual(terminal, manual);
+    assert.equal(h.cache.refreshHomeworksAfterPending('A'), terminal);
+    h.calls[0].resolve(homework('started before terminal status')); await manual; await tick();
+    assert.deepEqual(h.keys(), ['homeworks:A', 'homeworks:A']);
+    h.calls[1].resolve(homework('after terminal status')); await terminal;
+    assert.equal(h.cache.peekHomeworks('A').data[0].name, 'after terminal status');
+  });
   await t.test('clicking a running prefetch uses that exact read without a duplicate request', async () => {
     const h = harness();
     h.cache.prefetch(['A', 'B']);

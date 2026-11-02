@@ -8,6 +8,15 @@ export interface CourseDetailsLoaders {
 export interface CourseDetailsCacheOptions {
   clock?: () => number;
   ttlMs?: number;
+  onChange?: (event: CourseCacheEvent) => void;
+}
+
+export interface CourseCacheEvent {
+  kind: 'homeworks' | 'exercises';
+  identifier: string;
+  state: 'loading' | 'success' | 'error';
+  updatedAt?: number;
+  hasPreviousData: boolean;
 }
 
 export interface CachedCourseDetails<T> {
@@ -42,6 +51,7 @@ interface Task {
   promise: Promise<Data>;
   resolve: (data: Data) => void;
   reject: (reason: unknown) => void;
+  refreshPromise?: Promise<Data>;
 }
 
 interface Session {
@@ -63,14 +73,21 @@ export class CourseDetailsCache {
   private session = newSession();
   private readonly clock: () => number;
   private readonly ttlMs: number;
+  private readonly onChange?: (event: CourseCacheEvent) => void;
 
   constructor(private readonly loaders: CourseDetailsLoaders, options: CourseDetailsCacheOptions = {}) {
     this.clock = options.clock ?? Date.now;
     this.ttlMs = Math.max(0, options.ttlMs ?? 120_000);
+    this.onChange = options.onChange;
   }
 
   getHomeworks(identifier: string, force = false): Promise<Homework[]> {
     return this.get('homeworks', identifier, force, 'foreground') as Promise<Homework[]>;
+  }
+
+  /** Revalidate after any read that may have started before a job completed. */
+  refreshHomeworksAfterPending(identifier: string): Promise<Homework[]> {
+    return this.get('homeworks', identifier, true, 'foreground', true) as Promise<Homework[]>;
   }
 
   getExercises(identifier: string, force = false): Promise<Exercise[]> {
@@ -114,7 +131,7 @@ export class CourseDetailsCache {
     return { ...entry, stale: this.clock() - entry.updatedAt >= this.ttlMs };
   }
 
-  private get(kind: Kind, identifier: string, force: boolean, lane: Lane): Promise<Data> {
+  private get(kind: Kind, identifier: string, force: boolean, lane: Lane, afterPending = false): Promise<Data> {
     const session = this.session;
     const key = `${kind}:${identifier}`;
     const pending = session.pending.get(key);
@@ -124,6 +141,17 @@ export class CourseDetailsCache {
         session.foreground.push(pending);
         this.drain(session);
       }
+      if (force && kind === 'homeworks') {
+        // A terminal job event must not reuse a forced read started before that
+        // event. Ordinary duplicate refresh clicks still share the current read.
+        if (afterPending && pending.refreshPromise === pending.promise) pending.refreshPromise = undefined;
+        const refresh = (): Promise<Data> => {
+          if (session !== this.session) throw new CourseCacheClearedError();
+          return this.get(kind, identifier, true, lane);
+        };
+        pending.refreshPromise ??= pending.promise.then(refresh, refresh);
+        return pending.refreshPromise;
+      }
       return pending.promise;
     }
     const entry = this.peek(kind, identifier);
@@ -132,9 +160,10 @@ export class CourseDetailsCache {
     let resolve!: Task['resolve'];
     let reject!: Task['reject'];
     const promise = new Promise<Data>((done, fail) => { resolve = done; reject = fail; });
-    const task: Task = { key, identifier, kind, lane, status: 'queued', promise, resolve, reject };
+    const task: Task = { key, identifier, kind, lane, status: 'queued', promise, resolve, reject, ...(force && kind === 'homeworks' ? { refreshPromise: promise } : {}) };
     session.pending.set(key, task);
     session[lane].push(task);
+    this.onChange?.({ kind, identifier, state: 'loading', hasPreviousData: Boolean(entry) });
     this.drain(session);
     return promise;
   }
@@ -171,13 +200,19 @@ export class CourseDetailsCache {
     }).then(
       data => {
         const current = session === this.session;
-        if (current) session.entries.set(task.key, { data, updatedAt: this.clock() });
+        const updatedAt = this.clock();
+        if (current) {
+          session.entries.set(task.key, { data, updatedAt });
+          this.onChange?.({ kind: task.kind, identifier: task.identifier, state: 'success', updatedAt, hasPreviousData: true });
+        }
         this.finish(session, task);
         if (current) task.resolve(data);
       },
       error => {
+        const current = session === this.session;
+        if (current) this.onChange?.({ kind: task.kind, identifier: task.identifier, state: 'error', hasPreviousData: Boolean(session.entries.get(task.key)) });
         this.finish(session, task);
-        if (session === this.session) task.reject(error);
+        if (current) task.reject(error);
       },
     );
   }

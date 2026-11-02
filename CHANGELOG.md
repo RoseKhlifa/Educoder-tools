@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.53 - 2026-11-02
+
+- Synchronize unfinished homework counts and course completion with session-scoped detail refreshes
+
 ## 0.1.52 - 2026-11-02
 
 - Allow users to stop and restart interrupted homework tasks with owner-bound idempotent retries
