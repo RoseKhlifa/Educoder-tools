@@ -276,7 +276,8 @@ func (s *Store) candidate(ctx context.Context, id int64) (Candidate, error) {
 	var c Candidate
 	var parent sql.NullInt64
 	var stamp string
-	err := s.db.QueryRowContext(ctx, "SELECT id,revision_hash,contract_hash,files_hash,source,provider,model,prompt_version,parent_candidate_id,created_at FROM solutions WHERE id=?", id).Scan(&c.ID, &c.RevisionHash, &c.ContractHash, &c.FilesHash, &c.Source, &c.Provider, &c.Model, &c.PromptVersion, &parent, &stamp)
+	var editMode string
+	err := s.db.QueryRowContext(ctx, `SELECT s.id,s.revision_hash,s.contract_hash,s.files_hash,s.source,s.provider,s.model,s.prompt_version,s.parent_candidate_id,s.created_at,COALESCE(json_extract(e.contract_json,'$.edit_mode'),'') FROM solutions s JOIN execution_contracts e ON e.contract_hash=s.contract_hash WHERE s.id=?`, id).Scan(&c.ID, &c.RevisionHash, &c.ContractHash, &c.FilesHash, &c.Source, &c.Provider, &c.Model, &c.PromptVersion, &parent, &stamp, &editMode)
 	if errors.Is(err, sql.ErrNoRows) {
 		return c, ErrNotFound
 	}
@@ -324,9 +325,13 @@ func (s *Store) candidate(ctx context.Context, id int64) (Candidate, error) {
 		c.Validations = append(c.Validations, v)
 		if v.Result == "failed" {
 			c.Status = "rejected"
+		} else if v.Result == "passed" && (v.Kind == "formal_workspace" || editMode == "terminal" && v.Kind == "formal") {
+			// Legacy terminal formal rows also describe only their existing
+			// workspace. They never establish portable script completeness.
+			c.Status = "workspace_passed"
 		} else if v.Result == "passed" && v.Kind == "formal" {
 			c.Status = "upstream_verified"
-		} else if v.Result == "passed" && v.Kind == "selftest" && c.Status != "upstream_verified" && c.Status != "rejected" {
+		} else if v.Result == "passed" && v.Kind == "selftest" && c.Status != "upstream_verified" && c.Status != "workspace_passed" && c.Status != "rejected" {
 			c.Status = "selftest_passed"
 		}
 	}
@@ -430,7 +435,18 @@ func (s *Store) RecordValidation(ctx context.Context, v Validation) error {
 	if err != nil {
 		return err
 	}
-	if v.Kind != "selftest" && v.Kind != "formal" && v.Kind != "structural" {
+	if v.Kind == "formal" {
+		snapshot, err := s.Snapshot(ctx, c.Ref)
+		if err != nil {
+			return err
+		}
+		if snapshot.EditMode == "terminal" {
+			// Defense for callers predating workspace-specific evidence. Keep
+			// their successful run but do not promote a potentially partial script.
+			v.Kind = "formal_workspace"
+		}
+	}
+	if v.Kind != "selftest" && v.Kind != "formal" && v.Kind != "formal_workspace" && v.Kind != "structural" {
 		return errors.New("unknown validation kind")
 	}
 	if v.Result != "passed" && v.Result != "failed" && v.Result != "error" && v.Result != "unknown" {
@@ -442,7 +458,7 @@ func (s *Store) RecordValidation(ctx context.Context, v Validation) error {
 	if v.TestCount < 0 || v.PassedCount < 0 || v.PassedCount > v.TestCount {
 		return errors.New("invalid validation test counts")
 	}
-	if v.Result == "passed" && v.Kind == "formal" && (v.SavedFilesHash != c.FilesHash || v.SubmittedFilesHash != c.FilesHash || !v.Terminal || !v.Complete || v.TestCount == 0 || v.PassedCount != v.TestCount) {
+	if v.Result == "passed" && (v.Kind == "formal" || v.Kind == "formal_workspace") && (v.SavedFilesHash != c.FilesHash || v.SubmittedFilesHash != c.FilesHash || !v.Terminal || !v.Complete || v.TestCount == 0 || v.PassedCount != v.TestCount) {
 		return errors.New("formal pass requires complete terminal evidence bound to saved and submitted files")
 	}
 	for _, text := range []string{v.Feedback, v.RunID} {

@@ -15,6 +15,12 @@ type externalCandidateStore interface {
 }
 
 func (s *Service) bindExternalCandidates(ctx context.Context, ref questionbank.Ref, loaded LoadedProblem) error {
+	// A terminal candidate is an executable workspace script, whereas an
+	// external programming answer may only be an editor placeholder. Only
+	// candidates validated under the terminal contract are reusable here.
+	if loaded.Snapshot.EditMode == "terminal" {
+		return nil
+	}
 	store, ok := s.store.(externalCandidateStore)
 	if !ok || loaded.ExternalIdentity.Experiment == "" || loaded.ExternalIdentity.Title == "" {
 		return nil

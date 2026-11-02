@@ -43,7 +43,7 @@ WITH programming_evidence AS (
 ), current_programming_state AS (
  SELECT solution_id, MAX(id) AS evidence_id
  FROM programming_evidence
- WHERE result = 'failed' OR (kind = 'formal' AND result = 'passed')
+ WHERE result = 'failed' OR (kind IN ('formal','formal_workspace') AND result = 'passed')
  GROUP BY solution_id
 ), verified_revisions AS (
  SELECT s.revision_hash,
@@ -55,6 +55,7 @@ WITH programming_evidence AS (
  JOIN problems p ON p.id = r.problem_id AND p.kind = 'programming'
  JOIN execution_contracts e ON e.contract_hash = s.contract_hash
  WHERE v.kind = 'formal' AND v.result = 'passed'
+  AND COALESCE(json_extract(e.contract_json, '$.edit_mode'), '') <> 'terminal'
   AND v.files_hash = s.files_hash AND v.saved_files_hash = s.files_hash
   AND v.submitted_files_hash = s.files_hash
   AND v.revision_hash = s.revision_hash AND v.contract_hash = s.contract_hash

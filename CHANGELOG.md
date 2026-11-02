@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.60 - 2026-11-03
+
+- Support terminal-only Linux tasks with single-use receipts, full-score verification and workspace-only bank evidence
+
 ## 0.1.59 - 2026-11-02
 
 - Adapt lazy homework runtimes and exact LF bank candidates; preserve effective repair state and separate runtime failures

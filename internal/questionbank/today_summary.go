@@ -106,7 +106,7 @@ func (s *Store) TodaySummary(ctx context.Context, at time.Time, linkedOwners map
 		 JOIN solver_runs r ON r.id=json_extract(v.evidence_json,'$.run_id') AND r.status='passed'
 		 JOIN solutions c ON c.id=v.solution_id
 		 WHERE v.created_at<?
-		 AND json_extract(v.evidence_json,'$.kind')='formal'
+		 AND json_extract(v.evidence_json,'$.kind') IN ('formal','formal_workspace')
 		 AND json_extract(v.evidence_json,'$.result')='passed'`,
 	}
 	// A single read transaction keeps both kinds on the same SQLite snapshot.
@@ -159,7 +159,7 @@ func (s *Store) TodaySummary(ctx context.Context, at time.Time, linkedOwners map
 				}
 			} else {
 				var proof Validation
-				if json.Unmarshal([]byte(evidence), &proof) != nil || proof.CandidateID != candidateID || proof.RunID != id || proof.Kind != "formal" || proof.Result != "passed" || !proof.Terminal || !proof.Complete || proof.TestCount <= 0 || proof.TestCount != proof.PassedCount || filesHash == "" || proof.FilesHash != filesHash || proof.SavedFilesHash != filesHash || proof.SubmittedFilesHash != filesHash || proof.RevisionHash != revisionHash || proof.ContractHash != contractHash {
+				if json.Unmarshal([]byte(evidence), &proof) != nil || proof.CandidateID != candidateID || proof.RunID != id || (proof.Kind != "formal" && proof.Kind != "formal_workspace") || proof.Result != "passed" || !proof.Terminal || !proof.Complete || proof.TestCount <= 0 || proof.TestCount != proof.PassedCount || filesHash == "" || proof.FilesHash != filesHash || proof.SavedFilesHash != filesHash || proof.SubmittedFilesHash != filesHash || proof.RevisionHash != revisionHash || proof.ContractHash != contractHash {
 					continue
 				}
 				addQuestion("programming")

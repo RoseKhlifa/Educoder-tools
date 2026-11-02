@@ -35,6 +35,9 @@ func (s *Service) ReconcileClient(ctx context.Context, client *educoder.Client, 
 		return result, nil
 	}
 	eval := result.Evaluation
+	if eval != nil && eval.ReuseUnproven {
+		return result, errors.New("workspace-only terminal evaluation cannot be reconciled as an independently reusable editor answer")
+	}
 	// EducoderAdapter uses status=error only after SaveCode and BuildCode
 	// succeed and WaitEvaluation fails. save_error/build_error cannot qualify.
 	if record.Status != "uncertain" || eval == nil || eval.Status != "error" || result.CandidateID <= 0 || result.CodeHash == "" || eval.SavedFilesHash != result.CodeHash {
@@ -88,6 +91,9 @@ func (s *Service) ReconcileClient(ctx context.Context, client *educoder.Client, 
 	snapshot, err := problem.Prepare(loaded.Snapshot)
 	if err != nil {
 		return result, err
+	}
+	if snapshot.EditMode == "terminal" {
+		return result, errors.New("terminal workspace state is not editor-source reconciliation evidence")
 	}
 	if (questionbank.Ref{RevisionHash: snapshot.RevisionHash, ContractHash: snapshot.ContractHash}) != state.SnapshotRef {
 		return result, errors.New("current problem revision or execution contract differs from saved run")

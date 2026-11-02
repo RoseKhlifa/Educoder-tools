@@ -135,6 +135,22 @@ func TestCollectionObjectiveFullScoreDedupAndOwner(t *testing.T) {
 	}
 }
 
+func TestCollectionNeverImportsTerminalPlaceholderAsAnswer(t *testing.T) {
+	h, f, owner := collectionTestSetup(t)
+	st, yes := 0, true
+	f.task.ST = &st
+	f.task.Challenge.ST = &st
+	f.task.Challenge.WithCodeFile = &yes
+	f.task.Chooses = nil
+	f.task.Environments = []educoder.ProgrammingEnvironment{{EnvironmentID: 12, TabType: 4}}
+	f.task.Challenge.Path = "case1/code.sh；"
+	f.files = []educoder.CodeFile{{Path: "case1/code.sh", Filename: "code.sh", Language: "shell", Content: "Use the terminal"}}
+	s, err := h.Scan(context.Background(), f, owner, nil)
+	if err != nil || s.Collected != 0 || f.codeReads != 0 {
+		t.Fatalf("terminal placeholder treated as source: %+v reads=%d err=%v", s, f.codeReads, err)
+	}
+}
+
 func TestCollectionObjectiveRejectsUnprovenOrMismatchedAnswers(t *testing.T) {
 	cases := map[string]func(*collectionFixture){
 		"cross_game":      func(f *collectionFixture) { f.task.Game.Identifier = "OTHER" },

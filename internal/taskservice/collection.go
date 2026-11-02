@@ -433,6 +433,13 @@ func (h *Collector) collectLevel(ctx context.Context, c CollectionReader, owner 
 	}
 	switch t.Kind() {
 	case educoder.TaskKindProgramming:
+		// Terminal-only tasks expose a readme-like placeholder, not the script
+		// that changed the runtime. Only the execution adapter can bind such a
+		// script to a formal evaluation; never import the placeholder as an answer.
+		if t.IsTerminalTask() {
+			s.skip("terminal_submitted_script_unobservable", false)
+			return nil
+		}
 		if t.Game.Status != 2 || len(t.TestSets) == 0 {
 			s.skip("programming_evaluation_unconfirmed", true)
 			return nil

@@ -146,13 +146,15 @@ func (s *Store) ContributedQuestions(ctx context.Context, owner string) (int64, 
 	rows, err = tx.QueryContext(ctx, `SELECT r.id,`+completionRunProjection+`,s.id,s.revision_hash,s.contract_hash,s.files_hash,v.evidence_json
  FROM solutions s JOIN problem_revisions rev ON rev.revision_hash=s.revision_hash
  JOIN problems p ON p.id=rev.problem_id AND p.kind='programming'
+ JOIN execution_contracts contract ON contract.contract_hash=s.contract_hash
  JOIN verifications v ON v.solution_id=s.id
  JOIN verifications current ON current.solution_id=s.id AND current.id=(
   SELECT MAX(decisive.id) FROM verifications decisive WHERE decisive.solution_id=s.id
   AND (json_extract(decisive.evidence_json,'$.result')='failed' OR
-   (json_extract(decisive.evidence_json,'$.kind')='formal' AND json_extract(decisive.evidence_json,'$.result')='passed')))
+   (json_extract(decisive.evidence_json,'$.kind') IN ('formal','formal_workspace') AND json_extract(decisive.evidence_json,'$.result')='passed')))
  JOIN solver_runs r ON r.id=json_extract(v.evidence_json,'$.run_id') AND r.status='passed'
  WHERE r.owner=? AND json_extract(v.evidence_json,'$.kind')='formal' AND json_extract(v.evidence_json,'$.result')='passed'
+ AND COALESCE(json_extract(contract.contract_json,'$.edit_mode'),'')<>'terminal'
  AND json_extract(current.evidence_json,'$.kind')='formal' AND json_extract(current.evidence_json,'$.result')='passed'
  AND json_extract(current.evidence_json,'$.files_hash')=s.files_hash
  AND json_extract(current.evidence_json,'$.saved_files_hash')=s.files_hash

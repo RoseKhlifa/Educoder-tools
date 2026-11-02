@@ -88,6 +88,7 @@ go run ./cmd/web
 `cmd/bankimport` 用于把固定 Git commit 的公开外部题库导入应用题库。它只写入来源清单和未验证候选绑定，不会把外部声明直接当作正确答案；完整流程、固定 commit 和 544/271/273 的实测报告见 [外部题库导入](docs/external-answer-bank.md)。绘图题的 SSH/SFTP 与 `game_build` 协议见 [绘图题协议](docs/graphic-protocol.md)。
 
 - [代码题协议](docs/programming-protocol.md)：题目、代码读取、自测、提交和进度协议。
+- [Linux 终端协议](docs/terminal-protocol.md)：独立命令行关卡的脚本执行、单次回执、正式评测与满分复核。
 - [绘图题协议](docs/graphic-protocol.md)：StarUML `.mdj` 文件的运行环境、SSH/SFTP、提交和复核链路。
 - [外部题库导入](docs/external-answer-bank.md)：固定公开仓库版本的安全导入、匹配与验证边界。
 - [已通过答案采集](docs/verified-collection.md)：登录后的只读核验、证据门槛与采集限制。

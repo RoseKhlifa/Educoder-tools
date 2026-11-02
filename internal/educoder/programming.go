@@ -216,16 +216,17 @@ func programmingExtras(t *Task) map[string]any {
 // SavedCode keeps the evaluation key in memory only. JSON output omits it.
 // Its private binding prevents another task/file's save response being reused.
 type SavedCode struct {
-	CommitID        string `json:"commitID"`
-	Resubmit        string `json:"resubmit"`
-	ContentModified int    `json:"content_modified"`
-	Size            int64  `json:"size"`
-	Evaluate        int    `json:"evaluate"`
-	SecKey          string `json:"-"`
-	gameIdentifier  string
-	filePath        string
-	myshixunID      int64
-	evaluationPort  int
+	CommitID           string `json:"commitID"`
+	Resubmit           string `json:"resubmit"`
+	ContentModified    int    `json:"content_modified"`
+	Size               int64  `json:"size"`
+	Evaluate           int    `json:"evaluate"`
+	SecKey             string `json:"-"`
+	gameIdentifier     string
+	filePath           string
+	myshixunID         int64
+	evaluationPort     int
+	terminalEvaluation bool
 }
 
 func (c *Client) SaveCode(ctx context.Context, t *Task, filePath, content string, evaluate bool) (*SavedCode, error) {
@@ -234,6 +235,15 @@ func (c *Client) SaveCode(ctx context.Context, t *Task, filePath, content string
 	}
 	environment, err := programmingEnvironment(t)
 	if err != nil {
+		return nil, err
+	}
+	return c.saveCodeInEnvironment(ctx, t, filePath, content, evaluate, environment)
+}
+
+// Terminal evaluation also saves an unchanged upstream placeholder to obtain
+// its evaluation key. Executed terminal scripts never enter that editor file.
+func (c *Client) saveCodeInEnvironment(ctx context.Context, t *Task, filePath, content string, evaluate bool, environment ProgrammingEnvironment) (*SavedCode, error) {
+	if err := requireCodePath(t, filePath); err != nil {
 		return nil, err
 	}
 	if validIdentifier(t.MyShixun.Identifier) != nil || t.MyShixun.ID <= 0 || t.Game.ID <= 0 || t.Challenge.ID <= 0 || t.User.UserID <= 0 || t.Game.MyShixunID != t.MyShixun.ID {
@@ -259,10 +269,14 @@ func (c *Client) SaveCode(ctx context.Context, t *Task, filePath, content string
 	if err := c.request(ctx, http.MethodPost, "/api/myshixuns/"+t.MyShixun.Identifier+"/update_file.json", nil, body, taskRef(t), &response); err != nil {
 		return nil, err
 	}
-	if response.Content.CommitID == "" || evaluate && response.SecKey == "" {
+	terminal := t.IsTerminalTask() && environment.TabType == 4
+	// Terminal submits return a key without an editor Git commit. The source
+	// frontend sends commitID="" in that layout; editor submissions still
+	// require their concrete saved revision.
+	if !terminal && response.Content.CommitID == "" || evaluate && response.SecKey == "" {
 		return nil, errors.New("保存响应缺少 commitID 或评测密钥")
 	}
-	return &SavedCode{CommitID: response.Content.CommitID, Resubmit: response.Resubmit, ContentModified: response.ContentModified, Size: response.Content.Size, Evaluate: mode, SecKey: response.SecKey, gameIdentifier: t.Game.Identifier, filePath: filePath, myshixunID: t.MyShixun.ID}, nil
+	return &SavedCode{CommitID: response.Content.CommitID, Resubmit: response.Resubmit, ContentModified: response.ContentModified, Size: response.Content.Size, Evaluate: mode, SecKey: response.SecKey, gameIdentifier: t.Game.Identifier, filePath: filePath, myshixunID: t.MyShixun.ID, terminalEvaluation: terminal}, nil
 }
 
 type SelfTestOptions struct {
@@ -436,7 +450,7 @@ func validateSaved(t *Task, saved *SavedCode, evaluation bool) error {
 	if err := requireProgramming(t); err != nil {
 		return err
 	}
-	if saved == nil || saved.gameIdentifier != t.Game.Identifier || saved.myshixunID != t.MyShixun.ID || saved.SecKey == "" || saved.CommitID == "" {
+	if saved == nil || saved.gameIdentifier != t.Game.Identifier || saved.myshixunID != t.MyShixun.ID || saved.SecKey == "" || saved.CommitID == "" && !(saved.terminalEvaluation && t.IsTerminalTask()) {
 		return errors.New("评测需要当前关卡在内存中的保存响应")
 	}
 	if evaluation && saved.Evaluate != 1 {
@@ -451,6 +465,13 @@ func (c *Client) BuildCode(ctx context.Context, t *Task, saved *SavedCode) (*Bui
 	}
 	environment, err := programmingEnvironment(t)
 	if err != nil {
+		return nil, err
+	}
+	return c.buildCodeInEnvironment(ctx, t, saved, environment)
+}
+
+func (c *Client) buildCodeInEnvironment(ctx context.Context, t *Task, saved *SavedCode, environment ProgrammingEnvironment) (*BuildResult, error) {
+	if err := validateSaved(t, saved, true); err != nil {
 		return nil, err
 	}
 	extras := programmingExtras(t)

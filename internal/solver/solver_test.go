@@ -53,6 +53,9 @@ func (f *fakeStore) RecordValidation(_ context.Context, v questionbank.Validatio
 			if v.Result == "passed" && v.Kind == "formal" {
 				f.candidates[i].Status = "upstream_verified"
 			}
+			if v.Result == "passed" && v.Kind == "formal_workspace" {
+				f.candidates[i].Status = "workspace_passed"
+			}
 		}
 	}
 	return nil

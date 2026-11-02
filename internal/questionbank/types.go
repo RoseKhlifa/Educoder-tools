@@ -38,8 +38,10 @@ type Candidate struct {
 }
 
 type Validation struct {
-	ID                 int64     `json:"id"`
-	CandidateID        int64     `json:"candidate_id"`
+	ID          int64 `json:"id"`
+	CandidateID int64 `json:"candidate_id"`
+	// formal_workspace verifies a particular existing workspace, without
+	// proving that the candidate alone can rebuild it for another account.
 	Kind               string    `json:"kind"`
 	Result             string    `json:"result"`
 	FilesHash          string    `json:"files_hash"`

@@ -22,6 +22,9 @@ type EducoderAdapter struct {
 	expected         map[string]map[string]string
 	graphic          *educoder.GraphicProtocol
 	graphicDocuments map[string]*educoder.GraphicDocument
+	terminalTasks    map[string]*terminalBinding
+	terminalRun      func(context.Context, *educoder.Task, string, educoder.TerminalOptions) (*educoder.TerminalResult, error)
+	terminalSubmit   func(context.Context, *educoder.Task, *educoder.TerminalResult, educoder.PollOptions) (*educoder.EvaluationResult, error)
 }
 
 func NewEducoderAdapter(client *educoder.Client) (*EducoderAdapter, error) {
@@ -48,6 +51,9 @@ func (a *EducoderAdapter) Load(ctx context.Context, target Target) (LoadedProble
 	}
 	if t.Kind() == educoder.TaskKindGraphic {
 		return a.loadGraphic(ctx, t, target)
+	}
+	if t.IsTerminalTask() {
+		return a.loadTerminal(t, target)
 	}
 	pt, err := a.Client.ReadProgramming(ctx, t)
 	if err != nil {
@@ -92,6 +98,15 @@ func (a *EducoderAdapter) bindSnapshot(loaded LoadedProblem) {
 		a.expected = map[string]map[string]string{}
 	}
 	a.expected[loaded.target.Game] = hashes
+	if loaded.terminalIdentity != nil {
+		if a.terminalTasks == nil {
+			a.terminalTasks = map[string]*terminalBinding{}
+		}
+		old := a.terminalTasks[loaded.target.Game]
+		if old == nil || old.identity != *loaded.terminalIdentity {
+			a.terminalTasks[loaded.target.Game] = &terminalBinding{identity: *loaded.terminalIdentity, executions: map[string]*terminalExecution{}}
+		}
+	}
 	if loaded.graphicDocument != nil {
 		if a.graphicDocuments == nil {
 			a.graphicDocuments = map[string]*educoder.GraphicDocument{}
@@ -163,6 +178,9 @@ func (a *EducoderAdapter) SelfTest(ctx context.Context, target Target, file prob
 	if err != nil {
 		return SelfTest{}, err
 	}
+	if t.IsTerminalTask() || a.hasTerminalBinding(target.Game) {
+		return a.selfTestTerminal(ctx, t, target, file, input, expected)
+	}
 	if err := a.guardEditor(ctx, t, file); err != nil {
 		return SelfTest{}, err
 	}
@@ -194,6 +212,9 @@ func (a *EducoderAdapter) Submit(ctx context.Context, target Target, file proble
 	t, err := a.task(ctx, target)
 	if err != nil {
 		return Evaluation{}, err
+	}
+	if t.IsTerminalTask() || a.hasTerminalBinding(target.Game) {
+		return a.submitTerminal(ctx, t, target, file)
 	}
 	if t.Kind() == educoder.TaskKindGraphic {
 		return a.submitGraphic(ctx, t, target, file)

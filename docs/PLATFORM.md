@@ -28,7 +28,7 @@
 | GET | `/api/auth/me` | 返回本人公开头歌资料与平台 `id / tenant_id / role / status` |
 | POST | `/api/auth/logout` | 删除当前站内会话并清 Cookie |
 | GET | `/api/service/today-summary` | 按可核验记录累计及北京时间当日实际完成的学生数与题数，仅返回日期、时区和计数 |
-| GET | `/api/question-bank/summary` | 全站已验证客观题、编程题及合计，以及当前用户去重贡献题数 |
+| GET | `/api/question-bank/summary` | 全站客观题、编程题、绘图题库存及合计，以及当前用户去重贡献题数 |
 | GET | `/api/avatar` | 当前用户头像，固定官方来源与内存缓存 |
 | GET | `/api/courses` | 本人课堂，默认 `status=processing` |
 | GET | `/api/courses/:course/homeworks` | 所选课堂作业摘要 |
@@ -86,7 +86,7 @@
 
 用户端左侧栏底部、移动端主内容下方展示题库汇总及服务说明，课程页和完成进度页均保留入口。点击《用户准则》沿用登录页弹窗，关闭后焦点返回对应入口。该区域没有题干、答案、代码、个人任务、模型费用或额度，也不将总量当作课程覆盖率或成绩承诺。
 
-`GET /api/question-bank/summary` 复用当前会话、账号状态与同源校验，返回 `verified_objective_questions`、`verified_programming_problems`、`total_verified_questions`、`contributed_questions` 四个非负整数。前三项为全站可复用数量，合计严格等于两项之和。客观题仅统计资源证据完整且存在已核验答案的独立 `question_key`；编程题统计当前仍符合正式完整通过、保存/提交哈希绑定条件的独立 `revision_hash`，同题多候选或执行契约不重复。历史整份客观题批次快照不直接换算成单题数。
+`GET /api/question-bank/summary` 复用当前会话、账号状态与同源校验，返回 `objective_questions`、`programming_problems`、`graphic_problems`、`total_questions`、`contributed_questions` 五个非负整数。前三项为客观题、编程题、绘图题的库存，合计为 `total_questions`，涵盖完整可用的外部候选与本地题目身份，并不表示每份答案均已验证。相同题目下多个候选和执行契约不重复计量；求解器仍独立检查答案的正式通过与哈希绑定证据。独立终端脚本尚未证明可从干净环境复现，不计入共享题库库存与个人贡献；当前工作区正式通过仍计入可核验服务完成量。原站只读采集不将终端占位文件当作正确答案。
 
 `contributed_questions` 按服务端当前会话身份查询，表示该用户提供或核验过、目前仍可复用的不同题目，不代表全站首次新增数，也不代表已完成作业数。重复采集、多个答案和重试不增加同一用户同一道题的贡献。客观题采集在重复读取、满分核验及入库后记录幂等归因；历史正式执行可通过 owner 与核验证据恢复归因，无 owner 的历史采集不按时间或任务汇总猜测。个人字段独立查询，绝不写入全站共享缓存。侧栏在缺少个人字段时显示待核对，不伪造为零。
 

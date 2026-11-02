@@ -18,6 +18,8 @@ type InventorySummary struct {
 // External answer variants and repeated provenance do not multiply a question;
 // a source identity already bound to a local revision is represented there only.
 // Incomplete references and rejected imports cannot create inventory questions.
+// Terminal workspace snapshots are excluded until a self-contained script can
+// be proven independently reproducible; their passing service runs remain kept.
 func (s *Store) InventorySummary(ctx context.Context) (InventorySummary, error) {
 	var out InventorySummary
 	err := s.db.QueryRowContext(ctx, `
@@ -28,6 +30,7 @@ WITH local_revisions AS (
  JOIN problems p ON p.id = r.problem_id AND p.kind = 'programming'
  JOIN problem_snapshots ps ON ps.revision_hash = r.revision_hash
  JOIN execution_contracts e ON e.contract_hash = ps.contract_hash
+ WHERE COALESCE(json_extract(e.contract_json, '$.edit_mode'), '') <> 'terminal'
  GROUP BY r.revision_hash
 ), external_identities AS (
  SELECT DISTINCT experiment, title, position, kind

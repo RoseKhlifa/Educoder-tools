@@ -95,6 +95,7 @@ type LoadedProblem struct {
 	// ExternalIdentity locates source references without changing portable hashes.
 	ExternalIdentity questionbank.ExternalIdentity
 	graphicDocument  *educoder.GraphicDocument
+	terminalIdentity *terminalTaskIdentity
 	// Key is a per-runtime lock key such as myshixun ID. It is not persisted.
 	Key    string
 	target Target
@@ -106,6 +107,7 @@ type SelfTest struct {
 	Completed      bool
 	Output         string
 	Matches        bool
+	ExitCode       *int
 	CompileOK      *bool
 	SavedFilesHash string
 }
@@ -119,6 +121,9 @@ type Evaluation struct {
 	PassedCount        int
 	SavedFilesHash     string
 	SubmittedFilesHash string
+	// ReuseUnproven distinguishes a passing workspace from proof that this
+	// candidate alone can reproduce that state from an independent baseline.
+	ReuseUnproven bool
 }
 
 type Progress struct {
@@ -582,11 +587,11 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 	var candidates []questionbank.Candidate
 	legacyRetest := make(map[int64]bool)
 	for _, c := range allCandidates {
-		if c.Status == "upstream_verified" {
+		if snap.EditMode != "terminal" && c.Status == "upstream_verified" {
 			candidates = append(candidates, c)
 		}
 	}
-	if len(candidates) == 0 {
+	if len(candidates) == 0 && snap.EditMode != "terminal" {
 		for _, c := range allCandidates {
 			if c.Status != "candidate" && c.Status != "selftest_passed" {
 				continue
@@ -600,7 +605,7 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			}
 		}
 	}
-	if len(candidates) == 0 && req.Mode != ModeGenerateOnly && len(snap.PublicTests) > 0 {
+	if len(candidates) == 0 && snap.EditMode != "terminal" && req.Mode != ModeGenerateOnly && len(snap.PublicTests) > 0 {
 		for _, c := range allCandidates {
 			if legacyNewlineOnlyRejection(c) || runtimeOnlyRejected[c.FilesHash] {
 				candidates = append(candidates, c)
@@ -894,7 +899,10 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			for runtimeAttempt := 0; ; runtimeAttempt++ {
 				st, se := adapter.SelfTest(ctx, target, candidate.Files[0], test.Stdin, test.ExpectedStdout)
 				result.SelfTests = append(result.SelfTests, st)
-				startupFailure := se == nil && (st.SavedFilesHash == "" || st.SavedFilesHash == result.CodeHash) && runtimeStartupFailure(st.Output, test.ExpectedStdout)
+				// Terminal output is not a stdout oracle. A script may already have
+				// changed the workspace before emitting any text, so never infer a
+				// replayable pre-execution failure from that text.
+				startupFailure := snap.EditMode != "terminal" && se == nil && (st.SavedFilesHash == "" || st.SavedFilesHash == result.CodeHash) && runtimeStartupFailure(st.Output, test.ExpectedStdout)
 				if startupFailure {
 					se = errors.New("upstream runtime environment failed to start before selftest")
 				}
@@ -908,6 +916,9 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				var testFeedback []answer.Feedback
 				if !ok {
 					msg := st.Output
+					if snap.EditMode == "terminal" && st.ExitCode != nil {
+						msg = fmt.Sprintf("terminal script exited with status %d\n%s", *st.ExitCode, st.Output)
+					}
 					if se != nil {
 						msg = se.Error()
 					}
@@ -1017,6 +1028,11 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 		stage(req, "submitting", "正在保存代码并提交评测")
 		stage(req, "evaluating", "等待正式评测结果")
 		eval, ee := adapter.Submit(ctx, target, candidate.Files[0])
+		if snap.EditMode == "terminal" {
+			// The current workspace can include files created by earlier scripts,
+			// earlier jobs or the user. No clean-baseline proof exists here.
+			eval.ReuseUnproven = true
+		}
 		result.Evaluation = &eval
 		if ee == nil && !eval.Completed {
 			ee = errors.New("evaluation is not terminal; candidate remains unverified")
@@ -1030,6 +1046,9 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			passed = false
 		}
 		kind := "formal"
+		if eval.ReuseUnproven {
+			kind = "formal_workspace"
+		}
 		vr := "failed"
 		if passed {
 			vr = "passed"
@@ -1061,7 +1080,12 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			return result, ve
 		}
 		if passed {
-			stage(req, "bank_saved", "已保存正式通过证据")
+			if eval.ReuseUnproven {
+				stage(req, "bank_saved", "已保存当前实验工作区通过证据")
+				result.Diagnostics = append(result.Diagnostics, "当前实验工作区已通过正式评测；终端脚本尚未证明可独立复现，不进入共享答案库")
+			} else {
+				stage(req, "bank_saved", "已保存正式通过证据")
+			}
 			stage(req, "verifying", "正在复核课堂状态")
 			result.Status = "passed"
 			result.ProgressPtr(adapter, ctx, target)
