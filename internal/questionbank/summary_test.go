@@ -2,6 +2,7 @@ package questionbank
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"educoder-cli/internal/answer"
@@ -182,42 +183,140 @@ func TestSummaryPropagatesDatabaseAndContextErrors(t *testing.T) {
 	}
 }
 
+func TestSummaryClassifiesGraphicContractsWithoutDoubleCountingRevisions(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	add := func(statement, mode, content string) Candidate {
+		t.Helper()
+		p := bankSnapshot()
+		p.StatementMarkdown, p.EditMode = statement, mode
+		// File extension alone does not determine the execution mode.
+		p.Files = []problem.File{{Path: "diagram.mdj", Language: "json"}}
+		ref, err := s.UpsertSnapshot(ctx, p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := s.AddCandidate(ctx, ref, CandidateInput{Files: []problem.SolutionFile{{Path: "diagram.mdj", Content: content}}, Source: "fixture"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	validate := func(c Candidate, kind, result string) {
+		t.Helper()
+		passed := 0
+		if result == "passed" {
+			passed = 2
+		}
+		v := Validation{CandidateID: c.ID, Kind: kind, Result: result, FilesHash: c.FilesHash, SavedFilesHash: c.FilesHash, SubmittedFilesHash: c.FilesHash, RevisionHash: c.RevisionHash, ContractHash: c.ContractHash, Terminal: true, Complete: true, TestCount: 2, PassedCount: passed}
+		if err := s.RecordValidation(ctx, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check := func(programming, graphic int64) {
+		t.Helper()
+		want := Summary{VerifiedProgrammingProblems: programming, VerifiedGraphicProblems: graphic, TotalVerifiedQuestions: programming + graphic}
+		if got, err := s.Summary(ctx); err != nil || got != want {
+			t.Fatalf("summary = %+v, %v; want %+v", got, err, want)
+		}
+	}
+	legacy := add("Legacy execution mode", "", "legacy")
+	validate(legacy, "formal", "passed")
+	code := add("Same semantic revision", "code", "code")
+	graphic := add("Same semantic revision", "graphic", "graphic")
+	if code.RevisionHash != graphic.RevisionHash || code.ContractHash == graphic.ContractHash {
+		t.Fatal("fixture did not share one semantic revision across execution contracts")
+	}
+	validate(code, "formal", "passed")
+	validate(graphic, "selftest", "passed")
+	check(2, 0) // An unverified graphic contract cannot reclassify code evidence.
+	validate(graphic, "formal", "passed")
+	validate(graphic, "formal", "passed")
+	duplicate := add("Same semantic revision", "graphic", "another verified solution")
+	validate(duplicate, "formal", "passed")
+	check(1, 1)
+	validate(graphic, "selftest", "failed")
+	check(1, 1) // Another verified answer keeps the same revision eligible.
+	validate(duplicate, "formal", "failed")
+	check(2, 0) // The remaining verified contract is code, counted once.
+	validate(code, "selftest", "failed")
+	check(1, 0)
+	validate(graphic, "formal", "passed")
+	check(1, 1)
+}
+
+func TestSummaryExternalGraphicCandidatesStaySeparateAndDeduplicateImports(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	root := t.TempDir()
+	project := `{"_type":"Project","ownedElements":[{"_type":"UMLModel"}]}`
+	externalFixture(t, root, "graphic-one", "uml", "Drawing", "Class diagram", "submit/diagram.mdj", "answer.mdj", project)
+	externalFixture(t, root, "graphic-copy", "uml", "Drawing", "Class diagram", "submit/diagram.mdj", "answer.mdj", project)
+	externalFixture(t, root, "graphic-other", "uml", "Drawing", "Activity diagram", "submit/diagram.mdj", "answer.mdj", project)
+	externalFixture(t, root, "reference", "uml", "Drawing", "Reference diagram", "submit/diagram.txt", "answer.txt", "draw diagram")
+	externalFixture(t, root, "rejected", "uml", "Drawing", "Rejected diagram", "submit/diagram.mdj", "answer.mdj", "not a diagram project")
+	externalFixture(t, root, "code", "code", "Code", "Code problem", "src/main.cpp", "answer.cpp", "int main() {}")
+	for _, commit := range []string{externalTestCommit, strings.Repeat("2", 40)} {
+		opts := externalOptions(root)
+		opts.Commit = commit
+		if _, err := s.ImportExternalDirectory(ctx, opts); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := Summary{ExternalGraphicCandidates: 2}
+	if got, err := s.Summary(ctx); err != nil || got != want {
+		t.Fatalf("references or provenance duplicates entered verified counts: %+v %v; want %+v", got, err, want)
+	}
+}
+
 func TestSummaryRequiresCompleteBoundPersistedProgrammingEvidence(t *testing.T) {
-	for name, mutate := range map[string]func(*Validation){
-		"nonterminal":            func(v *Validation) { v.Terminal = false },
-		"incomplete":             func(v *Validation) { v.Complete = false },
-		"saved bytes differ":     func(v *Validation) { v.SavedFilesHash = problem.HashContent("other bytes") },
-		"submitted bytes differ": func(v *Validation) { v.SubmittedFilesHash = problem.HashContent("other bytes") },
-		"revision differs":       func(v *Validation) { v.RevisionHash = problem.HashContent("other revision") },
-		"contract differs":       func(v *Validation) { v.ContractHash = problem.HashContent("other contract") },
-		"partial tests":          func(v *Validation) { v.PassedCount = 1 },
-		"no tests":               func(v *Validation) { v.TestCount, v.PassedCount = 0, 0 },
-	} {
-		t.Run(name, func(t *testing.T) {
-			ctx := context.Background()
-			s, err := Open(":memory:")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer s.Close()
-			ref, err := s.UpsertSnapshot(ctx, bankSnapshot())
-			if err != nil {
-				t.Fatal(err)
-			}
-			c, err := s.AddCandidate(ctx, ref, CandidateInput{Files: []problem.SolutionFile{{Path: "src/main.cpp", Content: "fixture"}}, Source: "fixture"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			v := Validation{CandidateID: c.ID, Kind: "formal", Result: "passed", FilesHash: c.FilesHash, SavedFilesHash: c.FilesHash, SubmittedFilesHash: c.FilesHash, RevisionHash: c.RevisionHash, ContractHash: c.ContractHash, Terminal: true, Complete: true, TestCount: 2, PassedCount: 2}
-			mutate(&v)
-			// Model old/imported rows that predate RecordValidation's strict
-			// contract. A historical passed label alone is insufficient.
-			if _, err := s.db.ExecContext(ctx, "INSERT INTO verifications(solution_id,evidence_json,created_at) VALUES(?,?,?)", c.ID, marshal(v), now()); err != nil {
-				t.Fatal(err)
-			}
-			if got, err := s.Summary(ctx); err != nil || got != (Summary{}) {
-				t.Fatalf("incomplete persisted proof was counted: %+v %v", got, err)
-			}
-		})
+	for _, mode := range []string{"code", "graphic"} {
+		for name, mutate := range map[string]func(*Validation){
+			"nonterminal":            func(v *Validation) { v.Terminal = false },
+			"incomplete":             func(v *Validation) { v.Complete = false },
+			"saved bytes differ":     func(v *Validation) { v.SavedFilesHash = problem.HashContent("other bytes") },
+			"submitted bytes differ": func(v *Validation) { v.SubmittedFilesHash = problem.HashContent("other bytes") },
+			"revision differs":       func(v *Validation) { v.RevisionHash = problem.HashContent("other revision") },
+			"contract differs":       func(v *Validation) { v.ContractHash = problem.HashContent("other contract") },
+			"partial tests":          func(v *Validation) { v.PassedCount = 1 },
+			"no tests":               func(v *Validation) { v.TestCount, v.PassedCount = 0, 0 },
+		} {
+			t.Run(mode+"/"+name, func(t *testing.T) {
+				ctx := context.Background()
+				s, err := Open(":memory:")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer s.Close()
+				snapshot := bankSnapshot()
+				snapshot.EditMode = mode
+				ref, err := s.UpsertSnapshot(ctx, snapshot)
+				if err != nil {
+					t.Fatal(err)
+				}
+				c, err := s.AddCandidate(ctx, ref, CandidateInput{Files: []problem.SolutionFile{{Path: "src/main.cpp", Content: "fixture"}}, Source: "fixture"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				v := Validation{CandidateID: c.ID, Kind: "formal", Result: "passed", FilesHash: c.FilesHash, SavedFilesHash: c.FilesHash, SubmittedFilesHash: c.FilesHash, RevisionHash: c.RevisionHash, ContractHash: c.ContractHash, Terminal: true, Complete: true, TestCount: 2, PassedCount: 2}
+				mutate(&v)
+				// Model old/imported rows that predate RecordValidation's strict
+				// contract. A historical passed label alone is insufficient.
+				if _, err := s.db.ExecContext(ctx, "INSERT INTO verifications(solution_id,evidence_json,created_at) VALUES(?,?,?)", c.ID, marshal(v), now()); err != nil {
+					t.Fatal(err)
+				}
+				if got, err := s.Summary(ctx); err != nil || got != (Summary{}) {
+					t.Fatalf("incomplete persisted proof was counted: %+v %v", got, err)
+				}
+			})
+		}
 	}
 }

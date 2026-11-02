@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.57 - 2026-11-02
+
+- Show verified graphic questions and imported graphic references in the question bank overview
+
 ## 0.1.56 - 2026-11-02
 
 - Import pinned public programming and StarUML answer references into the Go question bank and execute matched graphic tasks through the direct SSH/SFTP protocol

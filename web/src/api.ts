@@ -179,15 +179,18 @@ function normalizeQuestionBankSummary(value: unknown): QuestionBankSummary {
   const item = asRecord(value);
   const objective = item.verified_objective_questions;
   const programming = item.verified_programming_problems;
+  const graphic = item.verified_graphic_problems;
+  const graphicCandidates = item.external_graphic_candidates;
   const total = item.total_verified_questions;
   const contributed = item.contributed_questions;
   const validCount = (count: unknown): count is number => typeof count === 'number' && Number.isSafeInteger(count) && count >= 0;
-  if (!validCount(objective) || !validCount(programming) || !validCount(total)
-    || !Number.isSafeInteger(objective + programming) || total !== objective + programming
+  if (!validCount(objective) || !validCount(programming) || !validCount(graphic) || !validCount(graphicCandidates) || !validCount(total)
+    || !Number.isSafeInteger(objective + programming + graphic) || total !== objective + programming + graphic
     || contributed !== undefined && (!validCount(contributed) || contributed > total)) {
     throw new ApiRequestError('题库概况暂时不可用，请稍后重试', 200, 'INVALID_RESPONSE');
   }
   return { verified_objective_questions: objective, verified_programming_problems: programming, total_verified_questions: total,
+    verified_graphic_problems: graphic, external_graphic_candidates: graphicCandidates,
     ...(contributed === undefined ? {} : { contributed_questions: contributed }) };
 }
 

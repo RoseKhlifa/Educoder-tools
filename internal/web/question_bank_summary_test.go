@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +34,36 @@ func TestQuestionBankSummaryIsSafeAuthenticatedAggregation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// Counts may include externally sourced graphic candidates, but this public
+	// aggregate must never expose their titles, files, answers or provenance.
+	source := t.TempDir()
+	dir := filepath.Join(source, "solutions", "experiment", "diagram")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for filename, content := range map[string]string{
+		"meta.json":  `{"experiment":"PRIVATE_EXPERIMENT_SENTINEL","subject":"PRIVATE_TITLE_SENTINEL","kind":"uml","path":"submit/diagram.mdj","file":"answer.mdj"}`,
+		"answer.mdj": `{"_type":"Project","name":"PRIVATE_ANSWER_SENTINEL","ownedElements":[{"_type":"UMLModel"}]}`,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, filename), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.bank.ImportExternalDirectory(ctx, questionbank.ExternalImportOptions{SourceDir: source, Repository: "https://github.com/example/public-bank", Commit: strings.Repeat("1", 40)}); err != nil {
+		t.Fatal(err)
+	}
+	graphic := problem.Snapshot{Kind: "programming", Title: "PRIVATE_GRAPHIC_TITLE_SENTINEL", EditMode: "graphic", Files: []problem.File{{Path: "submit/diagram.mdj", Language: "json"}}}
+	ref, err := f.bank.UpsertSnapshot(ctx, graphic)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate, err := f.bank.AddCandidate(ctx, ref, questionbank.CandidateInput{Files: []problem.SolutionFile{{Path: "submit/diagram.mdj", Content: `{"_type":"Project","name":"PRIVATE_GRAPHIC_ANSWER_SENTINEL"}`}}, Source: "PRIVATE_SOURCE_SENTINEL"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.bank.RecordValidation(ctx, questionbank.Validation{CandidateID: candidate.ID, Kind: "formal", Result: "passed", FilesHash: candidate.FilesHash, SavedFilesHash: candidate.FilesHash, SubmittedFilesHash: candidate.FilesHash, RevisionHash: candidate.RevisionHash, ContractHash: candidate.ContractHash, Terminal: true, Complete: true, TestCount: 1, PassedCount: 1}); err != nil {
+		t.Fatal(err)
+	}
 	url := f.server.URL + "/api/question-bank/summary"
 	unauthenticated := doJSON(t, http.DefaultClient, http.MethodGet, url, "")
 	if unauthenticated.StatusCode != http.StatusUnauthorized || !strings.Contains(unauthenticated.Body, "AUTH_REQUIRED") {
@@ -52,7 +84,7 @@ func TestQuestionBankSummaryIsSafeAuthenticatedAggregation(t *testing.T) {
 	if response.StatusCode != http.StatusOK || response.Header.Get("Cache-Control") != "no-store" || body.Error != nil {
 		t.Fatalf("authenticated ordinary user = %d %+v", response.StatusCode, body)
 	}
-	if len(body.Data) != 4 || body.Data["contributed_questions"] != float64(0) || body.Data["verified_objective_questions"] != float64(1) || body.Data["verified_programming_problems"] != float64(0) || body.Data["total_verified_questions"] != float64(1) {
+	if len(body.Data) != 6 || body.Data["contributed_questions"] != float64(0) || body.Data["verified_objective_questions"] != float64(1) || body.Data["verified_programming_problems"] != float64(0) || body.Data["verified_graphic_problems"] != float64(1) || body.Data["external_graphic_candidates"] != float64(1) || body.Data["total_verified_questions"] != float64(2) {
 		t.Fatalf("summary leaked data or miscounted evidence: %+v", body.Data)
 	}
 	// Cache access still validates the current platform principal each time.

@@ -2,21 +2,27 @@ package questionbank
 
 import "context"
 
-// Summary contains only reusable, distinct question counts. Candidate answers,
-// validation attempts, whole-task snapshots, and model usage are not questions.
-// Programming revisions identify semantic problem content; execution contracts
-// and alternative verified source files do not multiply the same problem.
+// Summary separates reusable, verified questions from external graphic answer
+// candidates. Validation attempts, whole-task snapshots, and model usage are not
+// questions. Programming revisions identify semantic problem content; execution
+// contracts and alternative verified source files do not multiply the problem.
 type Summary struct {
 	VerifiedObjectiveQuestions  int64 `json:"verified_objective_questions"`
 	VerifiedProgrammingProblems int64 `json:"verified_programming_problems"`
+	VerifiedGraphicProblems     int64 `json:"verified_graphic_problems"`
+	ExternalGraphicCandidates   int64 `json:"external_graphic_candidates"`
 	TotalVerifiedQuestions      int64 `json:"total_verified_questions"`
 }
 
-// Summary reads both counters in one SQLite snapshot. Objective qualification
+// Summary reads all counters in one SQLite snapshot. Objective qualification
 // matches LookupObjectiveAnswers (verified evidence plus complete resources).
 // Programming qualification follows FindVerified's current status: a later
 // failed validation withdraws a pass until a subsequent formal pass. The formal
 // evidence is also checked against the immutable solution and submission bytes.
+// A revision with a verified graphic contract is classified as graphic once,
+// even when a verified code contract also exists. External graphic candidates
+// deduplicate identical identities and files across import versions/provenance;
+// they never enter the verified counters.
 func (s *Store) Summary(ctx context.Context) (Summary, error) {
 	var out Summary
 	err := s.db.QueryRowContext(ctx, `
@@ -39,6 +45,22 @@ WITH programming_evidence AS (
  FROM programming_evidence
  WHERE result = 'failed' OR (kind = 'formal' AND result = 'passed')
  GROUP BY solution_id
+), verified_revisions AS (
+ SELECT s.revision_hash,
+  MAX(CASE WHEN json_extract(e.contract_json, '$.edit_mode') = 'graphic' THEN 1 ELSE 0 END) AS graphic
+ FROM solutions s
+ JOIN current_programming_state c ON c.solution_id = s.id
+ JOIN programming_evidence v ON v.id = c.evidence_id
+ JOIN problem_revisions r ON r.revision_hash = s.revision_hash
+ JOIN problems p ON p.id = r.problem_id AND p.kind = 'programming'
+ JOIN execution_contracts e ON e.contract_hash = s.contract_hash
+ WHERE v.kind = 'formal' AND v.result = 'passed'
+  AND v.files_hash = s.files_hash AND v.saved_files_hash = s.files_hash
+  AND v.submitted_files_hash = s.files_hash
+  AND v.revision_hash = s.revision_hash AND v.contract_hash = s.contract_hash
+  AND v.terminal = 1 AND v.complete = 1
+  AND v.test_count > 0 AND v.passed_count = v.test_count
+ GROUP BY s.revision_hash
 )
 SELECT
  (SELECT COUNT(*) FROM objective_questions q
@@ -47,21 +69,15 @@ SELECT
    JOIN objective_answer_verifications v ON v.answer_id = a.id AND v.verified = 1
    WHERE a.question_key = q.question_key
   )),
- (SELECT COUNT(DISTINCT s.revision_hash) FROM solutions s
-  JOIN current_programming_state c ON c.solution_id = s.id
-  JOIN programming_evidence v ON v.id = c.evidence_id
-  JOIN problem_revisions r ON r.revision_hash = s.revision_hash
-  JOIN problems p ON p.id = r.problem_id AND p.kind = 'programming'
-  WHERE v.kind = 'formal' AND v.result = 'passed'
-   AND v.files_hash = s.files_hash AND v.saved_files_hash = s.files_hash
-   AND v.submitted_files_hash = s.files_hash
-   AND v.revision_hash = s.revision_hash AND v.contract_hash = s.contract_hash
-   AND v.terminal = 1 AND v.complete = 1
-   AND v.test_count > 0 AND v.passed_count = v.test_count
- )`).Scan(&out.VerifiedObjectiveQuestions, &out.VerifiedProgrammingProblems)
+ (SELECT COUNT(*) FROM verified_revisions WHERE graphic = 0),
+ (SELECT COUNT(*) FROM verified_revisions WHERE graphic = 1),
+ (SELECT COUNT(*) FROM (
+  SELECT DISTINCT experiment, title, position, extension, files_json
+  FROM external_entries WHERE kind = 'diagram' AND status = 'candidate'
+ ))`).Scan(&out.VerifiedObjectiveQuestions, &out.VerifiedProgrammingProblems, &out.VerifiedGraphicProblems, &out.ExternalGraphicCandidates)
 	if err != nil {
 		return Summary{}, err
 	}
-	out.TotalVerifiedQuestions = out.VerifiedObjectiveQuestions + out.VerifiedProgrammingProblems
+	out.TotalVerifiedQuestions = out.VerifiedObjectiveQuestions + out.VerifiedProgrammingProblems + out.VerifiedGraphicProblems
 	return out, nil
 }
