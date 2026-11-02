@@ -152,6 +152,8 @@ export interface CollectionJobRequest {
   idempotency_key?: string;
 }
 export interface CollectionSummary {
+  reused_levels?: number;
+  reused_questions?: number;
   courses?: number;
   homeworks?: number;
   levels?: number;
@@ -178,6 +180,7 @@ export interface AnswerJob {
   finished_at?: string;
   can_retry?: boolean;
   can_cancel?: boolean;
+  can_recover?: boolean;
   error_code?: string;
   message?: string;
   progress?: HomeworkProgress;

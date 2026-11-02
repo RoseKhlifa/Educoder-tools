@@ -5,13 +5,16 @@ export const serviceJob = (job: AnswerJob): boolean => job.request.mode !== 'col
 // Capability flags come from the session-bound API. Missing flags fail closed.
 export const canRetryJob = (job: AnswerJob): boolean => job.can_retry === true && job.request.mode === 'submit' && ['homework', 'course', 'all'].includes(job.request.scope ?? '') && ['failed', 'canceled', 'interrupted', 'support'].includes(job.status);
 export const canCancelJob = (job: AnswerJob): boolean => job.can_cancel === true && job.request.mode === 'submit' && ['homework', 'course', 'all'].includes(job.request.scope ?? '') && pendingJob(job);
-export type JobActionState = 'retry' | 'cancel' | 'stopping';
+export const canRecoverJob = (job: AnswerJob): boolean => job.can_recover === true && job.request.mode === 'submit' && ['homework', 'course', 'all'].includes(job.request.scope ?? '') && ['failed', 'canceled', 'uncertain', 'interrupted', 'support'].includes(job.status);
+export type JobActionState = 'retry' | 'recover' | 'cancel' | 'stopping';
 export function serviceLabel(job: AnswerJob): string { return serviceLabels[serviceStatus(job)]; }
 export function renderJobActions(job: AnswerJob, historical = false, pending?: JobActionState): string {
   if (historical) return '';
   if (pending === 'retry') return '<div class="job-actions"><button class="button primary compact" disabled>正在重新安排…</button></div>';
+  if (pending === 'recover') return '<div class="job-actions"><button class="button primary compact" disabled>正在安排复核…</button></div>';
   if (pending === 'cancel' || pending === 'stopping') return '<div class="job-actions"><button class="text-button" disabled>正在停止…</button></div>';
   if (canRetryJob(job)) return `<div class="job-actions"><button class="button primary compact" data-job-retry="${e(job.id)}">重新执行</button></div>`;
+  if (canRecoverJob(job)) return `<div class="job-actions"><button class="button primary compact" data-job-recover="${e(job.id)}">复核并继续</button></div>`;
   if (canCancelJob(job)) return `<div class="job-actions"><button class="text-button" data-job-cancel="${e(job.id)}">停止任务</button></div>`;
   return '';
 }
@@ -116,7 +119,7 @@ export function renderServiceDetail(job: AnswerJob, courses: Course[] = [], hist
   const rows = Array.isArray(data.homeworks) ? data.homeworks.map(record) : Array.isArray(data.levels) ? data.levels.map(record) : [];
   const status = serviceStatus(job);
   const exerciseNote = job.request.scope === 'exercise' ? historical ? '历史记录：以下为当次考试安排和交卷状态，最新结果请查看当前安排。' : status === 'submitted' || status === 'awaiting_review' ? '已交卷，成绩以头歌公布为准。' : status === 'graded' ? `考试成绩已公布。${data.score_known === true && (typeof data.score === 'number' || typeof data.score === 'string') ? `成绩 ${e(data.score)}${typeof data.max_score === 'number' || typeof data.max_score === 'string' ? ` / ${e(data.max_score)}` : ''}` : ''}` : status === 'support' ? '考试事项由服务人员跟进，无需重复安排。' : '服务人员会处理整场考试，完成后显示交卷状态。' : '';
-  return `<h2>${e(jobTitle(job, courses))}</h2><p class="subtext">${e(dateTime(job.created_at))} ${historical ? '当次安排' : '创建'}</p><span class="badge ${historical ? 'stopped' : status}">${historical ? displayLabel(status, true) : serviceLabel(job)}</span>${renderJobActions(job, historical, action)}<div class="detail-note">${exerciseNote || (historical ? '历史记录：以下为当次安排的进度，不代表当前仍在处理。最新完成情况请查看当前安排。' : canRetryJob(job) ? '本次安排已停止处理。可重新执行原来的安排；已核验通过的必做关卡会自动跳过，只继续未完成的内容。' : status === 'support' ? '本次处理已暂停，已完成进度保留，剩余内容待跟进。' : status === 'completed' ? '本次服务已经完成，结果已核验。' : status === 'stopped' ? '本次服务已停止，已完成的结果会保留。' : '我们会按顺序完成未完成的内容。你可以随时回来查看。')}</div>${rows.length ? `<ol class="completion-list">${rows.map((row, index) => {
+  return `<h2>${e(jobTitle(job, courses))}</h2><p class="subtext">${e(dateTime(job.created_at))} ${historical ? '当次安排' : '创建'}</p><span class="badge ${historical ? 'stopped' : status}">${historical ? displayLabel(status, true) : serviceLabel(job)}</span>${renderJobActions(job, historical, action)}<div class="detail-note">${exerciseNote || (historical ? '历史记录：以下为当次安排的进度，不代表当前仍在处理。最新完成情况请查看当前安排。' : canRetryJob(job) ? '本次安排已停止处理。可重新执行原来的安排；已核验通过的必做关卡会自动跳过，只继续未完成的内容。' : canRecoverJob(job) ? '可先复核上次安排的完成结果，再继续剩余的必做内容；已核验通过的关卡会自动跳过。' : status === 'support' ? '本次处理已暂停，已完成进度保留，剩余内容待跟进。' : status === 'completed' ? '本次服务已经完成，结果已核验。' : status === 'stopped' ? '本次服务已停止，已完成的结果会保留。' : '我们会按顺序完成未完成的内容。你可以随时回来查看。')}</div>${rows.length ? `<ol class="completion-list">${rows.map((row, index) => {
     const done = ['passed', 'skipped', 'completed', 'succeeded'].includes(String(row.status));
     return `<li><span class="completion-icon ${done ? 'done' : ''}">${done ? '✓' : index + 1}</span><div><strong>${e(typeof row.title === 'string' ? row.title : `作业 ${index + 1}`)}</strong><p>${historical ? done ? '当次已完成' : '当次未完成' : done ? '已完成' : status === 'support' || status === 'stopped' ? '待跟进' : row.status === 'support' ? '待跟进' : status === 'processing' && ['running', 'processing'].includes(String(row.status)) ? '正在处理' : '待完成'}</p></div></li>`;
   }).join('')}</ol>` : `<p class="muted">${historical ? '当次未记录详细进度。' : status === 'support' || status === 'stopped' ? '本次未记录详细进度，已完成结果保留。' : '详细完成进度会在处理后更新。'}</p>`}`;

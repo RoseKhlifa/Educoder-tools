@@ -11,18 +11,19 @@ import (
 // This allowlist is the API boundary, not a UI hiding rule. Operator events,
 // provider failures, generated answers, usage and execution settings stay out.
 type consumerJob struct {
-	ID        string            `json:"id"`
-	Status    string            `json:"status"`
-	Phase     string            `json:"phase"`
-	Kind      string            `json:"kind"`
-	Request   jobs.Request      `json:"request"`
-	CreatedAt time.Time         `json:"created_at"`
-	UpdatedAt time.Time         `json:"updated_at"`
-	Message   string            `json:"message"`
-	CanRetry  bool              `json:"can_retry"`
-	CanCancel bool              `json:"can_cancel"`
-	Result    consumerResult    `json:"result"`
-	Progress  *consumerProgress `json:"progress,omitempty"`
+	ID         string            `json:"id"`
+	Status     string            `json:"status"`
+	Phase      string            `json:"phase"`
+	Kind       string            `json:"kind"`
+	Request    jobs.Request      `json:"request"`
+	CreatedAt  time.Time         `json:"created_at"`
+	UpdatedAt  time.Time         `json:"updated_at"`
+	Message    string            `json:"message"`
+	CanRetry   bool              `json:"can_retry"`
+	CanRecover bool              `json:"can_recover"`
+	CanCancel  bool              `json:"can_cancel"`
+	Result     consumerResult    `json:"result"`
+	Progress   *consumerProgress `json:"progress,omitempty"`
 }
 type consumerResult struct {
 	Title              string         `json:"title,omitempty"`
@@ -99,7 +100,7 @@ func toConsumerJob(j jobs.Job) consumerJob {
 	}
 	req := j.Request
 	req.IdempotencyKey = ""
-	out := consumerJob{ID: j.ID, Status: status, Phase: status, Kind: "service", Request: req, CreatedAt: j.CreatedAt, UpdatedAt: j.UpdatedAt, Message: message, CanRetry: canRetryJob(j), CanCancel: isRestartableRequest(req) && (j.Status == jobs.Queued || j.Status == jobs.Running)}
+	out := consumerJob{ID: j.ID, Status: status, Phase: status, Kind: "service", Request: req, CreatedAt: j.CreatedAt, UpdatedAt: j.UpdatedAt, Message: message, CanRetry: canRetryJob(j), CanRecover: canRecoverJob(j), CanCancel: isRestartableRequest(req) && (j.Status == jobs.Queued || j.Status == jobs.Running)}
 	if req.Mode == "collect_verified" {
 		out.Kind = "collection"
 	}

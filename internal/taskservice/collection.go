@@ -57,6 +57,8 @@ type CollectionSummary struct {
 	ObjectiveAnswersRead   int            `json:"objective_answers_read"`
 	ObjectiveQuestionsRead int            `json:"objective_questions_read"`
 	ProgrammingFilesRead   int            `json:"programming_files_read"`
+	ReusedLevels           int            `json:"reused_levels"`
+	ReusedQuestions        int            `json:"reused_questions"`
 }
 
 func (s *CollectionSummary) skip(reason string, unconfirmed bool) {
@@ -70,12 +72,17 @@ func (s *CollectionSummary) skip(reason string, unconfirmed bool) {
 type Collector struct {
 	Bank   *questionbank.Store
 	Limits CollectionLimits
+	Now    func() time.Time
 }
 
 // Scan is sequential. The web runtime additionally reserves one global scan
 // slot, while the jobs manager serializes each owner's work and bounds queues.
 func (h *Collector) Scan(ctx context.Context, c CollectionReader, owner string, emit func(CollectionSummary)) (summary CollectionSummary, err error) {
 	summary.Reasons = map[string]int{}
+	now := time.Now
+	if h.Now != nil {
+		now = h.Now
+	}
 	l := h.Limits
 	if h.Bank == nil || c == nil || l.Pages < 0 || l.Courses < 0 || l.Homeworks < 0 || l.Levels < 0 || l.Timeout < 0 {
 		return summary, errors.New("invalid collection limits")
@@ -206,6 +213,9 @@ func (h *Collector) Scan(ctx context.Context, c CollectionReader, owner string, 
 							continue
 						}
 						progress, e := c.HomeworkProgress(ctx, courseID, hw.ID)
+						if e == nil && progress == nil {
+							e = errors.New("missing homework progress")
+						}
 						if e != nil {
 							if errors.Is(e, educoder.ErrCollectionLimit) || ctx.Err() != nil {
 								return summary, e
@@ -241,6 +251,23 @@ func (h *Collector) Scan(ctx context.Context, c CollectionReader, owner string, 
 							continue
 						}
 						summary.FullScoreLevels += fullCount
+						receipts, e := h.Bank.CollectionReceipts(ctx, owner, courseID, hw.ID)
+						if e != nil {
+							return summary, e
+						}
+						fresh := freshCollectionReceipts(hw, progress, receipts, now())
+						// Only a complete current roster can suppress discovery. A
+						// partial progress response is never a success watermark.
+						if hw.ChallengeCount > 0 && len(progress.Challenges) == hw.ChallengeCount && len(fresh) == fullCount {
+							for _, receipt := range fresh {
+								if l.Levels > 0 && summary.Levels >= l.Levels {
+									summary.LimitReached = true
+									return summary, nil
+								}
+								reuseCollectionReceipt(&summary, receipt)
+							}
+							continue
+						}
 						var targets []questionbank.CollectionTarget
 						located := map[string]educoder.CollectionLocator{}
 						// Existing-runtime discovery is an optional read-only protocol
@@ -285,6 +312,13 @@ func (h *Collector) Scan(ctx context.Context, c CollectionReader, owner string, 
 							summary.skip("no_readonly_game_locator", true)
 							continue
 						}
+						mapped := map[int64]bool{}
+						for _, target := range located {
+							if target.Game != "" && levels[target.ChallengeID].HasFullScore() {
+								mapped[target.ChallengeID] = true
+							}
+						}
+						allTargetsKnown := hw.ChallengeCount > 0 && len(progress.Challenges) == hw.ChallengeCount && len(mapped) == fullCount
 						for _, seed := range targets {
 							for game := seed.Game; game != ""; {
 								if err = ctx.Err(); err != nil {
@@ -302,6 +336,13 @@ func (h *Collector) Scan(ctx context.Context, c CollectionReader, owner string, 
 								if l.Levels > 0 && summary.Levels >= l.Levels {
 									summary.LimitReached = true
 									return summary, nil
+								}
+								// Skipping a linked level must not cut the only route to
+								// an unknown next_game. Require independent full coverage.
+								if receipt, ok := fresh[seed.ChallengeID]; ok && (!allFull || allTargetsKnown) {
+									reuseCollectionReceipt(&summary, receipt)
+									delete(fresh, seed.ChallengeID)
+									break
 								}
 								summary.Levels++
 								task, e := c.CollectionLoadTask(ctx, courseID, hw.ID, game)
@@ -329,7 +370,12 @@ func (h *Collector) Scan(ctx context.Context, c CollectionReader, owner string, 
 								summary.LocatedLevels++
 								// A fresh score read brackets answer capture. No editor,
 								// submission or runtime creation endpoint is called.
-								e = h.collectLevel(ctx, c, owner, task, p, &summary)
+								receipt := questionbank.CollectionReceipt{Fingerprint: collectionFingerprint(hw, progress, p), VerifiedAt: now()}
+								beforeSkipped, beforeUnconfirmed := summary.Skipped, summary.Unconfirmed
+								e = h.collectLevel(ctx, c, owner, task, p, &summary, &receipt)
+								if e == nil && summary.Skipped == beforeSkipped && summary.Unconfirmed == beforeUnconfirmed && receipt.Questions > 0 {
+									e = h.Bank.PutCollectionReceipt(ctx, owner, courseID, hw.ID, p.ChallengeID, receipt)
+								}
 								if e != nil {
 									if errors.Is(e, educoder.ErrCollectionLimit) {
 										return summary, e
@@ -426,7 +472,7 @@ func collectionOperationGames(raw []json.RawMessage, course string, hw int64) []
 	return out
 }
 
-func (h *Collector) collectLevel(ctx context.Context, c CollectionReader, owner string, t *educoder.Task, p educoder.ChallengeProgress, s *CollectionSummary) error {
+func (h *Collector) collectLevel(ctx context.Context, c CollectionReader, owner string, t *educoder.Task, p educoder.ChallengeProgress, s *CollectionSummary, receipt *questionbank.CollectionReceipt) error {
 	if t == nil || p.ChallengeID != t.Challenge.ID || !p.HasFullScore() {
 		s.skip("target_not_confirmed_full_score", true)
 		return nil
@@ -494,6 +540,12 @@ func (h *Collector) collectLevel(ctx context.Context, c CollectionReader, owner 
 		// This exact verified solution already exists. Do not manufacture a new
 		// platform verification or append duplicate evidence on every login.
 		s.Duplicates++
+		candidate, candidateErr := h.Bank.FindVerified(ctx, questionbank.Ref{RevisionHash: prepared.RevisionHash, ContractHash: prepared.ContractHash})
+		if candidateErr == nil && candidate.FilesHash == hash {
+			receipt.CodeCandidateID, receipt.Questions = candidate.ID, 1
+		} else if candidateErr != nil && !errors.Is(candidateErr, questionbank.ErrNotFound) {
+			return candidateErr
+		}
 		return nil
 	case educoder.TaskKindChoice:
 		s.ObjectiveQuestionsRead += len(t.Chooses)
@@ -551,6 +603,7 @@ func (h *Collector) collectLevel(ctx context.Context, c CollectionReader, owner 
 					return err
 				}
 				s.Duplicates++
+				receipt.ObjectiveAnswerIDs = append(receipt.ObjectiveAnswerIDs, verifiedAnswerID)
 				continue
 			}
 			id, err := h.Bank.AddObjectiveAnswer(ctx, key, answers[i], "platform_collection", "")
@@ -564,7 +617,9 @@ func (h *Collector) collectLevel(ctx context.Context, c CollectionReader, owner 
 				return err
 			}
 			s.Collected++
+			receipt.ObjectiveAnswerIDs = append(receipt.ObjectiveAnswerIDs, id)
 		}
+		receipt.Questions = len(snapshot.Questions)
 		return nil
 	default:
 		s.skip("unsupported_task_kind", false)
@@ -697,5 +752,5 @@ func collectionObjective(t *educoder.Task) (answer.ObjectiveSnapshot, []string, 
 }
 
 func CollectionMessage(s CollectionSummary) string {
-	return fmt.Sprintf("已采集 %d，重复 %d，跳过 %d，未确认 %d，失败 %d", s.Collected, s.Duplicates, s.Skipped, s.Unconfirmed, s.Failed)
+	return fmt.Sprintf("已采集 %d，重复 %d，跳过 %d，未确认 %d，失败 %d；检查点复用 %d 关 / %d 题", s.Collected, s.Duplicates, s.Skipped, s.Unconfirmed, s.Failed, s.ReusedLevels, s.ReusedQuestions)
 }

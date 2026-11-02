@@ -75,6 +75,29 @@ async function app(overrides={}) {
   return {requests,timers,document,html:()=>document.html,get(selector){const element=document.querySelector(selector);assert.ok(element,`Missing ${selector}`);return element;},async tick(){const tasks=[...timers.entries()];for(const[id,timer]of tasks){timers.delete(id);timer.handler();}await settle();}};
 }
 await test('consumer course service and administrator boundary',async t=>{
+  await t.test('uncertain service tasks expose a guarded recovery action and reuse the returned child', async () => {
+    const source=job({status:'support',can_retry:false,can_recover:true,result:{service_status:'support',total_homeworks:19,completed_homeworks:13}});
+    const child=job({id:'recovery-child',status:'waiting'}),pending=deferred();
+    const page=await app({'/api/jobs':()=>ok({jobs:[source]}),'/api/jobs/job-1/recover':()=>pending.promise});
+    page.get('[data-nav="progress"]').dispatch('click');await settle();
+    page.get('[data-job-recover="job-1"]').dispatch('click');assert.match(page.html(),/先核对上次安排/);
+    page.get('[data-action="modal-confirm"]').dispatch('click');
+    assert.match(page.html(),/正在安排复核/);pending.resolve(ok(child));await settle();
+    assert.match(page.html(),/已安排复核/);assert.match(page.html(),/data-job-detail="recovery-child"/);
+    assert.equal(page.requests.filter(item=>item.url==='/api/jobs/job-1/recover').length,1);
+    assert.equal(page.requests.some(item=>item.url==='/api/jobs'&&item.options.method==='POST'),false);
+  });
+  await t.test('administrator recovery uses its dedicated endpoint and explains when the owner must log in', async () => {
+    const source=job({id:'admin-recovery',status:'failed',can_recover:true,owner_id:'platform:synthetic'});
+    const page=await app({'/api/auth/me':()=>ok({user,platform:{role:'admin',status:'active'}}),'/api/admin/jobs':()=>ok({items:[source]}),'/api/admin/jobs/admin-recovery/recover':()=>failure(409,'OWNER_LOGIN_REQUIRED','PRIVATE_SECRET')});
+    page.get('[data-nav="admin-overview"]').dispatch('click');await settle();
+    page.get('[data-admin-recover="admin-recovery"]').dispatch('click');
+    assert.match(page.html(),/原用户当前有效的登录连接/);
+    page.get('[data-action="modal-confirm"]').dispatch('click');await settle();
+    assert.match(page.html(),/请用户重新登录后再复核继续/);assert.doesNotMatch(page.html(),/PRIVATE_SECRET/);
+    assert.equal(page.requests.filter(item=>item.url==='/api/admin/jobs/admin-recovery/recover').length,1);
+    assert.equal(page.requests.some(item=>item.url==='/api/jobs/admin-recovery/recover'),false);
+  });
   await t.test('retry keeps the original server scope, guards duplicate clicks and moves the old attempt into history', async () => {
     const source=job({id:'retry-source',status:'support',can_retry:true,can_cancel:false,result:{service_status:'support',total_homeworks:2,completed_homeworks:1}});
     const child=job({id:'retry-child',status:'queued',can_retry:false,can_cancel:true,created_at:'2026-11-02T12:00:00Z'}), pending=deferred();

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.65 - 2026-11-03
+
+- Reuse durable verified collection checkpoints across logins and add reconciled user and admin continuation actions
+
 ## 0.1.64 - 2026-11-03
 
 - Correct paused service statuses and prefer fresh zero unfinished course results over historical failures

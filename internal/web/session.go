@@ -121,3 +121,18 @@ func (s *SessionStore) Len() int {
 	defer s.mu.RUnlock()
 	return len(s.sessions)
 }
+
+// Administrative recovery must use the target owner's live upstream client.
+// Neither a matching display name nor the administrator's client is a substitute.
+func (s *SessionStore) sessionForOwner(owner string) (Session, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	now := s.now()
+	var latest Session
+	for _, session := range s.sessions {
+		if session.Client != nil && session.ExpiresAt.After(now) && sessionJobOwner(session) == owner && session.ExpiresAt.After(latest.ExpiresAt) {
+			latest = session
+		}
+	}
+	return latest, latest.Client != nil
+}

@@ -121,6 +121,10 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, requestID s
 		s.writeJSON(w, requestID, 200, views[0])
 		return
 	}
+	if len(parts) == 5 && parts[2] == "jobs" && parts[4] == "recover" && r.Method == http.MethodPost {
+		s.handleAdminJobRecover(w, r, requestID, actor, parts[3])
+		return
+	}
 	if len(parts) == 5 && parts[2] == "jobs" && parts[4] == "cancel" && r.Method == http.MethodPost {
 		if s.jobs == nil {
 			s.writeError(w, requestID, 503, "SERVICE_UNAVAILABLE", "服务暂不可用")

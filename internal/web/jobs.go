@@ -427,6 +427,10 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, requestID st
 		s.handleJobRetry(w, r, requestID, session, parts[2])
 		return
 	}
+	if len(parts) == 4 && parts[3] == "recover" && r.Method == http.MethodPost {
+		s.handleJobRecover(w, r, requestID, session, parts[2])
+		return
+	}
 	s.writeError(w, requestID, http.StatusNotFound, "NOT_FOUND", "任务接口不存在")
 }
 

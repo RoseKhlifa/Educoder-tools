@@ -284,12 +284,14 @@ export interface EducoderApi {
   createJob(request: JobRequest): Promise<AnswerJob>;
   cancelJob(id: string): Promise<AnswerJob>;
   retryJob(id: string): Promise<AnswerJob>;
+  recoverJob(id: string): Promise<AnswerJob>;
   adminOverview(): Promise<AdminOverview>;
   adminUsers(): Promise<AdminUser[]>;
   adminJobs(): Promise<AdminJob[]>;
   adminAudit(): Promise<AdminAudit[]>;
   adminUserStatus(id: string | number, status: 'active' | 'disabled'): Promise<void>;
   adminCancelJob(id: string): Promise<void>;
+  adminRecoverJob(id: string): Promise<AnswerJob>;
   tickets(options?: TicketListOptions): Promise<TicketList>;
   ticket(id: string): Promise<SupportTicketDetail>;
   createTicket(input: TicketCreateRequest): Promise<SupportTicketDetail>;
@@ -371,6 +373,12 @@ export class BrowserApi implements EducoderApi {
   }
   async retryJob(id: string): Promise<AnswerJob> {
     return this.request<AnswerJob>(`/api/jobs/${encodeURIComponent(id)}/retry`, { method: 'POST', body: '{}' });
+  }
+  async recoverJob(id: string): Promise<AnswerJob> {
+    return this.request<AnswerJob>(`/api/jobs/${encodeURIComponent(id)}/recover`, { method: 'POST', body: '{}' });
+  }
+  async adminRecoverJob(id: string): Promise<AnswerJob> {
+    return this.request<AnswerJob>(`/api/admin/jobs/${encodeURIComponent(id)}/recover`, { method: 'POST', body: '{}' });
   }
   async cancelJob(id: string): Promise<AnswerJob> {
     return this.request<AnswerJob>(`/api/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
