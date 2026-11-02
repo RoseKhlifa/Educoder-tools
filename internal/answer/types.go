@@ -26,7 +26,7 @@ type Feedback struct {
 	Message        string `json:"message,omitempty"`
 	Stdin          string `json:"stdin,omitempty"`
 	ExpectedStdout string `json:"expected_stdout,omitempty"`
-	ActualStdout   string `json:"actual_stdout,omitempty"`
+	ActualStdout   string `json:"actual_stdout"`
 }
 
 // RepairAttempt binds observed feedback to the exact source that produced it.

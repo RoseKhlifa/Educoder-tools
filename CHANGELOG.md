@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.63 - 2026-11-03
+
+- Recheck source-bound contradictory empty selftests before model repair and retain explicit stdout stream evidence
+
 ## 0.1.62 - 2026-11-03
 
 - Normalize external Python editor whitespace before candidate hashing while preserving strings provenance and exact readback verification

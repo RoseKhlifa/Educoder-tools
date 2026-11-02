@@ -104,12 +104,15 @@ type LoadedProblem struct {
 type snapshotBinder interface{ bindSnapshot(LoadedProblem) }
 
 type SelfTest struct {
-	Completed      bool
-	Output         string
-	Matches        bool
-	ExitCode       *int
-	CompileOK      *bool
-	SavedFilesHash string
+	Completed           bool
+	Output              string
+	Matches             bool
+	ExitCode            *int
+	CompileOK           *bool
+	SavedFilesHash      string
+	LogFrames           int
+	OutputBytes         int64
+	ProcessFinishedSeen bool
 }
 
 type Evaluation struct {
@@ -607,7 +610,7 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 	}
 	if len(candidates) == 0 && snap.EditMode != "terminal" && req.Mode != ModeGenerateOnly && len(snap.PublicTests) > 0 {
 		for _, c := range allCandidates {
-			if legacyNewlineOnlyRejection(c) || runtimeOnlyRejected[c.FilesHash] {
+			if legacyNewlineOnlyRejection(c) || runtimeOnlyRejected[c.FilesHash] || legacyEmptyOutputRejection(snap, c, ref) {
 				candidates = append(candidates, c)
 				legacyRetest[c.ID] = true
 				break
@@ -896,6 +899,13 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 		allPass := true
 		var attemptFeedback []answer.Feedback
 		for _, test := range snap.PublicTests {
+			var priorCandidate questionbank.Candidate
+			for _, c := range allCandidates {
+				if c.ID == bankID && c.FilesHash == result.CodeHash {
+					priorCandidate = c
+					break
+				}
+			}
 			for runtimeAttempt := 0; ; runtimeAttempt++ {
 				st, se := adapter.SelfTest(ctx, target, candidate.Files[0], test.Stdin, test.ExpectedStdout)
 				result.SelfTests = append(result.SelfTests, st)
@@ -905,6 +915,10 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				startupFailure := snap.EditMode != "terminal" && se == nil && (st.SavedFilesHash == "" || st.SavedFilesHash == result.CodeHash) && runtimeStartupFailure(st.Output, test.ExpectedStdout)
 				if startupFailure {
 					se = errors.New("upstream runtime environment failed to start before selftest")
+				}
+				emptyConflict := conflictingEmptySelfTest(snap, priorCandidate, ref, test, st, se)
+				if emptyConflict {
+					se = errors.New("empty selftest output conflicts with this candidate's bound passing evidence; execution result remains unknown")
 				}
 				ok := se == nil && st.Completed && st.Matches && (st.CompileOK == nil || *st.CompileOK) && (st.SavedFilesHash == "" || st.SavedFilesHash == result.CodeHash)
 				if se == nil && st.SavedFilesHash != "" && st.SavedFilesHash != result.CodeHash {
@@ -938,9 +952,18 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 					return result, errors.Join(se, ve)
 				}
 				if se != nil {
-					if startupFailure && runtimeAttempt == 0 && ctx.Err() == nil {
-						stage(req, "environment_retry", "上游自测环境未启动，稍后使用相同代码重试一次")
-						result.Diagnostics = append(result.Diagnostics, "上游自测环境未启动，未将本次响应作为代码失败证据")
+					if (startupFailure || emptyConflict) && runtimeAttempt == 0 && ctx.Err() == nil {
+						message := "上游自测环境未启动，稍后使用相同代码重试一次"
+						if emptyConflict {
+							message = "自测空输出与同代码历史通过证据冲突，使用相同代码复核一次"
+						}
+						stage(req, "environment_retry", message)
+						result.Diagnostics = append(result.Diagnostics, message)
+						state.Result = *result
+						if err := s.persist(ctx, result.RunID, state, "running", created); err != nil {
+							result.Status = "checkpoint_persistence_failed"
+							return result, err
+						}
 						if waitErr := waitRuntimeRetry(ctx); waitErr == nil {
 							continue
 						} else {

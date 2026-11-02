@@ -288,6 +288,14 @@ type SelfTestOptions struct {
 type SelfTestResult struct {
 	Completed bool   `json:"completed"`
 	Output    string `json:"output"`
+	// LogFrames counts decoded stdout frames, including empty frames but not
+	// the completion marker. OutputBytes counts their observed decoded bytes,
+	// including a frame rejected by the configured output limit.
+	LogFrames   int   `json:"log_frames"`
+	OutputBytes int64 `json:"output_bytes"`
+	// Seeing a bare marker is recorded even though that invalid control frame
+	// still returns an error and does not establish completion.
+	ProcessFinishedSeen bool `json:"process_finished_seen"`
 	// Matches is absent unless the caller supplied expected output. Comparison
 	// normalizes CRLF and ignores one terminal LF; spaces and internal blank
 	// lines remain significant.
@@ -404,6 +412,7 @@ func (c *Client) SelfTest(ctx context.Context, t *Task, filePath, content, input
 			return result, errors.New("自测流在 ProcessFinished 前关闭或读取失败")
 		}
 		if string(message) == "ProcessFinished" {
+			result.ProcessFinishedSeen = true
 			result.Output = output.String()
 			return result, errors.New("自测收到未编码的结束控制帧")
 		}
@@ -419,6 +428,7 @@ func (c *Client) SelfTest(ctx context.Context, t *Task, filePath, content, input
 			return result, fmt.Errorf("自测 Base64 流包含无效编码帧（类型 %v，%d 字节）", frameType, len(message))
 		}
 		if string(decoded) == "ProcessFinished" {
+			result.ProcessFinishedSeen = true
 			result.Output = output.String()
 			// A stream message may end in the middle of a multi-byte character.
 			// Validate the accumulated UTF-8 only after the completion marker.
@@ -433,6 +443,8 @@ func (c *Client) SelfTest(ctx context.Context, t *Task, filePath, content, input
 			_ = connection.Close(websocket.StatusNormalClosure, "")
 			return result, nil
 		}
+		result.LogFrames++
+		result.OutputBytes += int64(len(decoded))
 		if int64(output.Len())+int64(len(decoded)) > limit {
 			result.Output = output.String()
 			return result, errors.New("自测输出超过字节上限")

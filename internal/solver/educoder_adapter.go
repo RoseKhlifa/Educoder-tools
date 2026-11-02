@@ -187,6 +187,11 @@ func (a *EducoderAdapter) SelfTest(ctx context.Context, target Target, file prob
 	want := expected
 	r, err := a.Client.SelfTest(ctx, t, file.Path, file.Content, input, educoder.SelfTestOptions{ExpectedOutput: &want})
 	result := SelfTest{Completed: r != nil && r.Completed, Output: outputOf(r), Matches: r != nil && r.Matches != nil && *r.Matches}
+	if r != nil {
+		result.LogFrames = r.LogFrames
+		result.OutputBytes = r.OutputBytes
+		result.ProcessFinishedSeen = r.ProcessFinishedSeen
+	}
 	if err != nil {
 		return result, err
 	}
