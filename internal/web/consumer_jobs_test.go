@@ -64,7 +64,7 @@ func TestConsumerCreateListDetailAndCancelUseAllowlistAndIsolateTenants(t *testi
 			t.Fatal(got.Body)
 		}
 		assertConsumerBoundary(t, got.Body)
-		if !strings.Contains(got.Body, `"status":"support"`) || !strings.Contains(got.Body, "管理员将协助完成") {
+		if !strings.Contains(got.Body, `"status":"support"`) || !strings.Contains(got.Body, "本次处理已暂停") {
 			t.Fatalf("failed job not rendered as service support: %s", got.Body)
 		}
 	}
@@ -90,6 +90,33 @@ func TestConsumerCreateListDetailAndCancelUseAllowlistAndIsolateTenants(t *testi
 	got := f.request(t, f.aliceClient, "GET", "/api/jobs/"+legacy.ID, "")
 	if got.StatusCode != 404 {
 		t.Fatal("current display login automatically claimed historical legacy owner")
+	}
+}
+
+func TestConsumerTerminalProjectionRetainsProgressWithoutActiveChildren(t *testing.T) {
+	for _, status := range []string{jobs.Failed, jobs.Uncertain, jobs.Interrupted, jobs.Canceled} {
+		public := toConsumerJob(jobs.Job{Status: status, Result: json.RawMessage(`{"total_homeworks":19,"completed_homeworks":13,"homeworks":[{"title":"已完成","status":"passed"},{"title":"执行中旧快照","status":"running"},{"title":"未开始","status":"planned"}],"levels":[{"title":"旧关卡","status":"running"}]}`)})
+		if public.Result.CompletedHomeworks != 13 || public.Result.TotalHomeworks != 19 || public.Result.Homeworks[0].Status != "completed" {
+			t.Fatalf("%s lost completed evidence: %+v", status, public)
+		}
+		for _, item := range append(public.Result.Homeworks[1:], public.Result.Levels...) {
+			if item.Status != "support" {
+				t.Fatalf("%s left a terminal child active: %+v", status, item)
+			}
+		}
+		if status != jobs.Canceled && (public.Status != "support" || !strings.Contains(public.Message, "本次处理已暂停")) {
+			t.Fatalf("%s implied continued execution: %+v", status, public)
+		}
+	}
+	for _, status := range []string{jobs.Queued, jobs.Running} {
+		public := toConsumerJob(jobs.Job{Status: status, Result: json.RawMessage(`{"levels":[{"title":"当前关卡","status":"running"}]}`)})
+		want := "processing"
+		if status == jobs.Queued {
+			want = "waiting"
+		}
+		if public.Result.Levels[0].Status != want {
+			t.Fatalf("%s: %+v", status, public)
+		}
 	}
 }
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.64 - 2026-11-03
+
+- Correct paused service statuses and prefer fresh zero unfinished course results over historical failures
+
 ## 0.1.63 - 2026-11-03
 
 - Recheck source-bound contradictory empty selftests before model repair and retain explicit stdout stream evidence

@@ -82,7 +82,7 @@ await test('consumer course service and administrator boundary',async t=>{
     const page=await app({'/api/jobs':()=>ok({jobs:rows}),'/api/jobs/retry-source/retry':()=>pending.promise});
     assert.equal(page.get('[data-select-course="COURSE_A"]').disabled,false);
     assert.equal(page.get('[data-action="start-all"]').disabled,false);
-    assert.match(page.html(),/可重新执行/); assert.doesNotMatch(page.html(),/放心，服务人员正在处理，无需重复提交/);
+    assert.match(page.html(),/待跟进/); assert.doesNotMatch(page.html(),/放心，服务人员正在处理，无需重复提交/);
     page.get('[data-nav="progress"]').dispatch('click'); await settle();
     page.get('[data-job-detail="retry-source"]').dispatch('click');
     assert.match(page.html().slice(page.html().indexOf('role="dialog"')),/data-job-retry="retry-source"/);
@@ -274,6 +274,63 @@ await test('consumer course service and administrator boundary',async t=>{
     assert.match(row, /homework-count"[^>]*>1<\/span>/); assert.match(row, /可安排/);
     assert.equal(page.get('[data-select-course="COURSE_A"]').disabled, false);
   });
+  await t.test('fresh zero work overrides historical support without rewriting partial execution history', async () => {
+    for (const status of ['support', 'failed', 'uncertain', 'interrupted']) {
+      const source = job({ status, result: { service_status: 'processing', total_homeworks: 19, completed_homeworks: 13 } });
+      const page = await app({ '/api/jobs': () => ok({ jobs: [source] }), '/api/courses/COURSE_A/homeworks': () => ok([]), '/api/courses/COURSE_B/homeworks': () => ok([]) });
+      const row = page.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '';
+      assert.match(row, /homework-count"[^>]*>0<\/span>/);
+      assert.match(row, /badge completed[^>]*>已完成</); assert.doesNotMatch(row, /服务处理中|待跟进/);
+      assert.equal(page.get('[data-select-course="COURSE_A"]').disabled, true);
+      page.get('[data-nav="progress"]').dispatch('click'); await settle();
+      assert.match(page.html(), /13 \/ 19 份作业/); assert.match(page.html(), /待跟进/);
+      assert.doesNotMatch(page.html(), /服务处理中|处理中 <b>1<\/b>/);
+    }
+  });
+  await t.test('zero cannot claim completion while reads are absent, failed or execution remains active', async () => {
+    const source = job({ status: 'support', result: { service_status: 'support' } });
+    const pending = deferred();
+    const loading = await app({ '/api/jobs': () => ok({ jobs: [source] }), '/api/courses/COURSE_A/homeworks': () => pending.promise });
+    let row = loading.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '';
+    assert.match(row, /同步中…/); assert.doesNotMatch(row, /badge completed|>已完成</);
+    pending.resolve(failure(503, 'UPSTREAM', 'private error')); await settle();
+    row = loading.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '';
+    assert.match(row, /未同步/); assert.doesNotMatch(row, /badge completed|>已完成<|private error/);
+    const running = await app({ '/api/jobs': () => ok({ jobs: [job({ status: 'running', result: { service_status: 'support' } })] }), '/api/courses/COURSE_A/homeworks': () => ok([]) });
+    row = running.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '';
+    assert.match(row, /正在处理/); assert.doesNotMatch(row, /badge completed|待跟进/);
+  });
+  await t.test('cached zero with historical support cannot claim completion during a refresh or after its failure', async () => {
+    const refresh = deferred(); let reads = 0;
+    const page = await app({
+      '/api/jobs': () => ok({ jobs: [job({ status: 'support', result: { service_status: 'support' } })] }),
+      '/api/courses/COURSE_A/homeworks': () => ++reads === 1 ? ok([]) : refresh.promise,
+    });
+    const row = () => page.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '';
+    assert.match(row(), /badge completed[^>]*>已完成</);
+    page.get('[data-action="refresh"]').dispatch('click'); await settle();
+    assert.match(row(), /正在更新/); assert.doesNotMatch(row(), /badge completed|>可安排</);
+    refresh.resolve(failure(503, 'UPSTREAM', 'private error')); await settle();
+    assert.match(row(), /homework-count stale"[^>]*>0<\/span>/); assert.match(row(), /待跟进/);
+    assert.doesNotMatch(row(), /badge completed|>已完成<|private error/);
+  });
+  await t.test('running to support updates course, list, detail and idle polling with progress preserved', async () => {
+    let stopped = false;
+    const page = await app({ '/api/jobs': () => ok({ jobs: [job({ status: stopped ? 'support' : 'processing', result: { service_status: stopped ? 'support' : 'processing', total_homeworks: 19, completed_homeworks: 13 } })] }) });
+    stopped = true; await page.tick();
+    const row = page.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '';
+    assert.match(row, /待跟进/); assert.doesNotMatch(row, /服务处理中|正在处理/);
+    assert.match(page.html(), /<span class="l">处理中<\/span><span class="n">0<\/span>/);
+    assert.match(page.html(), /<span class="l">待跟进<\/span><span class="n">1<\/span>/);
+    page.get('[data-nav="progress"]').dispatch('click'); await settle();
+    assert.match(page.html(), /13 \/ 19 份作业/); assert.match(page.html(), /待跟进 <b>1<\/b>/);
+    assert.doesNotMatch(page.html(), /处理中 <b>1<\/b>|服务处理中/);
+    page.get('[data-job-detail="job-1"]').dispatch('click');
+    const dialog = page.html().slice(page.html().indexOf('role="dialog"'));
+    assert.match(dialog, /待跟进/); assert.doesNotMatch(dialog, /服务人员正在处理/);
+    assert.ok([...page.timers.values()].some(item => item.delay === 15000));
+    assert.ok(![...page.timers.values()].some(item => item.delay === 3000));
+  });
   await t.test('manual course refresh and terminal job refresh update the cached actionable count', async () => {
     let step = 0;
     const page = await app({
@@ -394,8 +451,8 @@ await test('consumer course service and administrator boundary',async t=>{
   });
   await t.test('unfinished and diagnostic data remain a service issue, never consumer debugging',async()=>{
     const failed=job({status:'failed',phase:'repairing',error_code:'PRIVATE_MODEL_429',message:'secret-trace',result:{service_status:'support',total_homeworks:2,completed_homeworks:1,model_calls:9,cost_micro_usd:123456,diagnostics:['private secret'],levels:[{title:'未完成任务',status:'failed',reason:'PRIVATE_DETAIL'}]}});
-    const html=renderServiceJob(failed,courses)+renderServiceDetail(failed,courses);assert.match(html,/放心，服务人员正在处理，无需重复提交/);assert.doesNotMatch(html,/PRIVATE_|secret|123456|模型|费用|重试|自测|请先核对/);assert.match(html,/待完成/);assert.doesNotMatch(html,/结果待核验/);
-    const page=await app({'/api/jobs':()=>ok({jobs:[failed]})});page.get('[data-nav="progress"]').dispatch('click');await settle();assert.match(page.html(),/服务处理中/);assert.doesNotMatch(page.html(),/PRIVATE_|secret-trace|模型费用/);
+    const html=renderServiceJob(failed,courses)+renderServiceDetail(failed,courses);assert.match(html,/本次处理已暂停/);assert.doesNotMatch(html,/PRIVATE_|secret|123456|模型|费用|重试|自测|请先核对/);assert.match(html,/待跟进/);assert.doesNotMatch(html,/结果待核验/);
+    const page=await app({'/api/jobs':()=>ok({jobs:[failed]})});page.get('[data-nav="progress"]').dispatch('click');await settle();assert.match(page.html(),/待跟进/);assert.doesNotMatch(page.html(),/PRIVATE_|secret-trace|模型费用/);
   });
   await t.test('safe public service status is understood and active jobs poll',async()=>{
     const page=await app({'/api/jobs':()=>ok({jobs:[job()]})});assert.ok([...page.timers.values()].some(item=>item.delay===3000));page.get('[data-nav="progress"]').dispatch('click');await settle();assert.match(page.html(),/正在处理/);assert.match(page.html(),/1 \/ 2 份作业/);await page.tick();assert.ok(page.requests.filter(item=>item.url==='/api/jobs').length>=3);
@@ -511,12 +568,12 @@ await test('consumer course service and administrator boundary',async t=>{
     assert.match(admin, /二叉树作业/); assert.match(admin, /attempts_exhausted/); assert.match(admin, /model_output_truncated/); assert.match(admin, /operator-only diagnostic/);
     const consumer = renderServiceDetail(job({ status: 'support', result: details }));
     assert.doesNotMatch(consumer, /attempts_exhausted|model_output_truncated|operator-only diagnostic|SERVICE_REQUIRED/);
-    assert.match(consumer, /服务人员正在处理/);
+    assert.match(consumer, /本次处理已暂停/);
   });
   await t.test('support handoff blocks duplicate course scheduling, without asking the user to retry', async () => {
     const page = await app({ '/api/jobs': () => ok({ jobs: [job({ status: 'support', result: { service_status: 'support' } })] }) });
     assert.ok('disabled' in page.get('[data-select-course="COURSE_A"]').attributes);
-    assert.match(page.html(), /服务处理中/);
+    assert.match(page.html(), /待跟进/);
     assert.doesNotMatch(page.html(), /请重试|修复次数|模型费用/);
   });
 
@@ -545,7 +602,7 @@ await test('consumer course service and administrator boundary',async t=>{
   await t.test('genuine running work still blocks a course even when a newer completed record exists', async () => {
     const page = await app({ '/api/jobs': () => ok({ jobs: [job({ id: 'new-done', status: 'completed', created_at: '2026-01-02T00:00:00Z', result: { service_status: 'completed' } }), job({ id: 'still-running', created_at: '2026-01-01T00:00:00Z' })] }) });
     assert.ok('disabled' in page.get('[data-select-course="COURSE_A"]').attributes);
-    assert.match(page.html(), /服务已安排/);
+    assert.match(page.html(), /正在处理/);
     assert.ok([...page.timers.values()].some(item => item.delay === 3000));
     assert.ok('disabled' in page.get('[data-action="start-all"]').attributes);
   });

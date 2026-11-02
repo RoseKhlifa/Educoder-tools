@@ -1497,7 +1497,8 @@ td { border-color:var(--line); }
 .badge.processing, .badge.doing { background:var(--blue-bg); color:var(--blue-ink); }
 .badge.waiting, .badge.todo, .badge.stopped { background:var(--paper-deep); color:var(--muted); }
 .badge.completed, .badge.done, .badge.graded { background:var(--teal-bg); color:var(--teal); }
-.badge.support, .badge.awaiting_review, .badge.submitted { background:var(--blue-bg); color:var(--blue-ink); }
+.badge.support { background:var(--amber-bg); color:var(--amber); }
+.badge.awaiting_review, .badge.submitted { background:var(--blue-bg); color:var(--blue-ink); }
 /* avatar should remain crisp even when upstream image is unavailable */
 .avatar { background:var(--coral-soft); color:var(--coral-deep); border-color:var(--line-strong); }
 .avatar[data-avatar] { object-fit:cover; }

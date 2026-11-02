@@ -8,6 +8,28 @@ const courses = [{ identifier: 'COURSE_A', name: '示例数据结构课程' }, {
 const visible = html => html.replace(/<details\b[\s\S]*?<\/details>/g, '');
 
 await test('consumer completion progress shows one current arrangement per original target', async t => {
+  await t.test('lifecycle controls status despite stale projections and paused work is counted separately', () => {
+    for (const [raw, expected] of [['failed','support'], ['uncertain','support'], ['interrupted','support'], ['support','support'], ['canceled','stopped'], ['queued','waiting'], ['waiting','waiting'], ['running','processing'], ['processing','processing'], ['succeeded','completed']]) {
+      for (const projected of ['processing','support','completed']) {
+        assert.equal(serviceStatus(job('lifecycle', 1, { status: raw, result: { service_status: projected } })), expected, `${raw}/${projected}`);
+      }
+    }
+    const paused = job('paused', 1, { result: { service_status: 'processing', total_homeworks: 19, completed_homeworks: 13 } });
+    const html = renderJobs([paused]);
+    assert.match(html, /待跟进 <b>1<\/b>/); assert.match(html, /13 \/ 19 份作业/);
+    assert.doesNotMatch(html, /处理中 <b>|服务处理中/);
+    const active = job('active', 1, { status: 'running', request: { scope: 'course', course: 'COURSE_B', mode: 'submit' } });
+    assert.match(renderJobs([active, paused]), /处理中 <b>1<\/b>/);
+  });
+  await t.test('terminal parent stops stale running and waiting child labels while preserving completed children', () => {
+    const result = { levels: [{ title: '已过关', status: 'passed' }, { title: '运行旧快照', status: 'processing' }, { title: '排队旧快照', status: 'waiting' }] };
+    for (const status of ['failed','support','canceled','uncertain','interrupted']) {
+      const html = renderServiceDetail(job('terminal', 1, { status, result }));
+      assert.match(html, /<p>已完成<\/p>/); assert.match(html, /<p>待跟进<\/p>/);
+      assert.doesNotMatch(html, /<p>正在处理<\/p>|服务人员正在处理|服务处理中/);
+    }
+    assert.match(renderServiceDetail(job('active', 1, { status: 'running', result })), /<p>正在处理<\/p>/);
+  });
   await t.test('retry and stop actions require explicit backend capabilities and never appear in historical records', () => {
     const failed = job('retryable', 1, { status: 'support', can_retry: true });
     assert.equal(canRetryJob(failed), true);
@@ -128,7 +150,7 @@ await test('consumer completion progress shows one current arrangement per origi
     const html = renderServiceJob(old, courses, true) + renderServiceDetail(old, courses, true);
     assert.match(html, /当次未完成/); assert.match(html, /当次已完成/); assert.match(html, /当次进度/); assert.match(html, /data-job-history="true"/);
     assert.doesNotMatch(html, /服务人员正在处理|服务处理中|正在逐项完成|会在处理后更新|关闭页面也会继续/);
-    assert.match(renderServiceDetail(old, courses), /放心，服务人员正在处理，无需重复提交/);
+    assert.match(renderServiceDetail(old, courses), /本次处理已暂停/);
   });
   await t.test('history expansion is a controllable native disclosure and current cards stay compact', () => {
     const rows = [job('old', 1), job('latest', 2, { status: 'succeeded' })];

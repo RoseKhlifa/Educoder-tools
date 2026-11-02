@@ -51,12 +51,12 @@ type summaryItem struct {
 	Status string `json:"status"`
 }
 
-func consumerItems(items []summaryItem) []consumerItem {
+func consumerItems(items []summaryItem, parentStatus string) []consumerItem {
 	out := make([]consumerItem, 0, len(items))
 	for _, item := range items {
 		status := "waiting"
 		switch item.Status {
-		case "passed", "skipped", "completed":
+		case "passed", "skipped", "completed", "succeeded":
 			status = "completed"
 		case "running":
 			status = "processing"
@@ -64,6 +64,11 @@ func consumerItems(items []summaryItem) []consumerItem {
 			status = "waiting"
 		default:
 			status = "support"
+		}
+		if status != "completed" && parentStatus != jobs.Running && parentStatus != jobs.Queued {
+			status = "support"
+		} else if status == "processing" && parentStatus == jobs.Queued {
+			status = "waiting"
 		}
 		out = append(out, consumerItem{Title: item.Title, Status: status})
 	}
@@ -81,7 +86,7 @@ type consumerProgress struct {
 }
 
 func toConsumerJob(j jobs.Job) consumerJob {
-	status, message := "support", "服务处理中，管理员将协助完成"
+	status, message := "support", "本次处理已暂停，已完成进度保留，剩余内容待跟进"
 	switch j.Status {
 	case jobs.Queued:
 		status, message = "waiting", "已接收，正在安排处理"
@@ -120,7 +125,7 @@ func toConsumerJob(j jobs.Job) consumerJob {
 	if json.Unmarshal(j.Result, &summary) == nil {
 		out.Result.TotalHomeworks, out.Result.CompletedHomeworks = summary.TotalHomeworks, summary.CompletedHomeworks
 		out.Result.TotalLevels, out.Result.CompletedLevels = summary.TotalLevels, summary.CompletedLevels
-		out.Result.Homeworks, out.Result.Levels = consumerItems(summary.Homeworks), consumerItems(summary.Levels)
+		out.Result.Homeworks, out.Result.Levels = consumerItems(summary.Homeworks, j.Status), consumerItems(summary.Levels, j.Status)
 	}
 	if req.Scope == "exercise" {
 		out.Kind = "exercise"
