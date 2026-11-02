@@ -2,12 +2,12 @@ export function renderUserGuidelines(): string {
   return `<article class="user-guidelines">
     <p class="guidelines-kicker">TOUGE.MOM · 使用与数据说明</p>
     <h2 id="modal-title">用户准则</h2>
-    <p class="guidelines-intro">请在使用前了解我们的实现方式、数据用途与服务边界。有疑问可以通过问题反馈联系我们。</p>
+    <p class="guidelines-intro">请先了解服务方式、数据用途和使用说明。有疑问可以通过问题反馈联系我们。</p>
 
-    <section class="guidelines-highlight" aria-labelledby="guidelines-protocol">
-      <h3 id="guidelines-protocol">协议请求实现，请合理使用</h3>
-      <p><strong>本站通过协议请求链路与头歌交互，获取课程和题目、保存作答并读取结果，无需你持续打开原站页面。</strong></p>
-      <p>协议实现不代表头歌官方授权，也不免除账号使用规则。请合理使用，遵守课程、学校和头歌的要求；上游规则或风控变化可能带来账号限制等影响。你需要了解并自行评估这类账号使用风险，我们会如实反馈已知情况，不承诺账号不受限制。</p>
+    <section aria-labelledby="guidelines-protocol">
+      <h3 id="guidelines-protocol">服务方式与使用提醒</h3>
+      <p>本站通过接口请求同步课程、题目和任务状态，并保存作答、读取结果，使用时无需一直打开原站页面。</p>
+      <p>本站为独立服务，请遵守课程、学校和头歌的使用规则。上游规则或风控变化可能影响服务及账号使用，请了解并自行评估相关风险。</p>
     </section>
 
     <section class="guidelines-highlight" aria-labelledby="guidelines-data">

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.54 - 2026-11-02
+
+- Simplify user guidance and keep every dialog close control visible while content scrolls
+
 ## 0.1.53 - 2026-11-02
 
 - Synchronize unfinished homework counts and course completion with session-scoped detail refreshes

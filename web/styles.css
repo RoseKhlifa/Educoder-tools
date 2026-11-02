@@ -1840,3 +1840,36 @@ td { border-color:var(--line); }
   .ticket-message { width:96%; padding:11px 12px; }
   .ticket-message-body { font-size:13px; line-height:1.85; }
 }
+
+/* Keep the dialog close control outside its scrolling content on every view. */
+.modal {
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+  max-height:calc(100vh - 50px);
+  max-height:calc(100dvh - 50px);
+  padding-top:56px;
+}
+.modal > .modal-close {
+  top:6px;
+  right:8px;
+  z-index:3;
+  width:44px;
+  min-height:44px;
+  background:var(--surface);
+}
+.modal > .modal-content {
+  min-height:0;
+  overflow-y:auto;
+  overscroll-behavior:contain;
+  scrollbar-gutter:stable;
+  padding:0 31px 31px;
+}
+@media (max-width:640px) {
+  .modal-backdrop { padding:15px; }
+  .modal {
+    max-height:calc(100vh - 30px);
+    max-height:calc(100dvh - 30px);
+  }
+  .modal > .modal-content { padding:0 18px 24px; }
+}

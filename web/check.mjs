@@ -41,3 +41,5 @@ await import('./jobs.check.mjs');
 
 await import('./course-cache.check.mjs');
 await import('./tickets.check.mjs');
+
+await import('./modal.check.mjs');
