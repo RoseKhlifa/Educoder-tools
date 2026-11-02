@@ -1,0 +1,138 @@
+package solver
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"time"
+
+	"educoder-cli/internal/answer"
+	"educoder-cli/internal/educoder"
+	"educoder-cli/internal/problem"
+	"educoder-cli/internal/questionbank"
+)
+
+const maxUnproductiveGenerations = 3
+
+// These controls belong to the durable run, just like charged usage and failed
+// hashes. Continuation grants more capacity without resetting an ineffective
+// profile or endlessly repeating an identical failed answer.
+type generationRecovery struct {
+	CompactOutput      bool `json:"compact_output,omitempty"`
+	RepeatedCandidates int  `json:"repeated_candidates,omitempty"`
+	OutputFailures     int  `json:"output_failures,omitempty"`
+}
+
+func (g *generationRecovery) restore(feedback []answer.Feedback) {
+	for _, entry := range feedback {
+		if entry.Kind == "model" && entry.Message == (&answer.Error{Kind: "truncated_output"}).Error() {
+			g.CompactOutput = true
+		}
+	}
+}
+
+func (g generationRecovery) profile(cfg Config, calls int) answer.Profile {
+	p := cfg.Profile
+	if calls > 0 {
+		p = cfg.RepairProfile
+	}
+	if calls >= 2 || g.RepeatedCandidates > 0 {
+		p = cfg.ProProfile
+	}
+	if g.CompactOutput {
+		// Optional reasoning shares the model's output window with source code.
+		// Once a response is cut off, reserve that window for complete JSON.
+		p.Thinking, p.ReasoningEffort, p.MaxTokens = "disabled", "", 8192
+	}
+	return p
+}
+
+func (g *generationRecovery) failedOutput(err error) bool {
+	var providerErr *answer.Error
+	if !errors.As(err, &providerErr) {
+		return false
+	}
+	switch providerErr.Kind {
+	case "truncated_output", "invalid_output_json", "candidate_contract":
+		g.CompactOutput = true
+		g.OutputFailures++
+		return g.OutputFailures >= maxUnproductiveGenerations
+	default:
+		// Rate limits, authentication and transport errors do not describe the
+		// quality of generated source and retain their existing retry rules.
+		return false
+	}
+}
+
+const runtimeStartupFailureMessage = "启动环境失败，请稍后重试，如问题持续存在，请联系平台人员解决。"
+
+func runtimeStartupFailure(output, expected string) bool {
+	// Match only the observed complete runner response, never an arbitrary
+	// program output containing the same words or a sample expecting this text.
+	return strings.TrimSpace(output) == runtimeStartupFailureMessage && strings.TrimSpace(expected) != runtimeStartupFailureMessage
+}
+
+func legacyRuntimeFeedback(f answer.Feedback) bool {
+	return f.Kind == "selftest" && strings.TrimSpace(f.Message) == runtimeStartupFailureMessage && runtimeStartupFailure(f.ActualStdout, f.ExpectedStdout)
+}
+
+func codeRepairFeedback(feedback []answer.Feedback) []answer.Feedback {
+	out := make([]answer.Feedback, 0, len(feedback))
+	for _, entry := range feedback {
+		if !legacyRuntimeFeedback(entry) {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+func legacyRuntimeOnlyRejection(c questionbank.Candidate) bool {
+	if c.Status != "rejected" || c.FilesHash == "" {
+		return false
+	}
+	hash, err := problem.HashFiles(c.Files)
+	if err != nil || hash != c.FilesHash {
+		return false
+	}
+	found := false
+	for _, validation := range c.Validations {
+		if validation.Result == "unknown" {
+			return false
+		}
+		if validation.Result != "failed" {
+			continue
+		}
+		if validation.Kind != "selftest" || !validation.Terminal || !validation.Complete || validation.TestCount != 1 || validation.PassedCount != 0 || validation.FilesHash != c.FilesHash || validation.SavedFilesHash != c.FilesHash || validation.RevisionHash != c.RevisionHash || validation.ContractHash != c.ContractHash {
+			return false
+		}
+		var feedback []answer.Feedback
+		if json.Unmarshal([]byte(validation.Feedback), &feedback) != nil || len(feedback) == 0 {
+			return false
+		}
+		sawRuntime := false
+		for _, entry := range feedback {
+			if legacyRuntimeFeedback(entry) {
+				sawRuntime = true
+			} else if entry.Kind != "selftest_passed" || !educoder.PublicOutputMatches(entry.ActualStdout, entry.ExpectedStdout) {
+				return false
+			}
+		}
+		if !sawRuntime {
+			return false
+		}
+		found = true
+	}
+	return found
+}
+
+func waitRuntimeRetry(ctx context.Context) error {
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}

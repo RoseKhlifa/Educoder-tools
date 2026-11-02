@@ -16,6 +16,14 @@ func TestCollectionLocateExistingRuntimeWithoutStartingIt(t *testing.T) {
 		want   int
 	}{
 		{"passed subset", func(map[string]any, []map[string]any, *Homework, *HomeworkProgress) {}, 1},
+		{"lazy unfinished game does not block passed collection", func(_ map[string]any, g []map[string]any, _ *Homework, _ *HomeworkProgress) {
+			g[1]["identifier"] = nil
+			g[1]["status"] = 3
+		}, 1},
+		{"missing game with full score is rejected", func(_ map[string]any, g []map[string]any, _ *Homework, _ *HomeworkProgress) {
+			g[0]["identifier"] = nil
+			g[0]["status"] = 3
+		}, 0},
 		{"header omits challenges", func(h map[string]any, _ []map[string]any, _ *Homework, _ *HomeworkProgress) { delete(h, "challenges") }, 1},
 		{"header omits challenges ambiguous scores", func(h map[string]any, _ []map[string]any, _ *Homework, p *HomeworkProgress) {
 			delete(h, "challenges")

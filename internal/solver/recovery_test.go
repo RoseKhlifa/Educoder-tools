@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -40,7 +41,7 @@ func TestAllModelProfilesAreEstimatedAndCharged(t *testing.T) {
 	store := &fakeStore{}
 	p := &scriptedProvider{estimateCost: 10, generate: func(_ context.Context, _ answer.Request, n int) (answer.Result, error) {
 		if n < 3 {
-			return solved("bad", 3), nil
+			return solved(fmt.Sprintf("bad%d", n), 3), nil
 		}
 		return solved("good", 4), nil
 	}}

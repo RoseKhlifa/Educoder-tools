@@ -123,7 +123,7 @@ func (a *EducoderAdapter) confirmEditor(ctx context.Context, t *educoder.Task, f
 		return "", err
 	}
 	if current.Content != file.Content {
-		return "", errors.New("saved editor content differs from candidate; evaluation remains unverified")
+		return "", editorContentMismatch(file.Content, current.Content)
 	}
 	hash, err := problem.HashFiles([]problem.SolutionFile{file})
 	if err != nil {
@@ -136,6 +136,19 @@ func (a *EducoderAdapter) confirmEditor(ctx context.Context, t *educoder.Task, f
 	a.expected[t.Game.Identifier][file.Path] = problem.HashContent(file.Content)
 	a.mu.Unlock()
 	return hash, nil
+}
+
+// The bank binds validation to byte-exact candidate hashes. Detect a possible
+// CRLF transport conversion for diagnosis, but never report the candidate hash
+// as the read-back hash when those bytes differ. External source normalization
+// belongs before candidate creation, where its hash can describe the bytes that
+// are actually sent. Counts and hashes provide a useful diagnostic without
+// persisting source code or the first differing line.
+func editorContentMismatch(candidate, observed string) error {
+	lineEndingOnly := strings.ReplaceAll(candidate, "\r\n", "\n") == strings.ReplaceAll(observed, "\r\n", "\n")
+	return fmt.Errorf("saved editor content differs from candidate; evaluation remains unverified (candidate_bytes=%d observed_bytes=%d candidate_crlf=%d observed_crlf=%d crlf_conversion_only=%t candidate_sha256=%s observed_sha256=%s)",
+		len(candidate), len(observed), strings.Count(candidate, "\r\n"), strings.Count(observed, "\r\n"), lineEndingOnly,
+		problem.HashContent(candidate), problem.HashContent(observed))
 }
 
 func (a *EducoderAdapter) task(ctx context.Context, target Target) (*educoder.Task, error) {
@@ -155,14 +168,19 @@ func (a *EducoderAdapter) SelfTest(ctx context.Context, target Target, file prob
 	}
 	want := expected
 	r, err := a.Client.SelfTest(ctx, t, file.Path, file.Content, input, educoder.SelfTestOptions{ExpectedOutput: &want})
+	result := SelfTest{Completed: r != nil && r.Completed, Output: outputOf(r), Matches: r != nil && r.Matches != nil && *r.Matches}
 	if err != nil {
-		return SelfTest{Completed: r != nil && r.Completed, Output: outputOf(r), Matches: r != nil && r.Matches != nil && *r.Matches}, err
+		return result, err
+	}
+	if r == nil {
+		return result, errors.New("empty selftest result")
 	}
 	hash, err := a.confirmEditor(ctx, t, file)
 	if err != nil {
-		return SelfTest{Completed: r.Completed, Output: r.Output}, err
+		return result, err
 	}
-	return SelfTest{Completed: r.Completed, Output: r.Output, Matches: r.Matches != nil && *r.Matches, SavedFilesHash: hash}, nil
+	result.SavedFilesHash = hash
+	return result, nil
 }
 
 func outputOf(r *educoder.SelfTestResult) string {

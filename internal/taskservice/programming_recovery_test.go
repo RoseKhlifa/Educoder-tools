@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"educoder-cli/internal/answer"
 	"educoder-cli/internal/solver"
 )
 
@@ -15,6 +16,17 @@ type recoveryFixture struct {
 	initialErr  error
 	finalStatus string
 	continueErr error
+}
+
+func TestGenerationStallKeepsSpecificBatchReasonEvenWithProviderError(t *testing.T) {
+	r := &Result{Status: "generation_stalled", Programming: &solver.Result{Status: "generation_stalled"}}
+	err := &answer.Error{Kind: "truncated_output"}
+	if status := terminalBatchStatus(r, err); status != "generation_stalled" {
+		t.Fatalf("terminal status=%q", status)
+	}
+	if reason := batchFailureReason(r, err); reason != "generation_stalled" {
+		t.Fatalf("bounded generation reason lost to last provider error: %q", reason)
+	}
 }
 
 func (f *recoveryFixture) Run(context.Context, solver.Adapter, solver.Request) (*solver.Result, error) {
@@ -59,6 +71,7 @@ func TestProgrammingRecoveryStopsAtPassAndPreservesAdmissionAndUnknownResults(t 
 		{"already passed", &solver.Result{RunID: "same-run", Status: "passed"}, solver.ModeSubmit, nil, true, "passed"},
 		{"unknown formal evaluation", &solver.Result{RunID: "same-run", Status: "uncertain", Evaluation: &solver.Evaluation{}}, solver.ModeSubmit, nil, true, "uncertain"},
 		{"unknown selftest", &solver.Result{RunID: "same-run", Status: "uncertain", SelfTestStatus: "unknown"}, solver.ModeSubmit, nil, true, "uncertain"},
+		{"generation stagnation", &solver.Result{RunID: "same-run", Status: "generation_stalled"}, solver.ModeSubmit, nil, true, "generation_stalled"},
 		{"real cost budget spent", &solver.Result{RunID: "same-run", Status: "selftest_failed", CostMicroUSD: 19, ReservedMicroUSD: 1}, solver.ModeSubmit, nil, true, "selftest_failed"},
 		{"editor conflict", &solver.Result{RunID: "same-run", Status: "selftest_failed"}, solver.ModeSubmit, errors.New("editor changed"), true, "selftest_failed"},
 		{"generate only", &solver.Result{RunID: "same-run", Status: "selftest_failed"}, solver.ModeGenerateOnly, nil, true, "selftest_failed"},

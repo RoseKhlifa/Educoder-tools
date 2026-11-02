@@ -158,8 +158,8 @@ func (c *Client) ReadCodeFile(ctx context.Context, t *Task, filePath string) (*C
 	}
 	var response struct {
 		Content struct {
-			Content string `json:"content"`
-			Size    int64  `json:"size"`
+			Content *string `json:"content"`
+			Size    int64   `json:"size"`
 		} `json:"content"`
 		Filename string `json:"filename"`
 		Language string `json:"language"`
@@ -169,7 +169,10 @@ func (c *Client) ReadCodeFile(ctx context.Context, t *Task, filePath string) (*C
 	if err := c.request(ctx, http.MethodGet, "/api/tasks/"+t.Game.Identifier+"/rep_content.json", query, nil, taskRef(t), &response); err != nil {
 		return nil, err
 	}
-	content, err := base64.StdEncoding.DecodeString(response.Content.Content)
+	if response.Content.Content == nil {
+		return nil, errors.New("文件响应缺少 content.content；编辑器内容未确认")
+	}
+	content, err := base64.StdEncoding.DecodeString(*response.Content.Content)
 	if err != nil || !utf8.Valid(content) {
 		return nil, errors.New("文件 content.content 不是有效的 Base64 UTF-8 代码")
 	}

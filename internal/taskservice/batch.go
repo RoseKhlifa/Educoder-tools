@@ -46,8 +46,9 @@ type BatchResult struct {
 }
 
 // RunHomework executes every level in the selected homework in one process.
-// It performs a complete, read-only roster preflight before invoking Run; a
-// malformed or partial roster therefore cannot cause an accidental write.
+// It validates the canonical assignment and every existing runtime before Run.
+// Upstream can defer creating later games; those stable planned identities are
+// resolved only when reached, then fully validated before any answer write.
 func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req Request, report func(Progress)) (*BatchResult, error) {
 	if s == nil || client == nil || s.store == nil {
 		return nil, errors.New("task service requires store and authenticated client")
@@ -130,11 +131,16 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 	sort.Slice(roster.Levels, func(i, j int) bool { return roster.Levels[i].Position < roster.Levels[j].Position })
 	levels := make([]educoder.HomeworkLevel, 0, len(roster.Levels))
 	out.Levels = []BatchLevel{}
-	// Load and validate every planned task before the first solver call. This
-	// is deliberately separate from the per-level guard: a stale or partial
-	// roster must fail atomically before any save/submit mutation can happen.
+	// Existing games are checked before the first solver call. A legitimate
+	// not-yet-created game has no task to read; preserve its canonical identity
+	// and resolve it just in time instead of rejecting the entire assignment.
 	for _, l := range roster.Levels {
 		if l.Optional {
+			continue
+		}
+		if l.RuntimePending {
+			levels = append(levels, l)
+			out.Levels = append(out.Levels, BatchLevel{Position: l.Position, ChallengeID: l.ChallengeID, Title: l.Title, Status: "planned", MaxModelCalls: s.cfg.MaxModelCalls})
 			continue
 		}
 		t, e := client.CollectionLoadTask(ctx, req.Course, req.HomeworkID, l.Game)
@@ -236,6 +242,22 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 		out.CurrentPosition = l.Position
 		out.CurrentTitle = l.Title
 		emit(BatchProgress{TotalLevels: out.TotalLevels, CompletedLevels: out.CompletedLevels, SkippedLevels: out.SkippedLevels, FailedLevels: out.FailedLevels, CurrentPosition: l.Position, CurrentTitle: l.Title}, "running", fmt.Sprintf("正在完成第 %d 关：%s", l.Position, l.Title))
+		if l.RuntimePending {
+			emit(BatchProgress{TotalLevels: out.TotalLevels, CompletedLevels: out.CompletedLevels, SkippedLevels: out.SkippedLevels, CurrentPosition: l.Position, CurrentTitle: l.Title}, "initializing", "正在准备尚未创建的关卡")
+			resolved, _, resolveErr := client.ResolveHomeworkLevel(ctx, roster, l)
+			if errors.Is(resolveErr, educoder.ErrOptionalTask) {
+				omitBatchLevel(out, i)
+				continue
+			}
+			if resolveErr != nil {
+				out.Status, out.ReasonCode = "runtime_initialization_failed", "runtime_initialization_failed"
+				out.FailedLevels++
+				out.Levels[i].Status, out.Levels[i].ReasonCode = out.Status, out.ReasonCode
+				out.Diagnostics = append(out.Diagnostics, resolveErr.Error())
+				return out, resolveErr
+			}
+			l = resolved
+		}
 		bound, e := client.BindHomeworkLevel(roster, l)
 		if e != nil {
 			if errors.Is(e, educoder.ErrOptionalTask) {
@@ -386,7 +408,7 @@ func statusOf(r *Result, e error) string {
 func terminalBatchStatus(r *Result, e error) string {
 	if r != nil {
 		switch r.Status {
-		case "uncertain", "verification_unconfirmed", "canceled", "budget_exhausted", "model_error", "selftest_failed", "attempts_exhausted", "invalid_candidate", "unsupported_multifile", "budget_unavailable", "usage_persistence_failed", "verification_persistence_failed", "resource_unavailable":
+		case "uncertain", "verification_unconfirmed", "canceled", "budget_exhausted", "model_error", "generation_stalled", "selftest_failed", "attempts_exhausted", "invalid_candidate", "unsupported_multifile", "budget_unavailable", "usage_persistence_failed", "verification_persistence_failed", "resource_unavailable":
 			return r.Status
 		}
 	}
@@ -399,6 +421,9 @@ func terminalBatchStatus(r *Result, e error) string {
 // batchFailureReason emits an enum only. Upstream bodies, model responses,
 // source code and execution URLs are never copied into a public reason.
 func batchFailureReason(r *Result, err error) string {
+	if r != nil && r.Status == "generation_stalled" {
+		return "generation_stalled"
+	}
 	var imageErr *educoder.QuestionImageError
 	if errors.As(err, &imageErr) {
 		return "objective_image_unavailable"

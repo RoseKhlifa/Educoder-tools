@@ -102,15 +102,23 @@ func (c *Client) CollectionLocate(ctx context.Context, course string, hw Homewor
 	}
 	seenGame := map[string]bool{}
 	seenPosition := map[int]bool{}
+	initializedGames := make([]collectionGame, 0, len(games))
 	for _, g := range games {
+		// A not-yet-entered challenge has no game to collect. It must not
+		// prevent collection of other, positively verified full-score rows.
+		// Never initialize such a game from the read-only collector.
+		if g.Identifier == "" && g.Status == 3 && fullNames[g.Name].ChallengeID == 0 {
+			continue
+		}
 		if validIdentifier(g.Identifier) != nil || g.Position < 1 || (len(h.Challenges) > 0 && g.Position > len(h.Challenges)) || seenGame[g.Identifier] || seenPosition[g.Position] {
 			out.Reasons["locator_game_roster_ambiguous"]++
 			return out, nil
 		}
 		seenGame[g.Identifier] = true
 		seenPosition[g.Position] = true
+		initializedGames = append(initializedGames, g)
 	}
-	for _, g := range games {
+	for _, g := range initializedGames {
 		// Some real headers omit challenges entirely (notably choices).
 		// The score response still binds an exact unique name to challenge_id.
 		// Join only unique exact names, then verify ID, name and runtime position

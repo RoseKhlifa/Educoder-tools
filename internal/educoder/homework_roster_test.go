@@ -7,9 +7,64 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 )
+
+func TestHomeworkRosterSupportsLazyRuntimeWithoutWeakeningSelectedIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name, games, wantErr string
+		wantPending          bool
+	}{
+		{"lazy required runtime", `[{"identifier":"G1","position":1,"name":"first","status":0},{"identifier":null,"position":2,"name":"second","status":3}]`, "", true},
+		{"extra malformed row", `[{"identifier":"G1","position":1,"name":"first"},{"identifier":"G2","position":2,"name":"second"},{"identifier":null,"position":0,"name":"outside"}]`, "", false},
+		{"optional runtime not needed", `[{"identifier":"G1","position":1,"name":"first"},{"identifier":"G2","position":2,"name":"second"},{"identifier":null,"position":0,"name":"elective"}]`, "", false},
+		{"initialized runtime needs game", `[{"identifier":"G1","position":1,"name":"first"},{"identifier":null,"position":2,"name":"second","status":0}]`, "row=2 field=identifier", false},
+		{"lazy runtime still needs position", `[{"identifier":"G1","position":1,"name":"first"},{"identifier":null,"position":0,"name":"second","status":3}]`, "row=2 field=position", false},
+		{"selected position duplicate", `[{"identifier":"G1","position":1,"name":"first"},{"identifier":null,"position":1,"name":"second","status":3}]`, "field=position reason=duplicate", false},
+		{"selected game duplicate", `[{"identifier":"G1","position":1,"name":"first"},{"identifier":"G1","position":2,"name":"second"}]`, "field=identifier reason=duplicate", false},
+		{"selected challenge duplicate", `[{"identifier":"G1","position":1,"name":"first"},{"identifier":"G2","position":2,"name":"second"},{"identifier":null,"position":3,"name":"second","status":3}]`, "field=name reason=duplicate_selected_challenge", false},
+		{"selected kind mismatch", `[{"identifier":"G1","position":1,"name":"first"},{"identifier":null,"position":2,"name":"second","status":3,"challenge_st":1}]`, "field=challenge_st reason=mismatch", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet {
+					t.Error("roster must only read")
+				}
+				switch r.URL.Path {
+				case "/api/shixun_homeworks/44/header_info.json":
+					fmt.Fprint(w, `{"data":{"homework_id":44,"work_id":5,"myshixun_identifier":"RUNTIME","shixun_identifier":"SHIXUN","challenges":[{"id":10,"name":"first"},{"id":11,"name":"second"},{"id":12,"name":"elective"}]}}`)
+				case "/api/homework_commons/44/shixun_challenge_data.json":
+					fmt.Fprint(w, `{"data":{"challenge_settings":[{"challenge_id":10,"challenge_name":"first","status":"required","challenge_st":0},{"challenge_id":11,"challenge_name":"second","status":"required","challenge_st":0},{"challenge_id":12,"challenge_name":"elective","status":"optional","challenge_st":0}]}}`)
+				case "/api/myshixuns/RUNTIME/challenges.json":
+					fmt.Fprint(w, tc.games)
+				default:
+					t.Errorf("roster initialized a game: %s", r.URL.Path)
+				}
+			}))
+			defer server.Close()
+			roster, err := New(server.URL).HomeworkRoster(context.Background(), "COURSE", Homework{ID: 44, IsShixun: true, ShixunIdentifier: "SHIXUN", ChallengeCount: 3})
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("want %q, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(roster.Levels) != 3 || len(roster.RequiredLevels()) != 2 || roster.Levels[1].RuntimePending != tc.wantPending || !roster.Levels[2].Optional {
+				t.Fatalf("unexpected roster %+v", roster.Levels)
+			}
+			if tc.wantPending {
+				if _, err := New(server.URL).BindHomeworkLevel(roster, roster.Levels[1]); err == nil {
+					t.Fatal("unresolved game reached bound solver client")
+				}
+			}
+		})
+	}
+}
 
 func TestHomeworkRosterAllowsHomeworkSubsetOfShixunHeader(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

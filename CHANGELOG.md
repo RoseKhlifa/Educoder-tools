@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.59 - 2026-11-02
+
+- Adapt lazy homework runtimes and exact LF bank candidates; preserve effective repair state and separate runtime failures
+
 ## 0.1.58 - 2026-11-02
 
 - Unify question bank inventory counts across objective programming and graphic questions

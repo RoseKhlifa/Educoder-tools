@@ -2,7 +2,6 @@ package questionbank
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -56,6 +55,17 @@ type ExternalEntry struct {
 }
 
 func normalizeExternalIdentity(s string) string { return strings.Join(strings.Fields(s), " ") }
+
+// External text may come from a Windows checkout with core.autocrlf enabled.
+// The browser editor saves LF text. Normalize before creating the candidate,
+// leaving the source record and its provenance hashes byte-exact. Evaluation
+// still verifies the exact bytes of this new candidate, never an equivalent hash.
+func externalExecutionContent(kind, content string) string {
+	if kind == "programming" {
+		return strings.ReplaceAll(content, "\r\n", "\n")
+	}
+	return content
+}
 
 func scanExternal(row interface{ Scan(...any) error }) (ExternalEntry, error) {
 	var e ExternalEntry
@@ -159,9 +169,9 @@ func (s *Store) BindExternalCandidates(ctx context.Context, ref Ref, identity Ex
 	if err != nil || len(matches) == 0 {
 		return nil, err
 	}
-	content := matches[0].Files[0].Content
+	content := externalExecutionContent(kind, matches[0].Files[0].Content)
 	for _, e := range matches[1:] {
-		if e.Files[0].Content != content {
+		if externalExecutionContent(kind, e.Files[0].Content) != content {
 			return nil, nil
 		}
 	}
@@ -179,13 +189,51 @@ func (s *Store) BindExternalCandidates(ctx context.Context, ref Ref, identity Ex
 	return []Candidate{candidate}, nil
 }
 
-// IsExternalCandidate checks durable provenance rather than trusting the public
-// Source string supplied to AddCandidate.
+// IsExternalCandidate checks durable provenance and the executable content,
+// rather than trusting a caller-controlled Source label. Pre-normalization
+// candidates remain in history but must not be selected ahead of LF candidates.
 func (s *Store) IsExternalCandidate(ctx context.Context, candidateID int64) (bool, error) {
-	var exists int
-	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM external_candidate_bindings b JOIN external_entries e ON e.id=b.external_entry_id WHERE b.candidate_id=? AND e.kind IN ('programming','diagram') AND e.status='candidate' LIMIT 1`, candidateID).Scan(&exists)
-	if errors.Is(err, sql.ErrNoRows) {
+	rows, err := s.db.QueryContext(ctx, `SELECT e.kind,e.files_json FROM external_candidate_bindings b JOIN external_entries e ON e.id=b.external_entry_id WHERE b.candidate_id=? AND e.kind IN ('programming','diagram') AND e.status='candidate'`, candidateID)
+	if err != nil {
+		return false, err
+	}
+	type boundSource struct {
+		kind  string
+		files []problem.SolutionFile
+	}
+	var sources []boundSource
+	for rows.Next() {
+		var kind, raw string
+		if err = rows.Scan(&kind, &raw); err != nil {
+			rows.Close()
+			return false, err
+		}
+		var files []problem.SolutionFile
+		if err = json.Unmarshal([]byte(raw), &files); err != nil {
+			rows.Close()
+			return false, err
+		}
+		sources = append(sources, boundSource{kind, files})
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil || len(sources) == 0 {
+		return false, err
+	}
+	candidate, err := s.Candidate(ctx, candidateID)
+	if errors.Is(err, ErrNotFound) {
 		return false, nil
 	}
-	return err == nil, err
+	if err != nil {
+		return false, err
+	}
+	if len(candidate.Files) != 1 {
+		return false, nil
+	}
+	for _, source := range sources {
+		if len(source.files) == 1 && (source.files[0].Path == "" || source.files[0].Path == candidate.Files[0].Path) && externalExecutionContent(source.kind, source.files[0].Content) == candidate.Files[0].Content {
+			return true, nil
+		}
+	}
+	return false, nil
 }
