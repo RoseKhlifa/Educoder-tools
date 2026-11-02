@@ -119,6 +119,12 @@ func TestCollectionObjectiveFullScoreDedupAndOwner(t *testing.T) {
 	if e != nil || s.Collected != 0 || s.Duplicates != 1 {
 		t.Fatalf("duplicate %+v %v", s, e)
 	}
+	if got, err := h.Bank.ContributedQuestions(context.Background(), owner); err != nil || got != 1 {
+		t.Fatalf("collection contribution was not deduplicated: %d %v", got, err)
+	}
+	if got, err := h.Bank.ContributedQuestions(context.Background(), problem.HashContent("another owner")); err != nil || got != 0 {
+		t.Fatalf("collection contribution crossed accounts: %d %v", got, err)
+	}
 	s, e = h.Scan(context.Background(), f, problem.HashContent("another owner"), nil)
 	if e != nil || s.Levels != 0 || s.Reasons["no_readonly_game_locator"] != 1 {
 		t.Fatalf("owner %+v %v", s, e)

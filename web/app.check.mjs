@@ -4,22 +4,39 @@ import { renderAdminJobDetail } from './dist/admin.js';
 import { renderServiceJob, renderServiceDetail } from './dist/jobs.js';
 class Element {
   constructor(tag, attributes, document) {
-    this.tag = tag; this.attributes = attributes; this.document = document; this.value = attributes.value ?? ''; this.checked = 'checked' in attributes; this.required = 'required' in attributes; this.open = 'open' in attributes; this.isConnected = true;
+    this.tag = tag; this.attributes = attributes; this.document = document; this.id = attributes.id || ''; this.value = attributes.value ?? ''; this.checked = 'checked' in attributes; this.required = 'required' in attributes; this.open = 'open' in attributes; this.isConnected = true; this.disabled = 'disabled' in attributes;
     this.dataset = Object.fromEntries(Object.entries(attributes).filter(([key]) => key.startsWith('data-')).map(([key,value]) => [key.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase()), value]));
-    this.listeners = new Map(); this.elements = { namedItem: name => document.items.find(item => item.attributes.name === name) };
+    this.listeners = new Map(); this.controls = []; this.elements = { namedItem: name => this.controls.find(item => item.attributes.name === name) ?? null };
   }
   addEventListener(name, handler) { this.listeners.set(name, [...this.listeners.get(name) ?? [], handler]); }
   dispatch(name) { if ('disabled' in this.attributes) return; for (const handler of this.listeners.get(name) ?? []) handler({currentTarget:this,target:this,preventDefault(){}}); }
-  reset() { for (const item of this.document.items) if (item.tag === 'input') item.value = ''; }
+  reset() { for (const item of this.controls) if (['input','textarea','select'].includes(item.tag)) item.value = item.initialValue ?? ''; }
   focus() { this.document.activeElement = this; }
-  setSelectionRange() {}
+  setSelectionRange(start, end, direction = 'none') { this.selectionStart = start; this.selectionEnd = end; this.selectionDirection = direction; }
 }
 class Input extends Element {}
 class Document {
   items = []; html = ''; listeners = new Map(); activeElement = null;
-  constructor() { const document = this; this.root = { get innerHTML() { return document.html; }, set innerHTML(value) { document.html = value; document.items.forEach(item => { item.isConnected = false; }); document.items = [...value.matchAll(/<(button|input|form|img|details)\b([^>]*)>/g)].map(([,tag,attrs]) => new (tag === 'input' ? Input : Element)(tag,Object.fromEntries([...attrs.matchAll(/([\w-]+)(?:="([^"]*)")?/g)].map(([,key,value])=>[key,value??''])),document)); } }; }
+  constructor() { const document = this; this.root = { get innerHTML() { return document.html; }, set innerHTML(value) {
+    document.html = value; document.items.forEach(item => { item.isConnected = false; });
+    const modalStart = value.indexOf('role="dialog"');
+    document.items = [...value.matchAll(/<(button|input|form|img|details|textarea|select|section|a)\b([^>]*)>/g)].map(match => {
+      const [,tag,attrs] = match, start = match.index;
+      const item = new (tag === 'input' ? Input : Element)(tag,Object.fromEntries([...attrs.matchAll(/([\w-]+)(?:="([^"]*)")?/g)].map(([,key,value])=>[key,value??''])),document);
+      item.start = start; item.inModal = modalStart >= 0 && start >= modalStart;
+      if (tag === 'select') item.value = value.slice(start,value.indexOf('</select>',start)).match(/<option value="([^"]*)"/)?.[1] ?? '';
+      item.initialValue = item.value; return item;
+    });
+    for (const form of document.items.filter(item=>item.tag==='form')) {
+      const end=value.indexOf('</form>',form.start);form.controls=document.items.filter(item=>item.start>form.start&&item.start<end&&'name'in item.attributes);
+    }
+  } }; }
   querySelector(selector) { return selector === '#app' ? this.root : this.querySelectorAll(selector)[0] ?? null; }
-  querySelectorAll(selector) { if(selector.startsWith('#')) return this.items.filter(item => item.attributes.id === selector.slice(1)); const match=selector.match(/^\[([^=\]]+)(?:="([^"]*)")?\]$/);return match?this.items.filter(item => match[1] in item.attributes && (match[2]===undefined||item.attributes[match[1]]===match[2])):[]; }
+  querySelectorAll(selector) {
+    if(selector.includes(',')) return [...new Set(selector.split(',').flatMap(part=>this.querySelectorAll(part.trim())))].sort((a,b)=>a.start-b.start);
+    if(selector.startsWith('.modal ')) return this.items.filter(item=>item.inModal&&(item.tag===selector.slice(7)||selector.slice(7)==='a[href]'&&item.tag==='a'&&'href'in item.attributes));
+    if(selector.startsWith('#')) return this.items.filter(item => item.attributes.id === selector.slice(1)); const match=selector.match(/^\[([^=\]]+)(?:="([^"]*)")?\]$/);return match?this.items.filter(item => match[1] in item.attributes && (match[2]===undefined||item.attributes[match[1]]===match[2])):[];
+  }
   addEventListener(name, handler) { this.listeners.set(name,handler); }
 }
 const ok = data => new Response(JSON.stringify({data,error:null}));
@@ -30,6 +47,10 @@ const serviceDate=()=>new Date(Date.now()+8*60*60*1000).toISOString().slice(0,10
 const job=(extra={})=>({id:'job-1',status:'processing',phase:'processing',request:{scope:'course',course:'COURSE_A',mode:'submit'},created_at:'2026-10-31T00:00:00Z',updated_at:'2026-10-31T00:00:00Z',result:{service_status:'processing',total_homeworks:2,completed_homeworks:1},...extra});
 const settle=async()=>{for(let i=0;i<12;i++)await new Promise(resolve=>setImmediate(resolve));};
 const deferred=()=>{let resolve;const promise=new Promise(done=>{resolve=done;});return{promise,resolve};};
+const supportTicket=(extra={})=>({id:'ticket-one',subject:'需要核对课程进度',category:'task',status:'open',created_at:'2026-11-02T01:00:00Z',updated_at:'2026-11-02T02:00:00Z',message_count:1,last_author_role:'user',...extra});
+const supportDetail=(ticket=supportTicket(),body='请帮忙核对课程完成情况')=>({ticket,messages:[{id:'message-one',author_role:'user',body,created_at:'2026-11-02T01:00:00Z'}]});
+const supportList=(items,next_cursor='')=>({items,next_cursor,limit:30});
+const fillSupport=(page,subject='测试问题',body='测试反馈内容',category='task')=>{page.get('#ticket-subject').value=subject;page.get('#ticket-category').value=category;page.get('#ticket-body').value=body;};
 let version=0;
 async function app(overrides={}) {
   const document=new Document(),requests=[],timers=new Map();let timerId=0;
@@ -41,8 +62,9 @@ async function app(overrides={}) {
     if(url==='/api/auth/me'||url==='/api/auth/login')return ok({user,platform:{role:'user',status:'active'}});
     if(url==='/api/auth/logout')return ok({loggedOut:true});
     if(url==='/api/courses')return ok(courses);
-    if(url==='/api/service/today-summary')return ok({date:serviceDate(),timezone:'Asia/Shanghai',completed_students:7,completed_questions:103});
-    if(url==='/api/question-bank/summary')return ok({verified_objective_questions:272,verified_programming_problems:8,total_verified_questions:280});
+    if(url==='/api/service/today-summary')return ok({date:serviceDate(),timezone:'Asia/Shanghai',completed_students:7,completed_questions:103,total_served_students:28,total_completed_questions:1042});
+    if(url.startsWith('/api/tickets')||url.startsWith('/api/admin/tickets'))return ok({items:[],next_cursor:'',limit:30});
+    if(url==='/api/question-bank/summary')return ok({verified_objective_questions:272,verified_programming_problems:8,total_verified_questions:280,contributed_questions:12});
     if(url==='/api/jobs')return options.method==='POST'?ok(job({request:JSON.parse(options.body)})):ok({jobs:[]});
     if(url.endsWith('/homeworks'))return ok([{id:1,name:'测试作业',challengeCount:2,finishedChallengeCount:1,requiredProgressKnown:true,requiredChallengeCount:2,finishedRequiredChallengeCount:1}]);
     if(url.endsWith('/exercises'))return ok({items:[]});
@@ -68,7 +90,7 @@ await test('consumer course service and administrator boundary',async t=>{
   await t.test('the sidebar shows only verified bank totals and keeps the guidelines reachable', async () => {
     const page=await app();assert.match(page.html(), /题库概况/);assert.match(page.html(), /<strong>280<\/strong>/);
     assert.match(page.html(), /<dt>客观题<\/dt><dd>272<\/dd>/);assert.match(page.html(), /<dt>编程题<\/dt><dd>8<\/dd>/);
-    assert.match(page.html(), /题库数量不代表课程覆盖率/);assert.match(page.html(), /不承诺成绩或完成时限/);
+    assert.match(page.html(), /您已为题库贡献 <strong>12<\/strong> 道题，感谢您的付出。/);assert.doesNotMatch(page.html(), /bank-count-note|bank-reuse-note/);assert.match(page.html(), /不承诺成绩或完成时限/);
     assert.match(page.html(), /class="bank-mobile"/);
     const bankRequests=()=>page.requests.filter(item=>item.url==='/api/question-bank/summary');
     assert.equal(bankRequests().length,1);await page.tick();assert.equal(bankRequests().length,1,'normal job polling must not rescan the bank before its refresh interval');
@@ -89,16 +111,23 @@ await test('consumer course service and administrator boundary',async t=>{
     const empty=await app({'/api/question-bank/summary':()=>ok({verified_objective_questions:0,verified_programming_problems:0,total_verified_questions:0})});
     assert.match(empty.html(), /bank-total"><strong>0<\/strong>/);assert.doesNotMatch(empty.html(), /题库概况暂未同步/);
   });
+  await t.test('missing contribution evidence stays unknown while verified totals remain usable', async () => {
+    const page=await app({'/api/question-bank/summary':()=>ok({verified_objective_questions:272,verified_programming_problems:8,total_verified_questions:280})});
+    const bank=page.html().split('aria-label="题库概况"')[1].split('</section>')[0];
+    assert.match(bank,/bank-total"><strong>280<\/strong>/);assert.match(bank,/正在核对您的题库贡献，感谢您的支持。/);
+    assert.doesNotMatch(bank,/您已为题库贡献.*(?:<strong>)?0/);
+  });
   await t.test('a bank response after logout never restores private account UI', async () => {
     const late=deferred();const page=await app({'/api/question-bank/summary':()=>late.promise});
-    page.get('[data-action="logout"]').dispatch('click');late.resolve(ok({verified_objective_questions:900,verified_programming_problems:1,total_verified_questions:901}));await settle();
-    assert.match(page.html(), /id="login-form"/);assert.doesNotMatch(page.html(), /题库概况|901|课堂甲/);
+    page.get('[data-action="logout"]').dispatch('click');late.resolve(ok({verified_objective_questions:900,verified_programming_problems:1,total_verified_questions:901,contributed_questions:77}));await settle();
+    assert.match(page.html(), /id="login-form"/);assert.doesNotMatch(page.html(), /题库概况|901|77|课堂甲/);
     assert.equal(page.timers.size,0);
   });
   await t.test('daily completions replace connection labels and use real teacher/student fields', async () => {
     const page=await app();
-    assert.match(page.html(), /aria-label="今日完成"/);assert.match(page.html(), /已为 <strong>7<\/strong> 位同学/);assert.match(page.html(), /完成 <strong>103<\/strong> 道题/);
-    assert.match(page.html(), /北京时间.*当日提交并核验通过/);assert.doesNotMatch(page.html(), /头歌已连接|头歌账号已连接|<h3>服务状态<\/h3>|class="connection"/);
+    assert.match(page.html(), /aria-label="累计服务"/);assert.match(page.html(), /已为 <strong>28<\/strong> 位同学/);assert.match(page.html(), /完成 <strong>1,042<\/strong> 道题/);
+    assert.match(page.html(), /其中今天 <b>7<\/b> 位同学 · <b>103<\/b> 道题/);
+    assert.match(page.html(), /北京时间.*按可核验记录累计/);assert.doesNotMatch(page.html(), /头歌已连接|头歌账号已连接|<h3>服务状态<\/h3>|class="connection"/);
     const meta=page.html().match(/class="course-meta">([\s\S]*?)<\/td>/)?.[1] || '';
     assert.match(meta,/授课教师/);assert.match(meta,/合成老师/);assert.match(meta,/学生人数/);assert.match(meta,/25 人/);assert.doesNotMatch(meta,/COURSE_A/);
     assert.match(page.html(), /&lt;老师&gt;/);assert.match(page.html(), /0 人/);
@@ -106,9 +135,9 @@ await test('consumer course service and administrator boundary',async t=>{
   });
   await t.test('missing people metadata and unavailable daily totals stay explicitly unknown', async () => {
     const page=await app({'/api/courses':()=>ok([{identifier:'COURSE_A',name:'信息待同步',membersCount:99}]),'/api/service/today-summary':()=>failure(503,'SERVICE_SUMMARY_UNAVAILABLE','private-stat-error')});
-    assert.match(page.html(),/教师待同步/);assert.match(page.html(),/人数待同步/);assert.match(page.html(),/今日统计暂未同步/);assert.doesNotMatch(page.html(),/99 人|private-stat-error|完成 <strong>0/);
-    const old=await app({'/api/service/today-summary':()=>ok({date:'2020-01-01',timezone:'Asia/Shanghai',completed_students:999,completed_questions:999})});
-    assert.match(old.html(),/今日统计暂未同步/);assert.doesNotMatch(old.html(),/完成 <strong>999|已为 <strong>999/);
+    assert.match(page.html(),/教师待同步/);assert.match(page.html(),/人数待同步/);assert.match(page.html(),/服务统计暂未同步/);assert.doesNotMatch(page.html(),/99 人|private-stat-error|完成 <strong>0/);
+    const old=await app({'/api/service/today-summary':()=>ok({date:'2020-01-01',timezone:'Asia/Shanghai',completed_students:999,completed_questions:999,total_served_students:999,total_completed_questions:999})});
+    assert.match(old.html(),/服务统计暂未同步/);assert.doesNotMatch(old.html(),/完成 <strong>999|已为 <strong>999/);
   });
   await t.test('login prefetches both lists and opening cached details does not wait or request again', async () => {
     const page=await app();
@@ -421,6 +450,188 @@ await test('consumer course service and administrator boundary',async t=>{
     lateExam.resolve(ok({ items: [{ id: 701, name: '过时的在线考试', available: true }] })); await settle();
     assert.match(page.html(), /后台预取的实验列表/); assert.doesNotMatch(page.html(), /过时的在线考试|data-exam-submit=/);
     assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
+  });
+
+  await t.test('support is available to users and draft values survive polling refresh filters and page navigation', async () => {
+    const page=await app();page.get('[data-nav="support"]').dispatch('click');await settle();
+    assert.match(page.html(),/问题反馈|id="ticket-create-form"/);assert.doesNotMatch(page.html(),/data-nav="admin-support"/);
+    fillSupport(page,'会话内私密草稿','第一行\n第二行','data');
+    await page.tick();assert.equal(page.get('#ticket-body').value,'第一行\n第二行');assert.equal(page.get('#ticket-category').value,'data');
+    page.get('[data-ticket-refresh]').dispatch('click');await settle();assert.equal(page.get('#ticket-subject').value,'会话内私密草稿');
+    page.get('[data-ticket-filter="open"]').dispatch('click');await settle();assert.equal(page.get('#ticket-body').value,'第一行\n第二行');
+    page.get('[data-nav="courses"]').dispatch('click');page.get('[data-nav="support"]').dispatch('click');await settle();
+    assert.equal(page.get('#ticket-subject').value,'会话内私密草稿');assert.equal(page.get('#ticket-category').value,'data');assert.equal(page.get('#ticket-body').value,'第一行\n第二行');
+    assert.doesNotMatch(page.html(),/会话内私密草稿|第一行/,'drafts must be restored through DOM values, not interpolated into HTML');
+    assert.equal(page.requests.some(item=>item.options.method==='POST'),false);
+    assert.ok(page.requests.some(item=>item.url==='/api/tickets?limit=30&status=open'));
+  });
+  await t.test('ticket creation prevents duplicate submission and ambiguous retry keeps the same payload key and draft', async () => {
+    const pending=deferred();let attempts=0;const created=supportDetail(supportTicket({id:'created-ticket',subject:'测试问题'}));
+    const page=await app({'/api/tickets':options=>++attempts===1?pending.promise:ok(created)});
+    page.get('[data-nav="support"]').dispatch('click');await settle();fillSupport(page);
+    const form=page.get('#ticket-create-form');form.dispatch('submit');form.dispatch('submit');await settle();
+    const posts=()=>page.requests.filter(item=>item.url==='/api/tickets'&&item.options.method==='POST');assert.equal(posts().length,1);
+    assert.ok(page.get('#ticket-body').disabled);pending.resolve(failure(503,'TICKETS_UNAVAILABLE','PRIVATE_INTERNAL_MESSAGE'));await settle();
+    assert.equal(page.get('#ticket-body').value,'测试反馈内容');assert.doesNotMatch(page.html(),/PRIVATE_INTERNAL_MESSAGE/);
+    page.get('#ticket-create-form').dispatch('submit');await settle();assert.equal(posts().length,2);
+    assert.deepEqual(JSON.parse(posts()[0].options.body),JSON.parse(posts()[1].options.body));assert.ok(JSON.parse(posts()[0].options.body).idempotency_key);
+    assert.match(page.html(),/role="dialog"/);assert.match(page.html(),/data-ticket-detail="created-ticket"/);
+    assert.equal(page.get('#ticket-subject').value,'');assert.equal(page.get('#ticket-body').value,'');
+    assert.equal(page.requests.some(item=>item.url==='/api/jobs'&&item.options.method==='POST'),false);
+  });
+  await t.test('users can append messages close and reopen their ticket with fixed error text and no admin mutations', async () => {
+    let current=supportDetail(),replyCalls=0;
+    const page=await app({
+      '/api/tickets?limit=30':()=>ok(supportList([current.ticket])),
+      '/api/tickets/ticket-one':()=>ok(current),
+      '/api/tickets/ticket-one/messages':options=>{
+        if(++replyCalls===1)throw new TypeError('PRIVATE_NETWORK_DETAIL');
+        current={ticket:{...current.ticket,message_count:2},messages:[...current.messages,{id:'m2',author_role:'user',body:JSON.parse(options.body).body,created_at:'2026-11-02T03:00:00Z'}]};return ok(current);
+      },
+      '/api/tickets/ticket-one/status':options=>{current={...current,ticket:{...current.ticket,status:JSON.parse(options.body).status}};return ok(current);},
+    });
+    page.get('[data-nav="support"]').dispatch('click');await settle();page.get('[data-ticket-open="ticket-one"]').dispatch('click');await settle();
+    page.get('#ticket-reply-body').value='补充情况\n第二行';page.get('#ticket-reply-form').dispatch('submit');await settle();
+    assert.equal(page.get('#ticket-reply-body').value,'补充情况\n第二行');assert.doesNotMatch(page.html(),/PRIVATE_NETWORK_DETAIL/);
+    page.get('#ticket-reply-form').dispatch('submit');await settle();
+    const posts=page.requests.filter(item=>item.url.endsWith('/messages'));assert.equal(posts.length,2);assert.deepEqual(JSON.parse(posts[0].options.body),JSON.parse(posts[1].options.body));
+    assert.match(page.html(),/补充情况<br>第二行/);assert.equal(page.get('#ticket-reply-body').value,'');
+    page.get('[data-ticket-status="closed"]').dispatch('click');await settle();assert.doesNotMatch(page.html(),/id="ticket-reply-form"/);assert.match(page.html(),/这条反馈已关闭/);
+    page.get('[data-ticket-status="open"]').dispatch('click');await settle();assert.match(page.html(),/id="ticket-reply-form"/);
+    assert.equal(page.requests.some(item=>item.url.startsWith('/api/admin/')),false);
+  });
+  await t.test('admin feedback namespace filters and pagination remain separate from the user ticket list', async () => {
+    const first=supportTicket({user:{name:'甲同学'}}),second=supportTicket({id:'ticket-two',subject:'第二条反馈',user:{name:'乙同学'}});let detail=supportDetail(first);
+    const page=await app({
+      '/api/auth/me':()=>ok({user,platform:{role:'admin'}}),
+      '/api/tickets?limit=30':()=>ok(supportList([supportTicket({id:'own-ticket',subject:'我自己的反馈'})])),
+      '/api/admin/tickets?limit=30':()=>ok(supportList([first],'next/+=')),
+      '/api/admin/tickets?limit=30&cursor=next%2F%2B%3D':()=>ok(supportList([first,second])),
+      '/api/admin/tickets?limit=30&status=processing':()=>ok(supportList([{...second,status:'processing'}])),
+      '/api/admin/tickets/ticket-two':()=>ok({...detail,ticket:second}),
+      '/api/admin/tickets/ticket-two/messages':options=>{detail={ticket:{...second,status:'processing',message_count:2,last_author_role:'admin'},messages:[...detail.messages,{id:'m2',author_role:'admin',body:JSON.parse(options.body).body,created_at:'2026-11-02T03:00:00Z'}]};return ok(detail);},
+      '/api/admin/tickets/ticket-two/status':options=>{detail={...detail,ticket:{...detail.ticket,status:JSON.parse(options.body).status}};return ok(detail);},
+    });
+    page.get('[data-nav="support"]').dispatch('click');await settle();assert.match(page.html(),/我自己的反馈/);
+    page.get('[data-nav="admin-overview"]').dispatch('click');await settle();page.get('[data-nav="admin-support"]').dispatch('click');await settle();
+    assert.match(page.html(),/甲同学/);assert.doesNotMatch(page.html(),/我自己的反馈|id="ticket-create-form"/);
+    page.get('[data-ticket-more="next/+="]').dispatch('click');await settle();assert.match(page.html(),/乙同学/);
+    assert.equal(page.document.querySelectorAll('[data-ticket-open="ticket-one"]').length,2,'one title and one action for the deduplicated row');
+    page.get('[data-ticket-filter="processing"]').dispatch('click');await settle();assert.doesNotMatch(page.html(),/甲同学/);
+    page.get('[data-ticket-open="ticket-two"]').dispatch('click');await settle();page.get('#ticket-reply-body').value='已收到，正在核对。';page.get('#ticket-reply-form').dispatch('submit');await settle();
+    assert.match(page.html(),/已收到，正在核对。/);page.get('[data-ticket-status="resolved"]').dispatch('click');await settle();assert.match(page.html(),/已解决/);
+    assert.ok(page.requests.some(item=>item.url==='/api/admin/tickets/ticket-two/messages'&&item.options.method==='POST'));
+    assert.deepEqual(JSON.parse(page.requests.find(item=>item.url==='/api/admin/tickets/ticket-two/status').options.body),{status:'resolved'});
+    page.get('[data-action="close-modal"]').dispatch('click');page.get('[data-nav="courses"]').dispatch('click');page.get('[data-nav="support"]').dispatch('click');await settle();assert.match(page.html(),/我自己的反馈/);assert.doesNotMatch(page.html(),/甲同学|乙同学/);
+  });
+  await t.test('new list filters invalidate older results and closing a loading ticket prevents a late dialog reopening', async () => {
+    const list=deferred(),detail=deferred();const current=supportTicket({id:'current-ticket',subject:'当前处理中反馈',status:'processing'});
+    const page=await app({
+      '/api/tickets?limit=30':()=>list.promise,
+      '/api/tickets?limit=30&status=processing':()=>ok(supportList([current])),
+      '/api/tickets/current-ticket':()=>detail.promise,
+    });
+    page.get('[data-nav="support"]').dispatch('click');page.get('[data-ticket-filter="processing"]').dispatch('click');await settle();
+    list.resolve(ok(supportList([supportTicket({subject:'过时的旧列表'})])));await settle();assert.match(page.html(),/当前处理中反馈/);assert.doesNotMatch(page.html(),/过时的旧列表/);
+    page.get('[data-ticket-open="current-ticket"]').dispatch('click');page.get('[data-action="close-modal"]').dispatch('click');detail.resolve(ok(supportDetail(current,'不应显示的迟到详情')));await settle();
+    assert.doesNotMatch(page.html(),/role="dialog"|不应显示的迟到详情/);
+  });
+  await t.test('an old detail refresh cannot overwrite the later successful reply and draft remains through refresh', async () => {
+    const stale=deferred();let reads=0;const original=supportDetail();const replied={ticket:{...original.ticket,message_count:2},messages:[...original.messages,{id:'m2',author_role:'user',body:'已成功保存的新补充',created_at:'2026-11-02T03:00:00Z'}]};
+    const page=await app({
+      '/api/tickets?limit=30':()=>ok(supportList([original.ticket])),
+      '/api/tickets/ticket-one':()=>++reads===1?ok(original):stale.promise,
+      '/api/tickets/ticket-one/messages':()=>ok(replied),
+    });
+    page.get('[data-nav="support"]').dispatch('click');await settle();page.get('[data-ticket-open="ticket-one"]').dispatch('click');await settle();
+    page.get('#ticket-reply-body').value='待发送的草稿';page.get('[data-ticket-detail-refresh="ticket-one"]').dispatch('click');assert.equal(page.get('#ticket-reply-body').value,'待发送的草稿');
+    page.get('#ticket-reply-form').dispatch('submit');await settle();assert.match(page.html(),/已成功保存的新补充/);
+    stale.resolve(ok({...original,messages:[{...original.messages[0],body:'旧GET详情不应覆盖'}]}));await settle();assert.match(page.html(),/已成功保存的新补充/);assert.doesNotMatch(page.html(),/旧GET详情不应覆盖/);
+  });
+  await t.test('reply drafts stay isolated by ticket and a late send never reopens or locks a different dialog', async () => {
+    const pending=deferred();const one=supportDetail(),two=supportDetail(supportTicket({id:'ticket-two',subject:'另一条反馈'}),'另一条对话');
+    const page=await app({
+      '/api/tickets?limit=30':()=>ok(supportList([one.ticket,two.ticket])),
+      '/api/tickets/ticket-one':()=>ok(one),'/api/tickets/ticket-two':()=>ok(two),'/api/tickets/ticket-one/messages':()=>pending.promise,
+    });
+    page.get('[data-nav="support"]').dispatch('click');await settle();page.get('[data-ticket-open="ticket-one"]').dispatch('click');await settle();page.get('#ticket-reply-body').value='第一条草稿';
+    page.get('[data-action="close-modal"]').dispatch('click');page.get('[data-ticket-open="ticket-two"]').dispatch('click');await settle();assert.equal(page.get('#ticket-reply-body').value,'');page.get('#ticket-reply-body').value='第二条草稿';
+    page.get('[data-action="close-modal"]').dispatch('click');page.get('[data-ticket-open="ticket-one"]').dispatch('click');await settle();assert.equal(page.get('#ticket-reply-body').value,'第一条草稿');
+    page.get('#ticket-reply-form').dispatch('submit');page.get('[data-action="close-modal"]').dispatch('click');page.get('[data-ticket-open="ticket-two"]').dispatch('click');await settle();assert.equal(page.get('#ticket-reply-body').value,'第二条草稿');assert.ok(page.get('#ticket-reply-body').disabled);
+    pending.resolve(ok({...one,ticket:{...one.ticket,message_count:2}}));await settle();assert.match(page.html(),/另一条对话/);assert.equal(page.get('#ticket-reply-body').value,'第二条草稿');assert.equal(page.get('#ticket-reply-body').disabled,false);
+    assert.doesNotMatch(page.html(),/data-ticket-detail="ticket-one"/);
+  });
+  await t.test('logout clears all support drafts keys and late private responses before another login', async () => {
+    const late=deferred();let post=0;const page=await app({'/api/tickets':()=>++post===1?late.promise:failure(503,'TICKETS_UNAVAILABLE','private')});
+    page.get('[data-nav="support"]').dispatch('click');await settle();fillSupport(page);page.get('#ticket-create-form').dispatch('submit');await settle();
+    const first=JSON.parse(page.requests.find(item=>item.url==='/api/tickets').options.body).idempotency_key;
+    page.get('[data-action="logout"]').dispatch('click');late.resolve(ok(supportDetail(supportTicket({subject:'迟到的私有工单'}))));await settle();assert.match(page.html(),/id="login-form"/);assert.doesNotMatch(page.html(),/迟到的私有工单|ticket-create-form|role="dialog"/);
+    page.get('#login').value='demo';page.get('#password').value='fixture-password';page.get('#login-form').dispatch('submit');await settle();page.get('[data-nav="support"]').dispatch('click');await settle();
+    assert.equal(page.get('#ticket-subject').value,'');assert.equal(page.get('#ticket-body').value,'');fillSupport(page);page.get('#ticket-create-form').dispatch('submit');await settle();
+    const posts=page.requests.filter(item=>item.url==='/api/tickets');assert.notEqual(JSON.parse(posts[1].options.body).idempotency_key,first);
+  });
+  await t.test('support typing keeps the connected field focus and caret through periodic updates', async () => {
+    const page=await app();page.get('[data-nav="support"]').dispatch('click');await settle();
+    fillSupport(page,'正在编辑的标题','前半段后半段');const field=page.get('#ticket-body');field.focus();field.setSelectionRange(3,5,'backward');
+    await page.tick();const current=page.get('#ticket-body');
+    assert.equal(page.document.activeElement,current);assert.equal(current.isConnected,true);assert.equal(current.value,'前半段后半段');
+    assert.equal(current.selectionStart,3);assert.equal(current.selectionEnd,5);assert.equal(current.selectionDirection,'backward');
+  });
+  await t.test('ambiguous attempts retain each unchanged payload key even after editing and restoring an earlier draft', async () => {
+    const page=await app({'/api/tickets':()=>{throw new TypeError('synthetic network interruption');}});
+    page.get('[data-nav="support"]').dispatch('click');await settle();
+    for(const text of ['反馈版本甲','反馈版本乙','反馈版本甲']) {fillSupport(page,'同一反馈',text);page.get('#ticket-create-form').dispatch('submit');await settle();}
+    const bodies=page.requests.filter(item=>item.url==='/api/tickets'&&item.options.method==='POST').map(item=>JSON.parse(item.options.body));
+    assert.equal(bodies.length,3);assert.notEqual(bodies[0].idempotency_key,bodies[1].idempotency_key);assert.equal(bodies[0].idempotency_key,bodies[2].idempotency_key);
+    assert.equal(page.get('#ticket-body').value,'反馈版本甲');
+  });
+  await t.test('ambiguous replies keep each draft key and a confirmed send after closing stays closed', async () => {
+    const detail=supportDetail(),pending=deferred();let calls=0;
+    const page=await app({
+      '/api/tickets?limit=30':()=>ok(supportList([detail.ticket])), '/api/tickets/ticket-one':()=>ok(detail),
+      '/api/tickets/ticket-one/messages':()=>++calls<4?Promise.reject(new TypeError('synthetic interrupted response')):pending.promise,
+    });
+    page.get('[data-nav="support"]').dispatch('click');await settle();page.get('[data-ticket-open="ticket-one"]').dispatch('click');await settle();
+    for(const text of ['补充甲','补充乙','补充甲']) {page.get('#ticket-reply-body').value=text;page.get('#ticket-reply-form').dispatch('submit');await settle();}
+    const posts=()=>page.requests.filter(item=>item.url==='/api/tickets/ticket-one/messages').map(item=>JSON.parse(item.options.body));
+    assert.equal(posts().length,3);assert.notEqual(posts()[0].idempotency_key,posts()[1].idempotency_key);assert.equal(posts()[0].idempotency_key,posts()[2].idempotency_key);
+    page.get('#ticket-reply-form').dispatch('submit');await settle();assert.equal(posts().length,4);assert.equal(posts()[2].idempotency_key,posts()[3].idempotency_key);
+    page.get('[data-action="close-modal"]').dispatch('click');pending.resolve(ok({...detail,ticket:{...detail.ticket,message_count:2},messages:[...detail.messages,{id:'late-reply',author_role:'user',body:'关闭后的成功响应',created_at:'2026-11-02T03:00:00Z'}]}));await settle();
+    assert.doesNotMatch(page.html(),/role="dialog"|关闭后的成功响应/);assert.match(page.html(),/id="ticket-create-form"/);assert.equal(page.get('#ticket-body').disabled,false);
+  });
+  await t.test('reply drafts remain separate for the same ticket ID in user and administrator views', async () => {
+    const detail=supportDetail();const page=await app({
+      '/api/auth/me':()=>ok({user,platform:{role:'admin'}}),
+      '/api/tickets?limit=30':()=>ok(supportList([detail.ticket])), '/api/admin/tickets?limit=30':()=>ok(supportList([detail.ticket])),
+      '/api/tickets/ticket-one':()=>ok(detail), '/api/admin/tickets/ticket-one':()=>ok(detail),
+    });
+    page.get('[data-nav="support"]').dispatch('click');await settle();page.get('[data-ticket-open="ticket-one"]').dispatch('click');await settle();page.get('#ticket-reply-body').value='用户视图草稿';
+    page.get('[data-action="close-modal"]').dispatch('click');page.get('[data-nav="admin-overview"]').dispatch('click');await settle();page.get('[data-nav="admin-support"]').dispatch('click');await settle();page.get('[data-ticket-open="ticket-one"]').dispatch('click');await settle();
+    assert.equal(page.get('#ticket-reply-body').value,'');page.get('#ticket-reply-body').value='管理员视图草稿';
+    page.get('[data-action="close-modal"]').dispatch('click');page.get('[data-nav="courses"]').dispatch('click');page.get('[data-nav="support"]').dispatch('click');await settle();page.get('[data-ticket-open="ticket-one"]').dispatch('click');await settle();
+    assert.equal(page.get('#ticket-reply-body').value,'用户视图草稿');assert.doesNotMatch(page.html(),/管理员视图草稿/);
+  });
+  await t.test('old ticket list and detail errors never expire a subsequent account session', async () => {
+    const list=deferred(),detail=deferred();let listCalls=0;
+    const current=supportDetail(supportTicket({subject:'新会话反馈'}));
+    const page=await app({
+      '/api/tickets?limit=30':()=>++listCalls===1?ok(supportList([current.ticket])):listCalls===2?list.promise:ok(supportList([current.ticket])),
+      '/api/tickets/ticket-one':()=>detail.promise,
+    });
+    page.get('[data-nav="support"]').dispatch('click');await settle();page.get('[data-ticket-open="ticket-one"]').dispatch('click');
+    page.get('[data-action="close-modal"]').dispatch('click');page.get('[data-ticket-refresh]').dispatch('click');
+    page.get('[data-action="logout"]').dispatch('click');await settle();page.get('#login').value='new-session';page.get('#password').value='synthetic-password';page.get('#login-form').dispatch('submit');await settle();
+    page.get('[data-nav="support"]').dispatch('click');await settle();
+    list.resolve(failure(401,'AUTH_REQUIRED','old list expired'));detail.resolve(failure(401,'AUTH_REQUIRED','old detail expired'));await settle();
+    assert.match(page.html(),/新会话反馈/);assert.doesNotMatch(page.html(),/id="login-form"|role="dialog"|old list expired|old detail expired/);
+  });
+  await t.test('support detail traps keyboard focus across editable message fields and buttons', async () => {
+    const detail=supportDetail();const page=await app({'/api/tickets?limit=30':()=>ok(supportList([detail.ticket])),'/api/tickets/ticket-one':()=>ok(detail)});
+    page.get('[data-nav="support"]').dispatch('click');await settle();page.get('[data-ticket-open="ticket-one"]').dispatch('click');await settle();
+    const controls=page.document.querySelectorAll('.modal button, .modal input, .modal textarea, .modal select, .modal a[href]').filter(item=>!item.disabled);
+    assert.ok(controls.some(item=>item.tag==='textarea'));
+    controls[0].focus();let prevented=false;page.document.listeners.get('keydown')({key:'Tab',shiftKey:true,preventDefault(){prevented=true;}});assert.ok(prevented);assert.equal(page.document.activeElement,controls.at(-1));
+    prevented=false;page.document.listeners.get('keydown')({key:'Tab',shiftKey:false,preventDefault(){prevented=true;}});assert.ok(prevented);assert.equal(page.document.activeElement,controls[0]);
   });
 
 });

@@ -3,11 +3,83 @@ import { test } from 'node:test';
 import { ApiRequestError, BrowserApi } from './dist/api.js';
 
 const envelope = (data, status = 200) => new Response(JSON.stringify({ data, error: null, requestId: 'test-request' }), { status });
+const ticket = { id: 'ticket/opaque ?#', subject: '测试反馈', category: 'task', status: 'open', created_at: '2026-11-02T03:00:00Z', updated_at: '2026-11-02T03:00:00Z', message_count: 1, last_author_role: 'user' };
+const ticketDetail = { ticket, messages: [{ id: 'message/1', author_role: 'user', body: '课程状态需要核对\n第二行', created_at: '2026-11-02T03:00:00Z' }] };
 
 await test('browser API uses the Go workbench contract', async t => {
+  await t.test('support tickets use session-bound lists and opaque IDs with safe pagination', async () => {
+    const requests = [];
+    globalThis.fetch = async (url, options) => { requests.push({ url, options }); return envelope(url.includes('/ticket%2F') ? ticketDetail : { items: [ticket], next_cursor: 'next/+&=', limit: 30 }); };
+    const api = new BrowserApi();
+    assert.equal((await api.tickets()).items[0].id, ticket.id);
+    assert.equal((await api.tickets({ limit: 30, status: 'processing', cursor: 'cursor/+&=' })).next_cursor, 'next/+&=');
+    assert.equal((await api.ticket(ticket.id)).ticket.id, ticket.id);
+    assert.equal(requests[0].url, '/api/tickets');
+    assert.equal(requests[1].url, '/api/tickets?limit=30&cursor=cursor%2F%2B%26%3D&status=processing');
+    assert.equal(requests[2].url, '/api/tickets/ticket%2Fopaque%20%3F%23');
+    for (const { options } of requests) { assert.equal(options.credentials, 'include'); assert.equal(options.body, undefined); }
+  });
+  await t.test('ticket create reply and status use exact body contracts and admin-only endpoint namespace', async () => {
+    const requests = [];
+    globalThis.fetch = async (url, options) => {
+      requests.push({ url, options });
+      return envelope(url === '/api/admin/tickets' ? { items: [ticket], next_cursor: '', limit: 30 } : ticketDetail, options.method === 'POST' ? 201 : 200);
+    };
+    const api = new BrowserApi(), key = 'fixture-uuid-12345678';
+    const input = { subject: '标题', category: 'data', body: '隐私疑问', idempotency_key: key, ignored_private_value: 'never-send' };
+    await api.createTicket(input);
+    await api.replyTicket(ticket.id, { body: '补充', idempotency_key: key, ignored_private_value: 'never-send' });
+    await api.setTicketStatus(ticket.id, 'closed');
+    await api.adminTickets();
+    await api.adminTicket(ticket.id);
+    await api.adminReplyTicket(ticket.id, { body: '已记录', idempotency_key: key });
+    await api.adminSetTicketStatus(ticket.id, 'processing');
+    assert.equal(requests[0].url, '/api/tickets');
+    assert.deepEqual(JSON.parse(requests[0].options.body), { subject: '标题', category: 'data', body: '隐私疑问', idempotency_key: key });
+    assert.equal(requests[1].url, '/api/tickets/ticket%2Fopaque%20%3F%23/messages');
+    assert.deepEqual(JSON.parse(requests[1].options.body), { body: '补充', idempotency_key: key });
+    assert.equal(requests[2].url, '/api/tickets/ticket%2Fopaque%20%3F%23/status');
+    assert.deepEqual(JSON.parse(requests[2].options.body), { status: 'closed' });
+    assert.equal(requests[3].url, '/api/admin/tickets');
+    assert.equal(requests[4].url, '/api/admin/tickets/ticket%2Fopaque%20%3F%23');
+    assert.equal(requests[5].url, '/api/admin/tickets/ticket%2Fopaque%20%3F%23/messages');
+    assert.deepEqual(JSON.parse(requests[5].options.body), { body: '已记录', idempotency_key: key });
+    assert.equal(requests[6].url, '/api/admin/tickets/ticket%2Fopaque%20%3F%23/status');
+    assert.deepEqual(JSON.parse(requests[6].options.body), { status: 'processing' });
+    for (const { url, options } of requests) { assert.equal(options.credentials, 'include'); assert.doesNotMatch(url, /fixture-uuid|never-send/); }
+  });
+  await t.test('ticket response projections strip ownership identifiers and unsupported private metadata', async () => {
+    const raw = { ...ticket, owner_id: 'private-owner-hash', user: { id: 'private-user-hash', name: '示例用户', login: 'private-login' }, password: 'private-password', cookie: 'private-cookie' };
+    globalThis.fetch = async () => envelope({ ticket: raw, messages: [{ ...ticketDetail.messages[0], owner_id: 'private-message-owner', author_name: 'private-author', token: 'private-token' }], private_extra: 'private-extra' });
+    const api = new BrowserApi(), user = await api.ticket(ticket.id), admin = await api.adminTicket(ticket.id);
+    assert.deepEqual(user.ticket, ticket);
+    assert.deepEqual(admin.ticket, { ...ticket, user: { name: '示例用户' } });
+    assert.deepEqual(user.messages, ticketDetail.messages);
+    assert.doesNotMatch(JSON.stringify([user, admin]), /private-/);
+  });
+  await t.test('ticket endpoints reject malformed list/detail shapes rather than fabricating empty success', async () => {
+    const valid = { items: [ticket], next_cursor: '', limit: 30 };
+    const invalidLists = [null, [], {}, { ...valid, items: null }, { ...valid, next_cursor: 0 }, { ...valid, limit: '30' }, { ...valid, limit: 0 }, { ...valid, limit: 101 }, { ...valid, items: [{ ...ticket, id: '' }] }, { ...valid, items: [{ ...ticket, status: 'future' }] }, { ...valid, items: [{ ...ticket, category: ['task'] }] }, { ...valid, items: [{ ...ticket, message_count: -1 }] }, { ...valid, items: [{ ...ticket, message_count: 1.5 }] }, { ...valid, items: [{ ...ticket, last_author_role: 'system' }] }, { ...valid, items: [{ ...ticket, updated_at: 'not-a-date' }] }];
+    for (const raw of invalidLists) {
+      globalThis.fetch = async () => envelope(raw);
+      await assert.rejects(new BrowserApi().tickets(), error => error.code === 'INVALID_RESPONSE' && !error.isSessionExpired);
+    }
+    const invalidDetails = [null, ticket, { ...ticketDetail, messages: null }, { ...ticketDetail, messages: [{ ...ticketDetail.messages[0], body: 42 }] }, { ...ticketDetail, messages: [{ ...ticketDetail.messages[0], author_role: 'unknown' }] }];
+    for (const raw of invalidDetails) {
+      globalThis.fetch = async () => envelope(raw);
+      await assert.rejects(new BrowserApi().ticket('id'), error => error.code === 'INVALID_RESPONSE' && !error.isSessionExpired);
+    }
+  });
+  await t.test('ticket validation conflicts rate limits and permission errors preserve fixed status and code', async () => {
+    const api = new BrowserApi();
+    for (const [status, code] of [[400, 'TICKET_INVALID'], [409, 'TICKET_CONFLICT'], [429, 'TICKET_RATE_LIMITED'], [404, 'NOT_FOUND'], [403, 'ADMIN_REQUIRED']]) {
+      globalThis.fetch = async () => new Response(JSON.stringify({ error: { code, message: '请稍后重试' } }), { status });
+      await assert.rejects(api.adminTicket('id'), error => error instanceof ApiRequestError && error.status === status && error.code === code && !error.isSessionExpired);
+    }
+  });
   await t.test('today service summary uses authenticated read-only aggregate counts and strips private fields', async () => {
     let request;
-    const summary = { date: '2026-11-02', timezone: 'Asia/Shanghai', completed_students: 0, completed_questions: 0 };
+    const summary = { date: '2026-11-02', timezone: 'Asia/Shanghai', completed_students: 0, completed_questions: 0, total_served_students: 7, total_completed_questions: 83 };
     globalThis.fetch = async (url, options) => {
       request = { url, options };
       return envelope({ ...summary, owner: 'private-owner', jobs: ['private-job'], answers: ['private-answer'] });
@@ -19,13 +91,18 @@ await test('browser API uses the Go workbench contract', async t => {
     assert.ok(request.options.method === undefined || request.options.method === 'GET');
   });
   await t.test('today service summary rejects invalid dates, timezones and non-integer aggregate counts', async () => {
-    const valid = { date: '2026-11-02', timezone: 'Asia/Shanghai', completed_students: 2, completed_questions: 30 };
+    const valid = { date: '2026-11-02', timezone: 'Asia/Shanghai', completed_students: 2, completed_questions: 30, total_served_students: 7, total_completed_questions: 83 };
     const invalid = [null, [], {}, { ...valid, completed_students: undefined },
       { ...valid, completed_students: '2' }, { ...valid, completed_questions: null },
       { ...valid, completed_students: -1 }, { ...valid, completed_questions: 0.5 },
       { ...valid, completed_questions: Number.MAX_SAFE_INTEGER + 1 },
       { ...valid, date: '2026-02-30' }, { ...valid, date: '2026-2-03' },
       { ...valid, date: '2026-11-02T00:00:00Z' }, { ...valid, timezone: 'UTC' },
+      { ...valid, total_served_students: undefined }, { ...valid, total_completed_questions: undefined },
+      { ...valid, total_served_students: '7' }, { ...valid, total_completed_questions: null },
+      { ...valid, total_served_students: 1 }, { ...valid, total_completed_questions: 29 },
+      { ...valid, total_served_students: -1 }, { ...valid, total_completed_questions: 1.1 },
+      { ...valid, total_completed_questions: Number.MAX_SAFE_INTEGER + 1 },
     ];
     for (const value of invalid) {
       globalThis.fetch = async () => envelope(value);
@@ -67,6 +144,19 @@ await test('browser API uses the Go workbench contract', async t => {
     for (const value of invalid) {
       globalThis.fetch = async () => envelope(value);
       await assert.rejects(new BrowserApi().questionBankSummary(), error => error instanceof ApiRequestError && error.code === 'INVALID_RESPONSE' && !error.isSessionExpired, JSON.stringify(value));
+    }
+  });
+  await t.test('personal bank contributions retain evidence counts and reject invalid or inflated numbers', async () => {
+    const base = { verified_objective_questions: 2, verified_programming_problems: 3, total_verified_questions: 5 };
+    for (const contributed_questions of [0, 4, 5]) {
+      globalThis.fetch = async () => envelope({ ...base, contributed_questions });
+      assert.deepEqual(await new BrowserApi().questionBankSummary(), { ...base, contributed_questions });
+    }
+    globalThis.fetch = async () => envelope(base);
+    assert.equal((await new BrowserApi().questionBankSummary()).contributed_questions, undefined, 'unavailable attribution must not be a fabricated zero');
+    for (const contributed_questions of [-1, 6, 1.5, '2', null, Number.MAX_SAFE_INTEGER + 1]) {
+      globalThis.fetch = async () => envelope({ ...base, contributed_questions });
+      await assert.rejects(new BrowserApi().questionBankSummary(), error => error.code === 'INVALID_RESPONSE');
     }
   });
   await t.test('question-bank failures preserve authentication and availability errors instead of showing zero counts', async () => {

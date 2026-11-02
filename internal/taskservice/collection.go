@@ -465,14 +465,17 @@ func (h *Collector) collectLevel(ctx context.Context, c CollectionReader, owner 
 			if err != nil {
 				return err
 			}
-			found := false
+			var verifiedAnswerID int64
 			for _, a := range existing {
 				if a.Reusable && a.Answer == answers[i] {
-					found = true
+					verifiedAnswerID = a.ID
 					break
 				}
 			}
-			if found {
+			if verifiedAnswerID > 0 {
+				if err = h.Bank.RecordObjectiveContribution(ctx, owner, verifiedAnswerID); err != nil {
+					return err
+				}
 				s.Duplicates++
 				continue
 			}
@@ -481,6 +484,9 @@ func (h *Collector) collectLevel(ctx context.Context, c CollectionReader, owner 
 				return err
 			}
 			if err = h.Bank.RecordObjectiveValidation(ctx, id, questionbank.ObjectiveValidation{Passed: true, Confirmed: true, FullScore: true, Score: p.GameScore, MaxScore: p.ChallengeScore, AnswerHash: problem.HashContent(answers[i]), ScopeHash: scope, Feedback: "Read-only collection: exact target full score and complete persisted answer sheet; matching question identities and answers confirmed by two task reads; no explicit conflicting correctness result."}); err != nil {
+				return err
+			}
+			if err = h.Bank.RecordObjectiveContribution(ctx, owner, id); err != nil {
 				return err
 			}
 			s.Collected++

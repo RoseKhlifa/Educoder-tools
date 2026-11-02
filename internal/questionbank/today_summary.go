@@ -13,10 +13,12 @@ import (
 // TodaySummary counts work performed and verified by this service, not reusable
 // bank contents or job counters. It contains no principal or question details.
 type TodaySummary struct {
-	Date               string `json:"date"`
-	Timezone           string `json:"timezone"`
-	CompletedStudents  int64  `json:"completed_students"`
-	CompletedQuestions int64  `json:"completed_questions"`
+	Date                    string `json:"date"`
+	Timezone                string `json:"timezone"`
+	CompletedStudents       int64  `json:"completed_students"`
+	CompletedQuestions      int64  `json:"completed_questions"`
+	TotalServedStudents     int64  `json:"total_served_students"`
+	TotalCompletedQuestions int64  `json:"total_completed_questions"`
 }
 
 // China has used UTC+8 without DST since 1991. Keep the current service-day
@@ -24,7 +26,7 @@ type TodaySummary struct {
 var serviceDayLocation = time.FixedZone("Asia/Shanghai", 8*60*60)
 
 // Verification time, rather than a mutable job update time, is the selection
-// key. These indexes keep a minute's sidebar poll from scanning old evidence.
+// key. These indexes bound the shared daily/cumulative read to its service day.
 const todaySummarySchema = `
 CREATE INDEX IF NOT EXISTS objective_verifications_completed_at ON objective_verifications(created_at);
 CREATE INDEX IF NOT EXISTS verifications_completed_at ON verifications(created_at);
@@ -65,15 +67,19 @@ const completionRunProjection = `json_object(
   'kind',json_extract(r.data_json,'$.result.kind'),
   'candidate_id',json_extract(r.data_json,'$.result.candidate_id')))`
 
-// TodaySummary reads append-only verification timestamps. Only a matching
-// submit run that reached passed qualifies; collected historical answers have
+// TodaySummary reads append-only verification timestamps once for both daily
+// and cumulative totals. Only a matching submit run that reached passed
+// qualifies; collected historical answers have
 // no such run, and generate/selftest/optional/already-passed skips do not qualify.
 // A programming level counts as one question; objective levels count their
 // individual question positions. Retries and repeated proofs cannot multiply
 // one student's target. Legacy evidence missing a run binding is excluded.
 // Exams without individual graded correctness evidence are also excluded. The
 // caller must supply the hashed owners of all verified linked platform users;
-// unlinked CLI/local execution owners never count as students.
+// unlinked CLI/local execution owners never count as students. Cumulative
+// students are distinct owners across all qualifying history, not a sum of
+// daily counts. A repeated question in another day contributes to that day's
+// count, but cannot increase its owner's lifetime target count.
 func (s *Store) TodaySummary(ctx context.Context, at time.Time, linkedOwners map[string]struct{}) (TodaySummary, error) {
 	local := at.In(serviceDayLocation)
 	start := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, serviceDayLocation)
@@ -81,9 +87,11 @@ func (s *Store) TodaySummary(ctx context.Context, at time.Time, linkedOwners map
 	out := TodaySummary{Date: start.Format("2006-01-02"), Timezone: "Asia/Shanghai"}
 	completed := make(map[completionKey]struct{})
 	students := make(map[string]struct{})
+	totalCompleted := make(map[completionKey]struct{})
+	totalStudents := make(map[string]struct{})
 	// Stored timestamps are RFC3339Nano UTC. Second prefixes without a trailing
 	// Z preserve ordering at midnight even when the row has fractional seconds.
-	lower, upper := start.UTC().Format("2006-01-02T15:04:05"), end.UTC().Format("2006-01-02T15:04:05")
+	upper := end.UTC().Format("2006-01-02T15:04:05")
 	queries := []string{
 		`SELECT 'objective', r.owner, r.id, ` + completionRunProjection + `, v.created_at,
 		 c.id, c.candidate_json, snap.snapshot_json, v.score, v.max_score, '', '', ''
@@ -91,13 +99,13 @@ func (s *Store) TodaySummary(ctx context.Context, at time.Time, linkedOwners map
 		 JOIN solver_runs r ON r.id=v.run_id AND r.status='passed'
 		 JOIN objective_candidates c ON c.id=v.candidate_id
 		 JOIN objective_snapshots snap ON snap.snapshot_hash=c.snapshot_hash
-		 WHERE v.result='full_score' AND v.created_at>=? AND v.created_at<?`,
+		 WHERE v.result='full_score' AND v.created_at<?`,
 		`SELECT 'programming', r.owner, r.id, ` + completionRunProjection + `, v.created_at,
 		 c.id, v.evidence_json, '', '', '', c.files_hash, c.revision_hash, c.contract_hash
 		 FROM verifications v
 		 JOIN solver_runs r ON r.id=json_extract(v.evidence_json,'$.run_id') AND r.status='passed'
 		 JOIN solutions c ON c.id=v.solution_id
-		 WHERE v.created_at>=? AND v.created_at<?
+		 WHERE v.created_at<?
 		 AND json_extract(v.evidence_json,'$.kind')='formal'
 		 AND json_extract(v.evidence_json,'$.result')='passed'`,
 	}
@@ -108,7 +116,7 @@ func (s *Store) TodaySummary(ctx context.Context, at time.Time, linkedOwners map
 	}
 	defer tx.Rollback()
 	for _, query := range queries {
-		rows, err := tx.QueryContext(ctx, query, lower, upper)
+		rows, err := tx.QueryContext(ctx, query, upper)
 		if err != nil {
 			return TodaySummary{}, err
 		}
@@ -120,7 +128,7 @@ func (s *Store) TodaySummary(ctx context.Context, at time.Time, linkedOwners map
 				return TodaySummary{}, err
 			}
 			verifiedAt, err := time.Parse(time.RFC3339Nano, stamp)
-			if err != nil || verifiedAt.Before(start) || !verifiedAt.Before(end) || owner == "" {
+			if err != nil || !verifiedAt.Before(end) || owner == "" {
 				continue
 			}
 			if _, linked := linkedOwners[owner]; !linked {
@@ -131,6 +139,15 @@ func (s *Store) TodaySummary(ctx context.Context, at time.Time, linkedOwners map
 				continue
 			}
 			key := completionKey{owner: owner, completionTarget: run.Target}
+			addQuestion := func(question string) {
+				key.question = question
+				totalCompleted[key] = struct{}{}
+				totalStudents[owner] = struct{}{}
+				if !verifiedAt.Before(start) {
+					completed[key] = struct{}{}
+					students[owner] = struct{}{}
+				}
+			}
 			if kind == "objective" {
 				var snap answer.ObjectiveSnapshot
 				var candidate answer.ObjectiveCandidate
@@ -138,18 +155,15 @@ func (s *Store) TodaySummary(ctx context.Context, at time.Time, linkedOwners map
 					continue
 				}
 				for _, q := range snap.Questions {
-					key.question = "objective:" + strconv.Itoa(q.Position)
-					completed[key] = struct{}{}
+					addQuestion("objective:" + strconv.Itoa(q.Position))
 				}
 			} else {
 				var proof Validation
 				if json.Unmarshal([]byte(evidence), &proof) != nil || proof.CandidateID != candidateID || proof.RunID != id || proof.Kind != "formal" || proof.Result != "passed" || !proof.Terminal || !proof.Complete || proof.TestCount <= 0 || proof.TestCount != proof.PassedCount || filesHash == "" || proof.FilesHash != filesHash || proof.SavedFilesHash != filesHash || proof.SubmittedFilesHash != filesHash || proof.RevisionHash != revisionHash || proof.ContractHash != contractHash {
 					continue
 				}
-				key.question = "programming"
-				completed[key] = struct{}{}
+				addQuestion("programming")
 			}
-			students[owner] = struct{}{}
 		}
 		if err := rows.Err(); err != nil {
 			rows.Close()
@@ -163,5 +177,6 @@ func (s *Store) TodaySummary(ctx context.Context, at time.Time, linkedOwners map
 		return TodaySummary{}, err
 	}
 	out.CompletedStudents, out.CompletedQuestions = int64(len(students)), int64(len(completed))
+	out.TotalServedStudents, out.TotalCompletedQuestions = int64(len(totalStudents)), int64(len(totalCompleted))
 	return out, nil
 }

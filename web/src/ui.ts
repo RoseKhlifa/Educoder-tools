@@ -14,6 +14,7 @@ export const icon = (name: string): string => {
     teacher: '<path d="m2 8 10-5 10 5-10 5L2 8zM6 10v6c3 3 9 3 12 0v-6M22 8v8"/>',
     users: '<circle cx="9" cy="8" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2m1-15a3 3 0 0 1 0 6m2 3a5 5 0 0 1 3 4v2"/>',
     audit: '<path d="M6 3h12v18H6zM9 8h6m-6 4h6m-6 4h4"/>',
+    support: '<path d="M21 11.5a8.4 8.4 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.4 8.4 0 0 1-3.8-.9L3 21l1.9-5.7a8.4 8.4 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.4 8.4 0 0 1 3.8-.9h.5a8.5 8.5 0 0 1 8 8v.5z"/><path d="M8 11h.01M12 11h.01M16 11h.01"/>',
     check: '<path d="m5 12 4 4L19 6"/>',
     refresh: '<path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 12-1l2 2M4 16l2 2a7 7 0 0 0 12-1"/>',
     logout: '<path d="M9 4H4v16h5m5-12 5 4-5 4m-6-4h11"/>',

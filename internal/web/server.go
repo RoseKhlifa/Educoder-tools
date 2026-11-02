@@ -214,6 +214,10 @@ func validOrigin(origin string) bool {
 }
 
 func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request, requestID string) {
+	if r.URL.Path == "/api/tickets" || strings.HasPrefix(r.URL.Path, "/api/tickets/") || r.URL.Path == "/api/admin/tickets" || strings.HasPrefix(r.URL.Path, "/api/admin/tickets/") {
+		s.handleTickets(w, r, requestID)
+		return
+	}
 	if r.URL.Path == "/api/service/today-summary" {
 		s.handleTodaySummary(w, r, requestID)
 		return

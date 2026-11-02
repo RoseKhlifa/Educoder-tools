@@ -10,6 +10,7 @@ import type {
   JobList,
   JobRequest,
   QuestionBankSummary,
+  SupportTicket, SupportTicketDetail, TicketCategory, TicketStatus, TicketList, TicketListOptions, TicketCreateRequest, TicketReplyRequest,
   User,
 } from './types.js';
 
@@ -116,10 +117,62 @@ function normalizeDailyServiceSummary(value: unknown): DailyServiceSummary {
   const validDate = parsed && Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
   const students = count(item.completed_students);
   const questions = count(item.completed_questions);
-  if (!validDate || item.timezone !== 'Asia/Shanghai' || students === undefined || questions === undefined) {
+  const totalStudents = count(item.total_served_students);
+  const totalQuestions = count(item.total_completed_questions);
+  if (!validDate || item.timezone !== 'Asia/Shanghai' || students === undefined || questions === undefined
+    || totalStudents === undefined || totalQuestions === undefined || totalStudents < students || totalQuestions < questions) {
     throw new ApiRequestError('今日服务概况暂时不可用，请稍后重试', 200, 'INVALID_RESPONSE');
   }
-  return { date, timezone: 'Asia/Shanghai', completed_students: students, completed_questions: questions };
+  return { date, timezone: 'Asia/Shanghai', completed_students: students, completed_questions: questions,
+    total_served_students: totalStudents, total_completed_questions: totalQuestions };
+}
+
+const ticketCategories = new Set(['task', 'account', 'data', 'suggestion', 'other']);
+const ticketStatuses = new Set(['open', 'processing', 'resolved', 'closed']);
+function invalidTicketResponse(): never { throw new ApiRequestError('反馈工单暂时不可用，请稍后重试', 200, 'INVALID_RESPONSE'); }
+function ticketString(value: unknown, maxLength = 10000): string {
+  if (typeof value !== 'string' || !value.trim() || value.length > maxLength) return invalidTicketResponse();
+  return value;
+}
+function ticketDate(value: unknown): string {
+  const date = ticketString(value, 64);
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(date) || !Number.isFinite(Date.parse(date))) return invalidTicketResponse();
+  return date;
+}
+function normalizeTicket(value: unknown, admin: boolean): SupportTicket {
+  const item = asRecord(value);
+  const id = ticketString(item.id, 256), subject = ticketString(item.subject, 500);
+  if (typeof item.category !== 'string' || !ticketCategories.has(item.category)
+    || typeof item.status !== 'string' || !ticketStatuses.has(item.status)
+    || count(item.message_count) === undefined || (item.last_author_role !== 'user' && item.last_author_role !== 'admin')) return invalidTicketResponse();
+  const result: SupportTicket = { id, subject, category: item.category as TicketCategory, status: item.status as TicketStatus,
+    created_at: ticketDate(item.created_at), updated_at: ticketDate(item.updated_at), message_count: item.message_count as number,
+    last_author_role: item.last_author_role as 'user' | 'admin' };
+  if (admin && item.user !== undefined) result.user = { name: ticketString(asRecord(item.user).name, 500) };
+  return result;
+}
+function normalizeTicketList(value: unknown, admin: boolean): TicketList {
+  const item = asRecord(value);
+  if (!Array.isArray(item.items) || typeof item.next_cursor !== 'string' || item.next_cursor.length > 2048
+    || count(item.limit) === undefined || (item.limit as number) < 1 || (item.limit as number) > 100) return invalidTicketResponse();
+  return { items: item.items.map(value => normalizeTicket(value, admin)), next_cursor: item.next_cursor, limit: item.limit as number };
+}
+function normalizeTicketDetail(value: unknown, admin: boolean): SupportTicketDetail {
+  const item = asRecord(value);
+  if (!Array.isArray(item.messages)) return invalidTicketResponse();
+  return { ticket: normalizeTicket(item.ticket, admin), messages: item.messages.map(value => {
+    const message = asRecord(value);
+    if (message.author_role !== 'user' && message.author_role !== 'admin') return invalidTicketResponse();
+    return { id: ticketString(message.id, 256), body: ticketString(message.body, 30000),
+      author_role: message.author_role, created_at: ticketDate(message.created_at) };
+  }) };
+}
+function ticketQuery(options: TicketListOptions): string {
+  const query = new URLSearchParams();
+  if (options.limit !== undefined) query.set('limit', String(options.limit));
+  if (options.cursor) query.set('cursor', options.cursor);
+  if (options.status) query.set('status', options.status);
+  return query.size ? `?${query}` : '';
 }
 
 function normalizeQuestionBankSummary(value: unknown): QuestionBankSummary {
@@ -127,12 +180,15 @@ function normalizeQuestionBankSummary(value: unknown): QuestionBankSummary {
   const objective = item.verified_objective_questions;
   const programming = item.verified_programming_problems;
   const total = item.total_verified_questions;
+  const contributed = item.contributed_questions;
   const validCount = (count: unknown): count is number => typeof count === 'number' && Number.isSafeInteger(count) && count >= 0;
   if (!validCount(objective) || !validCount(programming) || !validCount(total)
-    || !Number.isSafeInteger(objective + programming) || total !== objective + programming) {
+    || !Number.isSafeInteger(objective + programming) || total !== objective + programming
+    || contributed !== undefined && (!validCount(contributed) || contributed > total)) {
     throw new ApiRequestError('题库概况暂时不可用，请稍后重试', 200, 'INVALID_RESPONSE');
   }
-  return { verified_objective_questions: objective, verified_programming_problems: programming, total_verified_questions: total };
+  return { verified_objective_questions: objective, verified_programming_problems: programming, total_verified_questions: total,
+    ...(contributed === undefined ? {} : { contributed_questions: contributed }) };
 }
 
 function normalizeHomework(value: unknown): Homework {
@@ -231,6 +287,15 @@ export interface EducoderApi {
   adminAudit(): Promise<AdminAudit[]>;
   adminUserStatus(id: string | number, status: 'active' | 'disabled'): Promise<void>;
   adminCancelJob(id: string): Promise<void>;
+  tickets(options?: TicketListOptions): Promise<TicketList>;
+  ticket(id: string): Promise<SupportTicketDetail>;
+  createTicket(input: TicketCreateRequest): Promise<SupportTicketDetail>;
+  replyTicket(id: string, input: TicketReplyRequest): Promise<SupportTicketDetail>;
+  setTicketStatus(id: string, status: 'open' | 'closed'): Promise<SupportTicketDetail>;
+  adminTickets(options?: TicketListOptions): Promise<TicketList>;
+  adminTicket(id: string): Promise<SupportTicketDetail>;
+  adminReplyTicket(id: string, input: TicketReplyRequest): Promise<SupportTicketDetail>;
+  adminSetTicketStatus(id: string, status: TicketStatus): Promise<SupportTicketDetail>;
 }
 
 export class BrowserApi implements EducoderApi {
@@ -323,6 +388,47 @@ export class BrowserApi implements EducoderApi {
   }
   async adminCancelJob(id: string): Promise<void> {
     await this.request(`/api/admin/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
+  }
+
+  async tickets(options: TicketListOptions = {}): Promise<TicketList> {
+    return normalizeTicketList(await this.request<unknown>(`/api/tickets${ticketQuery(options)}`), false);
+  }
+  async ticket(id: string): Promise<SupportTicketDetail> {
+    return normalizeTicketDetail(await this.request<unknown>(`/api/tickets/${encodeURIComponent(id)}`), false);
+  }
+  async createTicket(input: TicketCreateRequest): Promise<SupportTicketDetail> {
+    const { subject, category, body, idempotency_key } = input;
+    return normalizeTicketDetail(await this.request<unknown>('/api/tickets', {
+      method: 'POST', body: JSON.stringify({ subject, category, body, idempotency_key }),
+    }), false);
+  }
+  async replyTicket(id: string, input: TicketReplyRequest): Promise<SupportTicketDetail> {
+    const { body, idempotency_key } = input;
+    return normalizeTicketDetail(await this.request<unknown>(`/api/tickets/${encodeURIComponent(id)}/messages`, {
+      method: 'POST', body: JSON.stringify({ body, idempotency_key }),
+    }), false);
+  }
+  async setTicketStatus(id: string, status: 'open' | 'closed'): Promise<SupportTicketDetail> {
+    return normalizeTicketDetail(await this.request<unknown>(`/api/tickets/${encodeURIComponent(id)}/status`, {
+      method: 'POST', body: JSON.stringify({ status }),
+    }), false);
+  }
+  async adminTickets(options: TicketListOptions = {}): Promise<TicketList> {
+    return normalizeTicketList(await this.request<unknown>(`/api/admin/tickets${ticketQuery(options)}`), true);
+  }
+  async adminTicket(id: string): Promise<SupportTicketDetail> {
+    return normalizeTicketDetail(await this.request<unknown>(`/api/admin/tickets/${encodeURIComponent(id)}`), true);
+  }
+  async adminReplyTicket(id: string, input: TicketReplyRequest): Promise<SupportTicketDetail> {
+    const { body, idempotency_key } = input;
+    return normalizeTicketDetail(await this.request<unknown>(`/api/admin/tickets/${encodeURIComponent(id)}/messages`, {
+      method: 'POST', body: JSON.stringify({ body, idempotency_key }),
+    }), true);
+  }
+  async adminSetTicketStatus(id: string, status: TicketStatus): Promise<SupportTicketDetail> {
+    return normalizeTicketDetail(await this.request<unknown>(`/api/admin/tickets/${encodeURIComponent(id)}/status`, {
+      method: 'POST', body: JSON.stringify({ status }),
+    }), true);
   }
 }
 

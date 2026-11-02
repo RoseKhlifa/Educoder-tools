@@ -8,6 +8,19 @@ const courses = [{ identifier: 'COURSE_A', name: '示例数据结构课程' }, {
 const visible = html => html.replace(/<details\b[\s\S]*?<\/details>/g, '');
 
 await test('consumer completion progress shows one current arrangement per original target', async t => {
+  await t.test('homework progress preserves zero, partial, full and unknown counts with a dedicated fill', () => {
+    for (const [completed, total, percent] of [[0, 4, 0], [2, 4, 50], [4, 4, 100], [6, 4, 100]]) {
+      const item = job('progress-sample', 1, { status: completed >= total ? 'succeeded' : 'running', result: { total_homeworks: total, completed_homeworks: completed } });
+      assert.deepEqual(jobProgress(item), { completed: Math.min(completed, total), total, unit: '份作业', percent });
+      const html = renderServiceJob(item);
+      assert.match(html, new RegExp(`class="progress-fill" style="width:${percent}%"`));
+      assert.doesNotMatch(html, /class="bar"/);
+    }
+    const unknown = job('unknown-progress', 1, { status: 'running' });
+    assert.deepEqual(jobProgress(unknown), { completed: 0, total: 0, unit: '关', percent: 0 });
+    assert.match(renderServiceJob(unknown), /进度待更新/);
+    assert.doesNotMatch(renderServiceJob(unknown), /0 \/ 0|100%/);
+  });
   await t.test('exams have separate targets from homework IDs and from one another', () => {
     const exercise = exercise_id => ({ scope: 'exercise', course: 'COURSE_A', exercise_id, mode: 'submit' });
     const rows = [job('old-exam', 1, { request: exercise(701) }), job('new-exam', 4, { request: exercise(701), status: 'submitted' }), job('other-exam', 3, { request: exercise(702) }), job('same-number-homework', 2, { request: { scope: 'homework', course: 'COURSE_A', homework_id: 701, mode: 'submit' } })];

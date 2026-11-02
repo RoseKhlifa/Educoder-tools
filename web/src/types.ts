@@ -42,12 +42,35 @@ export interface DailyServiceSummary {
   timezone: 'Asia/Shanghai';
   completed_students: number;
   completed_questions: number;
+  total_served_students: number;
+  total_completed_questions: number;
 }
+
+export type TicketCategory = 'task' | 'account' | 'data' | 'suggestion' | 'other';
+export type TicketStatus = 'open' | 'processing' | 'resolved' | 'closed';
+export interface SupportTicket {
+  id: string;
+  subject: string;
+  category: TicketCategory;
+  status: TicketStatus;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+  last_author_role: 'user' | 'admin';
+  user?: { name: string };
+}
+export interface TicketMessage { id: string; author_role: 'user' | 'admin'; body: string; created_at: string }
+export interface SupportTicketDetail { ticket: SupportTicket; messages: TicketMessage[] }
+export interface TicketList { items: SupportTicket[]; next_cursor: string; limit: number }
+export interface TicketListOptions { limit?: number; cursor?: string; status?: TicketStatus }
+export interface TicketCreateRequest { subject: string; category: TicketCategory; body: string; idempotency_key: string }
+export interface TicketReplyRequest { body: string; idempotency_key: string }
 
 export interface QuestionBankSummary {
   verified_objective_questions: number;
   verified_programming_problems: number;
   total_verified_questions: number;
+  contributed_questions?: number;
 }
 
 export interface Homework {

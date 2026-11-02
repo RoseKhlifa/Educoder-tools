@@ -101,6 +101,11 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate collection targets: %w", err)
 	}
+	if _, err = tx.Exec(contributionSchema); err != nil {
+		tx.Rollback()
+		db.Close()
+		return nil, fmt.Errorf("migrate question contributions: %w", err)
+	}
 	if _, err = tx.Exec(todaySummarySchema); err != nil {
 		tx.Rollback()
 		db.Close()

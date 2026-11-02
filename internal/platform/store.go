@@ -126,7 +126,7 @@ func Open(path string, options Options) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	for _, statement := range []string{"PRAGMA busy_timeout=5000", "PRAGMA foreign_keys=ON", "PRAGMA journal_mode=WAL", schema} {
+	for _, statement := range []string{"PRAGMA busy_timeout=5000", "PRAGMA foreign_keys=ON", "PRAGMA journal_mode=WAL", schema, ticketSchema} {
 		if _, err = db.Exec(statement); err != nil {
 			db.Close()
 			return nil, fmt.Errorf("initialize platform database: %w", err)

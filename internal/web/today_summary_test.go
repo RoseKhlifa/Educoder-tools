@@ -60,7 +60,7 @@ func TestTodaySummaryIsAuthenticatedAnonymousAggregateOfLinkedStudents(t *testin
 	if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if response.StatusCode != http.StatusOK || response.Header.Get("Cache-Control") != "no-store" || len(body.Data) != 4 || body.Data["completed_students"] != float64(2) || body.Data["completed_questions"] != float64(2) || body.Data["timezone"] != "Asia/Shanghai" {
+	if response.StatusCode != http.StatusOK || response.Header.Get("Cache-Control") != "no-store" || len(body.Data) != 6 || body.Data["completed_students"] != float64(2) || body.Data["completed_questions"] != float64(2) || body.Data["total_served_students"] != float64(2) || body.Data["total_completed_questions"] != float64(2) || body.Data["timezone"] != "Asia/Shanghai" {
 		t.Fatalf("anonymous aggregate = %d %+v", response.StatusCode, body.Data)
 	}
 	if body.Data["date"] != time.Now().In(time.FixedZone("Asia/Shanghai", 8*60*60)).Format("2006-01-02") {
@@ -125,6 +125,9 @@ func TestTodaySummaryCacheCoalescesRequestsAndChangesAtShanghaiMidnight(t *testi
 	at := time.Date(2026, 11, 2, 15, 59, 50, 0, time.UTC)
 	if got, err := cache.load(context.Background(), f.bank, f.platform, at); err != nil || got.Date != "2026-11-02" || got.CompletedQuestions != 0 {
 		t.Fatalf("empty genuine summary = %+v %v", got, err)
+	}
+	if !cache.expires.Equal(at.Add(10 * time.Second)) {
+		t.Fatalf("cache expiry did not stop at Shanghai midnight: %s", cache.expires)
 	}
 	f.bank.Close()
 	if _, err := cache.load(context.Background(), f.bank, f.platform, at.Add(5*time.Second)); err != nil {

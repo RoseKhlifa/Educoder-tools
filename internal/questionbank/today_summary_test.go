@@ -97,14 +97,14 @@ func TestTodaySummaryCountsVerifiedStudentsAndIndividualQuestionsWithoutListLimi
 	addProgrammingCompletion(t, s, "program-retry", "student-a", "code", "submit", "passed", stamp)
 	// More than both UI list limits; the service must read every qualifying
 	// verification, not the latest page of jobs or the question-bank total.
-	for i := 0; i < 130; i++ {
+	for i := 0; i < 530; i++ {
 		addProgrammingCompletion(t, s, fmt.Sprintf("many-%d", i), "student-b", fmt.Sprintf("code-%d", i), "submit", "passed", stamp)
 	}
 	got, err := s.TodaySummary(context.Background(), completionTestTime(t, stamp), owners)
-	if err != nil || got != (TodaySummary{Date: "2026-11-02", Timezone: "Asia/Shanghai", CompletedStudents: 2, CompletedQuestions: 135}) {
+	if err != nil || got != (TodaySummary{Date: "2026-11-02", Timezone: "Asia/Shanghai", CompletedStudents: 2, CompletedQuestions: 535, TotalServedStudents: 2, TotalCompletedQuestions: 535}) {
 		t.Fatalf("distinct completions = %+v, %v", got, err)
 	}
-	if got, err = s.TodaySummary(context.Background(), completionTestTime(t, stamp), nil); err != nil || got.CompletedStudents != 0 || got.CompletedQuestions != 0 {
+	if got, err = s.TodaySummary(context.Background(), completionTestTime(t, stamp), nil); err != nil || got.CompletedStudents != 0 || got.CompletedQuestions != 0 || got.TotalServedStudents != 0 || got.TotalCompletedQuestions != 0 {
 		t.Fatalf("unlinked service owners leaked into student count: %+v %v", got, err)
 	}
 }
@@ -120,12 +120,42 @@ func TestTodaySummaryUsesShanghaiNaturalDayAndVerificationTimestamp(t *testing.T
 	}
 	owners := map[string]struct{}{"student-a": {}}
 	got, err := s.TodaySummary(context.Background(), completionTestTime(t, "2026-11-02T15:59:00Z"), owners)
-	if err != nil || got.CompletedQuestions != 3 || got.CompletedStudents != 1 || got.Date != "2026-11-02" {
+	if err != nil || got.CompletedQuestions != 3 || got.CompletedStudents != 1 || got.TotalCompletedQuestions != 4 || got.TotalServedStudents != 1 || got.Date != "2026-11-02" {
 		t.Fatalf("Shanghai boundaries = %+v %v", got, err)
 	}
 	got, err = s.TodaySummary(context.Background(), completionTestTime(t, "2026-11-02T16:00:00Z"), owners)
-	if err != nil || got.CompletedQuestions != 1 || got.Date != "2026-11-03" {
+	if err != nil || got.CompletedQuestions != 1 || got.TotalCompletedQuestions != 5 || got.TotalServedStudents != 1 || got.Date != "2026-11-03" {
 		t.Fatalf("next Shanghai day = %+v %v", got, err)
+	}
+}
+
+func TestTodaySummaryCumulativeDeduplicatesStudentsAndQuestionsAcrossDays(t *testing.T) {
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	yesterday, today := "2026-11-01T04:00:00Z", "2026-11-02T04:00:00Z"
+	owners := map[string]struct{}{"student-a": {}, "student-b": {}, "student-c": {}}
+	addObjectiveCompletion(t, s, "old-a", "student-a", "shared-choices", "submit", "passed", yesterday)
+	addObjectiveCompletion(t, s, "old-b", "student-b", "shared-choices", "submit", "passed", yesterday)
+	addProgrammingCompletion(t, s, "old-code", "student-a", "old-code", "submit", "passed", yesterday)
+	addObjectiveCompletion(t, s, "again-a", "student-a", "shared-choices", "submit", "passed", today)
+	addObjectiveCompletion(t, s, "today-c", "student-c", "shared-choices", "submit", "passed", today)
+	addProgrammingCompletion(t, s, "new-code", "student-a", "new-code", "submit", "passed", today)
+	// Additional proof of the same old/new target never multiplies totals.
+	addProgrammingCompletion(t, s, "new-code-retry", "student-a", "new-code", "submit", "passed", today)
+	got, err := s.TodaySummary(context.Background(), completionTestTime(t, today), owners)
+	if err != nil || got != (TodaySummary{Date: "2026-11-02", Timezone: "Asia/Shanghai", CompletedStudents: 2, CompletedQuestions: 5, TotalServedStudents: 3, TotalCompletedQuestions: 8}) {
+		t.Fatalf("all-history distinct totals = %+v %v", got, err)
+	}
+	if got.TotalCompletedQuestions < got.CompletedQuestions || got.TotalServedStudents < got.CompletedStudents {
+		t.Fatalf("cumulative count less than today: %+v", got)
+	}
+	// A day without work still retains the lifetime aggregate.
+	got, err = s.TodaySummary(context.Background(), completionTestTime(t, "2026-11-03T04:00:00Z"), owners)
+	if err != nil || got.CompletedStudents != 0 || got.CompletedQuestions != 0 || got.TotalServedStudents != 3 || got.TotalCompletedQuestions != 8 {
+		t.Fatalf("quiet day erased cumulative count: %+v %v", got, err)
 	}
 }
 
@@ -171,8 +201,13 @@ func TestTodaySummaryExcludesCollectionSkipsUnconfirmedAndUngradedExams(t *testi
 		t.Fatal(err)
 	}
 	got, err := s.TodaySummary(context.Background(), completionTestTime(t, stamp), map[string]struct{}{"student-a": {}})
-	if err != nil || got.CompletedQuestions != 0 || got.CompletedStudents != 0 {
+	if err != nil || got.CompletedQuestions != 0 || got.CompletedStudents != 0 || got.TotalCompletedQuestions != 0 || got.TotalServedStudents != 0 {
 		t.Fatalf("non-completion evidence counted as actual work: %+v %v", got, err)
+	}
+	// The same exclusions apply to past days in the cumulative portion.
+	got, err = s.TodaySummary(context.Background(), completionTestTime(t, "2026-11-03T04:00:00Z"), map[string]struct{}{"student-a": {}})
+	if err != nil || got.TotalCompletedQuestions != 0 || got.TotalServedStudents != 0 {
+		t.Fatalf("historical non-completion evidence counted as work: %+v %v", got, err)
 	}
 }
 

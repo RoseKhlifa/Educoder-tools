@@ -28,7 +28,8 @@ func (c *todaySummaryCache) load(ctx context.Context, bank *questionbank.Store, 
 	if err := ctx.Err(); err != nil {
 		return questionbank.TodaySummary{}, err
 	}
-	day := now.In(time.FixedZone("Asia/Shanghai", 8*60*60)).Format("2006-01-02")
+	local := now.In(time.FixedZone("Asia/Shanghai", 8*60*60))
+	day := local.Format("2006-01-02")
 	if c.bank == bank && c.platform == accounts && c.value.Date == day && now.Before(c.expires) {
 		return c.value, nil
 	}
@@ -46,6 +47,10 @@ func (c *todaySummaryCache) load(ctx context.Context, bank *questionbank.Store, 
 		return questionbank.TodaySummary{}, err
 	}
 	c.bank, c.platform, c.value, c.expires = bank, accounts, value, now.Add(time.Minute)
+	midnight := time.Date(local.Year(), local.Month(), local.Day()+1, 0, 0, 0, 0, local.Location())
+	if midnight.Before(c.expires) {
+		c.expires = midnight
+	}
 	return value, nil
 }
 
@@ -60,7 +65,7 @@ func (s *Server) handleTodaySummary(w http.ResponseWriter, r *http.Request, requ
 		return
 	}
 	unavailable := func() {
-		s.writeError(w, requestID, http.StatusServiceUnavailable, "SERVICE_SUMMARY_UNAVAILABLE", "今日服务概况暂不可用，请稍后重试")
+		s.writeError(w, requestID, http.StatusServiceUnavailable, "SERVICE_SUMMARY_UNAVAILABLE", "服务概况暂不可用，请稍后重试")
 	}
 	if s.jobs == nil || s.jobs.bank == nil || s.platform == nil {
 		unavailable()

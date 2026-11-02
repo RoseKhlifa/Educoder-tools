@@ -52,7 +52,7 @@ func TestQuestionBankSummaryIsSafeAuthenticatedAggregation(t *testing.T) {
 	if response.StatusCode != http.StatusOK || response.Header.Get("Cache-Control") != "no-store" || body.Error != nil {
 		t.Fatalf("authenticated ordinary user = %d %+v", response.StatusCode, body)
 	}
-	if len(body.Data) != 3 || body.Data["verified_objective_questions"] != float64(1) || body.Data["verified_programming_problems"] != float64(0) || body.Data["total_verified_questions"] != float64(1) {
+	if len(body.Data) != 4 || body.Data["contributed_questions"] != float64(0) || body.Data["verified_objective_questions"] != float64(1) || body.Data["verified_programming_problems"] != float64(0) || body.Data["total_verified_questions"] != float64(1) {
 		t.Fatalf("summary leaked data or miscounted evidence: %+v", body.Data)
 	}
 	// Cache access still validates the current platform principal each time.
@@ -100,6 +100,42 @@ func TestQuestionBankSummaryUnavailableDoesNotReturnZero(t *testing.T) {
 	}
 }
 
+func TestQuestionBankSummaryKeepsContributionAccountBoundAcrossGlobalCacheHits(t *testing.T) {
+	f := newPlatformHTTPFixture(t, nil)
+	ctx := context.Background()
+	url := f.server.URL + "/api/question-bank/summary"
+	// Warm an empty shared count before a collection adds its first question.
+	res := doJSON(t, f.bobClient, http.MethodGet, url, "")
+	if res.StatusCode != http.StatusOK {
+		t.Fatal(res.Body)
+	}
+	q := answer.ObjectiveQuestion{Position: 1, Question: "Contribution fixture", QuestionType: 0, Category: 1, Options: []answer.ObjectiveOption{{Label: "A", Text: "Alpha", Position: 0}, {Label: "B", Text: "Beta", Position: 1}}}
+	key, err := f.bank.UpsertObjectiveQuestion(ctx, q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := f.bank.AddObjectiveAnswer(ctx, key, "A", "platform_collection", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.bank.RecordObjectiveValidation(ctx, id, questionbank.ObjectiveValidation{Passed: true, Confirmed: true, PerQuestionCorrect: true, AnswerHash: problem.HashContent("A"), ScopeHash: problem.HashContent("fixture")}); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.bank.RecordObjectiveContribution(ctx, f.alice.Owner(), id); err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range []struct {
+		client *http.Client
+		count  string
+	}{{f.aliceClient, "1"}, {f.bobClient, "0"}, {f.adminClient, "0"}, {f.aliceClient, "1"}} {
+		// Query strings are never accepted as a choice of contribution owner.
+		res = doJSON(t, check.client, http.MethodGet, url+"?owner="+f.alice.Owner(), "")
+		if res.StatusCode != http.StatusOK || !strings.Contains(res.Body, `"contributed_questions":`+check.count) || !strings.Contains(res.Body, `"total_verified_questions":1`) || strings.Contains(res.Body, f.alice.ID) {
+			t.Fatalf("account-bound summary %d %s", res.StatusCode, res.Body)
+		}
+	}
+}
+
 func TestQuestionBankSummaryCacheAvoidsRepeatedQueriesAndExpires(t *testing.T) {
 	f := newPlatformHTTPFixture(t, nil)
 	url := f.server.URL + "/api/question-bank/summary"
@@ -110,13 +146,14 @@ func TestQuestionBankSummaryCacheAvoidsRepeatedQueriesAndExpires(t *testing.T) {
 	if err := f.bank.Close(); err != nil {
 		t.Fatal(err)
 	}
-	// A closed DB proves that these repeated authenticated cache hits do not
-	// issue another query. No account-specific values are stored in this cache.
-	for _, client := range []*http.Client{f.aliceClient, f.bobClient, f.adminClient} {
-		res := doJSON(t, client, http.MethodGet, url, "")
-		if res.StatusCode != http.StatusOK {
-			t.Fatalf("cache did not coalesce repeated requests: %d %s", res.StatusCode, res.Body)
-		}
+	// Only the global aggregate is shared; personal values are queried fresh.
+	// A closed DB proves the cached global value does not rescan the bank.
+	if value, err := f.app.questionBankSummary.load(context.Background(), f.bank); err != nil || value.TotalVerifiedQuestions != 0 {
+		t.Fatalf("global cache did not coalesce repeated queries: %+v %v", value, err)
+	}
+	res = doJSON(t, f.bobClient, http.MethodGet, url, "")
+	if res.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("personal query failure used another user's cached value: %d %s", res.StatusCode, res.Body)
 	}
 	f.app.questionBankSummary.mu.Lock()
 	f.app.questionBankSummary.expires = time.Now().Add(-time.Second)

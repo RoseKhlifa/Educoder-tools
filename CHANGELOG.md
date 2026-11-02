@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.50 - 2026-11-02
+
+- Add feedback tickets service and contribution statistics guidelines credits and progress fixes
+
 ## 0.1.49 - 2026-11-02
 
 - Prefetch course details and show real daily completions, instructors and student counts

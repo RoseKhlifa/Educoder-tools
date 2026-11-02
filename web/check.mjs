@@ -40,3 +40,4 @@ await import('./admin.check.mjs');
 await import('./jobs.check.mjs');
 
 await import('./course-cache.check.mjs');
+await import('./tickets.check.mjs');
