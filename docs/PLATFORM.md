@@ -35,6 +35,7 @@
 | GET | `/api/jobs` | 本人的近期服务任务摘要，不包含内部采集任务 |
 | GET | `/api/jobs/:id` | 本人的任务状态和公开进度 |
 | POST | `/api/jobs/:id/cancel` | 请求停止后续执行 |
+| POST | `/api/jobs/:id/retry` | 对本人符合条件的失败、取消或中断作业重新执行，空请求体或 `{}`，202 返回后续任务；重放复用同一条后续记录 |
 | GET | `/api/tickets` | 本人工单摘要列表，支持 `limit / cursor / status` |
 | POST | `/api/tickets` | 创建本人工单，正文含 `subject / category / body / idempotency_key` |
 | GET | `/api/tickets/:id` | 本人工单详情与消息 |
@@ -54,6 +55,8 @@
 ```
 
 `Idempotency-Key` 请求头也可设置幂等键；如果 body 同时提供，二者必须相同。同一键用于不同 payload 会返回冲突；同账号相同目标的活动任务会复用。`course` 不允许 `homework_id` 或 `game`，`all` 不接受客户端指定的课堂、作业或 game。
+
+用户任务摘要中的 `can_retry / can_cancel` 是由服务端状态和范围确定的操作能力。重新执行从本人原记录复制完整范围，使用当前有效登录，不接受修改目标或用户；原任务到后续任务的键由服务端生成，重复点击不会创建多个后续任务。当前支持 `submit` 的整份作业、课程与全部课程任务，重新读取上游进度后跳过已满分内容。仍在运行的任务先请求停止并等待后台结束；已完成、考试、内部采集与上游写入结果未知的记录不提供重新执行。普通用户不接触内部诊断、模型用量或执行参数。详见 [用户停止与重新执行](async-jobs.md#用户停止与重新执行)。
 
 兼容的整份作业请求为 `scope=homework`、`mode=submit`，需 `course` 与 `homework_id` 且不带 game。平台模式的公共 `/api/jobs` 接受 `submit` 和 `homework / course / all / exercise`；考试 `scope=exercise` 单独使用 `course + exercise_id`，不接收 `homework_id / game`，须在课程详情的在线考试页明确安排。课程与一键全部作业不自动纳入考试。技术用 `generate_only` 与 `selftest` 保留在 Go CLI，不可从普通服务 API 冒充完成状态。缺 scope 且带作业 ID 的旧 submit 请求统一扩展为整份作业。旧版缺 scope 的 submit+game 请求会归一化为整份作业，避免旧浏览器继续只做一关。
 

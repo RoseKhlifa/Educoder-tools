@@ -1752,6 +1752,14 @@ td { border-color:var(--line); }
 .ticket-form input::placeholder, .ticket-form textarea::placeholder, .ticket-reply-form textarea::placeholder { color:var(--muted-2); opacity:1; }
 .ticket-form :disabled, .ticket-reply-form :disabled { opacity:.6; cursor:wait; }
 .ticket-form-footer { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; }
+.job-actions { display:flex; flex-wrap:wrap; align-items:center; justify-content:flex-end; gap:10px; flex:none; }
+.job-actions .button { min-height:34px; margin:0; white-space:nowrap; }
+.job-actions .text-button { white-space:nowrap; }
+.job-action-note { margin:10px 0 0; color:var(--muted); font-size:12px; line-height:1.75; }
+@media (max-width:640px) {
+  .job-actions { gap:8px; }
+  .job-actions .button { min-height:38px; }
+}
 .ticket-privacy-hint { flex:1; margin:0; max-width:470px; font-size:11px; line-height:1.85; color:var(--muted); overflow-wrap:anywhere; }
 .ticket-form-footer .button { flex:none; min-height:42px; margin:0; }
 .ticket-list { overflow:hidden; min-width:0; }

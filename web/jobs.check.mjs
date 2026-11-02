@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { currentServiceJobs, jobProgress, partitionServiceJobs, renderJobs, renderServiceDetail, renderServiceJob, serviceStatus } from './dist/jobs.js';
+import { canRetryJob, canCancelJob, currentServiceJobs, jobProgress, partitionServiceJobs, renderJobs, renderServiceDetail, renderServiceJob, serviceStatus } from './dist/jobs.js';
 
 const job = (id, day, extra = {}) => ({ id, status: 'failed', phase: 'completed', kind: 'answer', request: { mode: 'submit', scope: 'course', course: 'COURSE_A' }, created_at: `2026-01-${String(day).padStart(2, '0')}T00:00:00Z`, updated_at: `2026-01-${String(day).padStart(2, '0')}T00:00:00Z`, ...extra });
 const ids = rows => rows.map(row => row.id);
@@ -8,6 +8,32 @@ const courses = [{ identifier: 'COURSE_A', name: '示例数据结构课程' }, {
 const visible = html => html.replace(/<details\b[\s\S]*?<\/details>/g, '');
 
 await test('consumer completion progress shows one current arrangement per original target', async t => {
+  await t.test('retry and stop actions require explicit backend capabilities and never appear in historical records', () => {
+    const failed = job('retryable', 1, { status: 'support', can_retry: true });
+    assert.equal(canRetryJob(failed), true);
+    assert.match(renderServiceJob(failed), /可重新执行|data-job-retry="retryable"/);
+    assert.match(renderServiceDetail(failed), /data-job-retry="retryable"/);
+    assert.doesNotMatch(renderServiceDetail(failed), /服务人员正在处理|无需重复提交/);
+    assert.match(renderServiceDetail(failed), /已核验通过的必做关卡会自动跳过/);
+    for (const item of [
+      { ...failed, can_retry: undefined }, { ...failed, can_retry: 'true' }, { ...failed, status: 'uncertain' }, { ...failed, status: 'succeeded' },
+      { ...failed, status: 'running' }, { ...failed, request: { mode: 'submit', scope: 'exercise', course: 'COURSE_A', exercise_id: 1 } },
+      { ...failed, request: { mode: 'collect_verified' } }, { ...failed, request: { mode: 'selftest', scope: 'course', course: 'COURSE_A' } },
+    ]) { assert.equal(canRetryJob(item), false); assert.doesNotMatch(renderServiceJob(item) + renderServiceDetail(item), /data-job-retry/); }
+    assert.doesNotMatch(renderServiceJob(failed, [], true) + renderServiceDetail(failed, [], true), /data-job-retry|data-job-cancel|重新执行/);
+    const running = { ...failed, status: 'running', can_retry: false, can_cancel: true };
+    assert.equal(canCancelJob(running), true); assert.match(renderServiceJob(running), /data-job-cancel="retryable"/);
+    assert.doesNotMatch(renderServiceJob({ ...running, can_cancel: undefined }), /data-job-cancel/);
+    assert.doesNotMatch(renderServiceJob(running, [], true), /data-job-cancel/);
+    for (const request of [
+      { scope: 'exercise', course: 'COURSE_A', exercise_id: 1, mode: 'submit' },
+      { scope: 'current', course: 'COURSE_A', homework_id: 1, game: 'game', mode: 'submit' },
+      { scope: 'course', course: 'COURSE_A', mode: 'selftest' },
+      { scope: 'course', course: 'COURSE_A', mode: 'generate_only' }, { mode: 'collect_verified' },
+    ]) { const ineligible={...running,request}; assert.equal(canCancelJob(ineligible),false); assert.doesNotMatch(renderServiceJob(ineligible), /data-job-cancel/); }
+    assert.match(renderServiceJob(running, [], false, 'stopping'), /disabled>正在停止/);
+  });
+
   await t.test('homework progress preserves zero, partial, full and unknown counts with a dedicated fill', () => {
     for (const [completed, total, percent] of [[0, 4, 0], [2, 4, 50], [4, 4, 100], [6, 4, 100]]) {
       const item = job('progress-sample', 1, { status: completed >= total ? 'succeeded' : 'running', result: { total_homeworks: total, completed_homeworks: completed } });

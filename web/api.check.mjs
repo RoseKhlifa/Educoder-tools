@@ -276,6 +276,14 @@ await test('browser API uses the Go workbench contract', async t => {
     assert.equal(requests[3].url, '/api/jobs/job%2F1/cancel');
     assert.equal(requests[3].options.method, 'POST');
   });
+  await t.test('job retry is an opaque session-bound source action with no caller-supplied scope or identity', async () => {
+    let request;
+    globalThis.fetch = async (url, options) => { request = { url, options }; return envelope({ id: 'retry-child', status: 'queued', can_retry: false, can_cancel: true }, 202); };
+    assert.equal((await new BrowserApi().retryJob('source/opaque ?#')).id, 'retry-child');
+    assert.equal(request.url, '/api/jobs/source%2Fopaque%20%3F%23/retry');
+    assert.equal(request.options.method, 'POST'); assert.equal(request.options.credentials, 'include');
+    assert.deepEqual(JSON.parse(request.options.body), {});
+  });
   await t.test('foreign job errors remain errors rather than empty successful histories', async () => {
     globalThis.fetch = async () => new Response(JSON.stringify({ error: { code: 'JOB_NOT_FOUND', message: '任务不存在' } }), { status: 404 });
     await assert.rejects(new BrowserApi().job('foreign-job'), error => error.code === 'JOB_NOT_FOUND' && !error.isSessionExpired);

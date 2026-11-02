@@ -19,6 +19,8 @@ type consumerJob struct {
 	CreatedAt time.Time         `json:"created_at"`
 	UpdatedAt time.Time         `json:"updated_at"`
 	Message   string            `json:"message"`
+	CanRetry  bool              `json:"can_retry"`
+	CanCancel bool              `json:"can_cancel"`
 	Result    consumerResult    `json:"result"`
 	Progress  *consumerProgress `json:"progress,omitempty"`
 }
@@ -92,7 +94,7 @@ func toConsumerJob(j jobs.Job) consumerJob {
 	}
 	req := j.Request
 	req.IdempotencyKey = ""
-	out := consumerJob{ID: j.ID, Status: status, Phase: status, Kind: "service", Request: req, CreatedAt: j.CreatedAt, UpdatedAt: j.UpdatedAt, Message: message}
+	out := consumerJob{ID: j.ID, Status: status, Phase: status, Kind: "service", Request: req, CreatedAt: j.CreatedAt, UpdatedAt: j.UpdatedAt, Message: message, CanRetry: canRetryJob(j), CanCancel: isRestartableRequest(req) && (j.Status == jobs.Queued || j.Status == jobs.Running)}
 	if req.Mode == "collect_verified" {
 		out.Kind = "collection"
 	}

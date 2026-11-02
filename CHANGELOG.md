@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.52 - 2026-11-02
+
+- Allow users to stop and restart interrupted homework tasks with owner-bound idempotent retries
+
 ## 0.1.51 - 2026-11-02
 
 - Fix verified image question bank reuse across accounts

@@ -281,6 +281,7 @@ export interface EducoderApi {
   job(id: string): Promise<AnswerJob>;
   createJob(request: JobRequest): Promise<AnswerJob>;
   cancelJob(id: string): Promise<AnswerJob>;
+  retryJob(id: string): Promise<AnswerJob>;
   adminOverview(): Promise<AdminOverview>;
   adminUsers(): Promise<AdminUser[]>;
   adminJobs(): Promise<AdminJob[]>;
@@ -365,6 +366,9 @@ export class BrowserApi implements EducoderApi {
   async job(id: string): Promise<AnswerJob> { return this.request<AnswerJob>(`/api/jobs/${encodeURIComponent(id)}`); }
   async createJob(request: JobRequest): Promise<AnswerJob> {
     return this.request<AnswerJob>('/api/jobs', { method: 'POST', body: JSON.stringify(request) });
+  }
+  async retryJob(id: string): Promise<AnswerJob> {
+    return this.request<AnswerJob>(`/api/jobs/${encodeURIComponent(id)}/retry`, { method: 'POST', body: '{}' });
   }
   async cancelJob(id: string): Promise<AnswerJob> {
     return this.request<AnswerJob>(`/api/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });

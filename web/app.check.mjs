@@ -75,6 +75,96 @@ async function app(overrides={}) {
   return {requests,timers,document,html:()=>document.html,get(selector){const element=document.querySelector(selector);assert.ok(element,`Missing ${selector}`);return element;},async tick(){const tasks=[...timers.entries()];for(const[id,timer]of tasks){timers.delete(id);timer.handler();}await settle();}};
 }
 await test('consumer course service and administrator boundary',async t=>{
+  await t.test('retry keeps the original server scope, guards duplicate clicks and moves the old attempt into history', async () => {
+    const source=job({id:'retry-source',status:'support',can_retry:true,can_cancel:false,result:{service_status:'support',total_homeworks:2,completed_homeworks:1}});
+    const child=job({id:'retry-child',status:'queued',can_retry:false,can_cancel:true,created_at:'2026-11-02T12:00:00Z'}), pending=deferred();
+    let rows=[source];
+    const page=await app({'/api/jobs':()=>ok({jobs:rows}),'/api/jobs/retry-source/retry':()=>pending.promise});
+    assert.equal(page.get('[data-select-course="COURSE_A"]').disabled,false);
+    assert.equal(page.get('[data-action="start-all"]').disabled,false);
+    assert.match(page.html(),/可重新执行/); assert.doesNotMatch(page.html(),/放心，服务人员正在处理，无需重复提交/);
+    page.get('[data-nav="progress"]').dispatch('click'); await settle();
+    page.get('[data-job-detail="retry-source"]').dispatch('click');
+    assert.match(page.html().slice(page.html().indexOf('role="dialog"')),/data-job-retry="retry-source"/);
+    page.get('[data-job-retry="retry-source"]').dispatch('click');
+    assert.match(page.html(),/继续原来的安排范围/);assert.match(page.html(),/已核验通过的关卡会自动跳过/);
+    assert.equal(page.requests.some(item=>item.options.method==='POST'),false);
+    const confirm=page.get('[data-action="modal-confirm"]');confirm.dispatch('click');confirm.dispatch('click');await settle();
+    const posted=page.requests.filter(item=>item.url==='/api/jobs/retry-source/retry');
+    assert.equal(posted.length,1);assert.equal(posted[0].options.method,'POST');assert.deepEqual(JSON.parse(posted[0].options.body),{});
+    assert.equal(page.requests.some(item=>item.url==='/api/jobs'&&item.options.method==='POST'),false);
+    assert.match(page.html(),/disabled>正在重新安排/);assert.doesNotMatch(page.html(),/已重新安排，/);
+    rows=[child,source];pending.resolve(ok(child));await settle();
+    assert.match(page.html(),/已重新安排，已完成的关卡会自动跳过/);
+    const current=page.html().split('data-service-history')[0];assert.match(current,/data-job-detail="retry-child"/);assert.doesNotMatch(current,/data-job-detail="retry-source"/);
+    assert.match(page.html(),/data-job-detail="retry-source" data-job-history="true"/);
+    assert.doesNotMatch(page.html(),/data-job-retry="retry-source"/);
+    assert.ok(page.requests.filter(item=>item.url==='/api/courses/COURSE_A/homeworks').length>=2);
+    page.get('[data-nav="courses"]').dispatch('click');assert.equal(page.get('[data-select-course="COURSE_A"]').disabled,true);
+  });
+  await t.test('retry failure keeps the original job and never announces acceptance or leaks provider errors', async () => {
+    const source=job({status:'support',can_retry:true,result:{service_status:'support'}});
+    for (const fail of [()=>{throw new Error('PRIVATE_NETWORK_TRACE');},()=>failure(409,'JOB_RETRY_CONFLICT','PRIVATE_CONFLICT')]) {
+      const page=await app({'/api/jobs':()=>ok({jobs:[source]}),'/api/jobs/job-1/retry':fail});
+      page.get('[data-nav="progress"]').dispatch('click');await settle();page.get('[data-job-retry="job-1"]').dispatch('click');page.get('[data-action="modal-confirm"]').dispatch('click');await settle();
+      assert.match(page.html(),/暂未确认重新执行结果，请刷新进度后重试/);assert.match(page.html(),/data-job-retry="job-1"/);
+      assert.doesNotMatch(page.html(),/PRIVATE_|已重新安排，/);
+    }
+    const expired=await app({'/api/jobs':()=>ok({jobs:[source]}),'/api/jobs/job-1/retry':()=>failure(401,'UPSTREAM_AUTH_EXPIRED','PRIVATE_AUTH')});
+    expired.get('[data-nav="progress"]').dispatch('click');await settle();expired.get('[data-job-retry="job-1"]').dispatch('click');expired.get('[data-action="modal-confirm"]').dispatch('click');await settle();
+    assert.match(expired.html(),/id="login-form"/);assert.match(expired.html(),/登录已过期/);assert.doesNotMatch(expired.html(),/PRIVATE_AUTH|已重新安排，/);
+  });
+  await t.test('stop waits for confirmed termination before offering retry and updates an open detail dialog', async () => {
+    const running=job({can_cancel:true,can_retry:false}), stopping={...running,can_cancel:false}, stopped=job({status:'canceled',can_retry:true,can_cancel:false,result:{service_status:'support'}});
+    const child=job({id:'after-stop',status:'queued',can_retry:false,can_cancel:true,created_at:'2026-11-02T12:00:00Z'});let rows=[running];
+    const page=await app({'/api/jobs':()=>ok({jobs:rows}),'/api/jobs/job-1/cancel':()=>{rows=[stopping];return ok(stopping);},'/api/jobs/job-1/retry':()=>{rows=[child,stopped];return ok(child);}});
+    page.get('[data-nav="progress"]').dispatch('click');await settle();page.get('[data-job-cancel="job-1"]').dispatch('click');
+    assert.match(page.html(),/等待任务确认停止/);assert.equal(page.requests.some(item=>item.url.endsWith('/cancel')),false);
+    page.get('[data-action="modal-confirm"]').dispatch('click');await settle();assert.match(page.html(),/正在停止…/);
+    assert.doesNotMatch(page.html(),/data-job-retry/);assert.equal(page.requests.some(item=>item.url.endsWith('/retry')),false);
+    await page.tick();assert.match(page.html(),/正在停止…/);assert.doesNotMatch(page.html(),/data-job-retry/);
+    page.get('[data-job-detail="job-1"]').dispatch('click');rows=[stopped];await page.tick();
+    const dialog=page.html().slice(page.html().indexOf('role="dialog"'));assert.match(dialog,/data-job-retry="job-1"/);assert.doesNotMatch(dialog,/正在停止/);
+    page.get('[data-job-retry="job-1"]').dispatch('click');page.get('[data-action="modal-confirm"]').dispatch('click');await settle();
+    assert.equal(page.requests.filter(item=>item.url==='/api/jobs/job-1/cancel').length,1);assert.equal(page.requests.filter(item=>item.url==='/api/jobs/job-1/retry').length,1);
+    assert.equal(page.requests.some(item=>item.url==='/api/jobs'&&item.options.method==='POST'),false);assert.match(page.html(),/data-job-detail="after-stop"/);
+  });
+  await t.test('a current detail becomes read-only history when a newer attempt arrives during polling', async () => {
+    const source=job({id:'source-dialog',status:'support',can_retry:true,result:{service_status:'support'}}),child=job({id:'new-dialog',created_at:'2026-11-02T12:00:00Z'});let rows=[source];
+    const page=await app({'/api/jobs':()=>ok({jobs:rows})});page.get('[data-nav="progress"]').dispatch('click');await settle();
+    page.get('[data-job-detail="source-dialog"]').dispatch('click');assert.match(page.html().slice(page.html().indexOf('role="dialog"')),/data-job-retry="source-dialog"/);
+    rows=[child,source];await page.tick();const dialog=page.html().slice(page.html().indexOf('role="dialog"'));
+    assert.match(dialog,/历史记录：以下为当次安排/);assert.doesNotMatch(dialog,/data-job-retry|data-job-cancel/);
+  });
+  await t.test('retryable terminal jobs unlock selection while active and unresolved support remain blocked', async () => {
+    for (const [status,can_retry,blocked] of [['support',true,false],['failed',true,false],['support',false,true],['support',undefined,true],['running',true,true]]) {
+      const source=job({status,can_retry,result:{service_status:'support'}}),page=await app({'/api/jobs':()=>ok({jobs:[source]})});
+      assert.equal(page.get('[data-select-course="COURSE_A"]').disabled,blocked,`${status}/${can_retry}`);
+      assert.equal(page.get('[data-action="start-all"]').disabled,blocked,`${status}/${can_retry}`);
+    }
+  });
+
+  await t.test('different homework attempts cannot mask another current blocker in the same course or a global arrangement', async () => {
+    const first={scope:'homework',course:'COURSE_A',homework_id:11,mode:'submit'},second={...first,homework_id:12};
+    const newer=job({id:'newer-retryable',request:second,status:'support',can_retry:true,created_at:'2026-11-02T12:00:00Z',result:{service_status:'support'}});
+    for (const prior of [
+      job({id:'older-support',request:first,status:'support',can_retry:false,result:{service_status:'support'}}),
+      job({id:'older-running',request:first,status:'running',can_retry:false,result:{service_status:'processing'}}),
+      job({id:'global-support',request:{scope:'all',mode:'submit'},status:'support',can_retry:false,result:{service_status:'support'}}),
+    ]) {
+      const page=await app({'/api/jobs':()=>ok({jobs:[newer,prior]})});
+      assert.equal(page.get('[data-select-course="COURSE_A"]').disabled,true,prior.id);
+      assert.equal(page.get('[data-action="start-all"]').disabled,true,prior.id);
+      assert.equal(page.get('[data-select-course="COURSE_B"]').disabled,prior.request.scope==='all',prior.id);
+      page.get('[data-action="select-all"]').dispatch('click');
+      assert.equal(page.get('[data-select-course="COURSE_A"]').checked,false,prior.id);
+      assert.equal(page.requests.some(item=>item.url==='/api/jobs'&&item.options.method==='POST'),false);
+    }
+    const completed=job({id:'older-completed',request:first,status:'completed',result:{service_status:'completed'}});
+    const page=await app({'/api/jobs':()=>ok({jobs:[newer,completed]})});
+    assert.equal(page.get('[data-select-course="COURSE_A"]').disabled,false);
+    assert.equal(page.get('[data-action="start-all"]').disabled,false);
+  });
   await t.test('the supplied first-party brand logo is shared by login, user and admin headers', async () => {
     const loginPage = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x') });
     assert.match(loginPage.html(), /class="brand-logo" src="\/assets\/brand-logo\.png\?v=\d+\.\d+\.\d+" alt="头歌妈妈"/);
@@ -339,16 +429,16 @@ await test('consumer course service and administrator boundary',async t=>{
     assert.ok('disabled' in page.get('[data-action="start-all"]').attributes);
   });
 
-  await t.test('course status uses the latest matching course or all-course result while preserving other open work', async () => {
+  await t.test('different course and all-course scopes preserve each current unresolved blocker', async () => {
     const oldAll = job({ id: 'old-all-open', request: { scope: 'all', mode: 'submit' }, status: 'support', created_at: '2026-01-01T00:00:00Z', result: { service_status: 'support' } });
     const newCourse = job({ id: 'new-course-done', status: 'completed', created_at: '2026-01-02T00:00:00Z', result: { service_status: 'completed' } });
     let page = await app({ '/api/jobs': () => ok({ jobs: [oldAll, newCourse] }) });
-    assert.equal('disabled' in page.get('[data-select-course="COURSE_A"]').attributes, false);
+    assert.equal('disabled' in page.get('[data-select-course="COURSE_A"]').attributes, true);
     assert.ok('disabled' in page.get('[data-select-course="COURSE_B"]').attributes);
     const oldCourse = job({ id: 'old-course-open', status: 'support', created_at: '2026-01-01T00:00:00Z', result: { service_status: 'support' } });
     const newAll = job({ id: 'new-all-done', request: { scope: 'all', mode: 'submit' }, status: 'completed', created_at: '2026-01-02T00:00:00Z', result: { service_status: 'completed' } });
     page = await app({ '/api/jobs': () => ok({ jobs: [oldCourse, newAll] }) });
-    assert.equal('disabled' in page.get('[data-select-course="COURSE_A"]').attributes, false);
+    assert.equal('disabled' in page.get('[data-select-course="COURSE_A"]').attributes, true);
   });
 
   await t.test('a status update while confirming an arrangement prevents a duplicate submission', async () => {

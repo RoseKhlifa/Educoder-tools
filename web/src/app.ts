@@ -1,6 +1,6 @@
 import { ApiRequestError, BrowserApi } from './api.js';
 import { partitionAdminJobs, renderAdmin, renderAdminJobDetail, type AdminPage, type AdminState } from './admin.js';
-import { currentServiceJobs, jobProgress, jobTitle, pendingJob, renderJobs, renderServiceDetail, serviceJob, serviceLabels, serviceStatus } from './jobs.js';
+import { canCancelJob, canRetryJob, serviceLabel, type JobActionState, currentServiceJobs, jobProgress, jobTitle, pendingJob, renderJobs, renderServiceDetail, serviceJob, serviceStatus } from './jobs.js';
 import { count, escapeHtml as e, icon } from './ui.js';
 import { renderUserGuidelines } from './guidelines.js';
 import { CourseDetailsCache } from './course-cache.js';
@@ -20,7 +20,7 @@ const ticketFormDrafts = new Map<string, TicketFormDraft>();
 const state = {
   user: null as User | null, page: 'courses' as Page, courses: [] as Course[], jobs: [] as AnswerJob[],
   selected: [] as string[], loading: false, signingIn: false, creating: false, notice: '', loginError: '', search: '',
-  modal: '' as string, modalKind: '' as '' | 'guidelines' | 'ticket', modalAction: null as (() => Promise<void> | void) | null,
+  modal: '' as string, modalKind: '' as '' | 'guidelines' | 'ticket' | 'job', modalAction: null as (() => Promise<void> | void) | null,
   progressHistoryOpen: false, questionBank: null as QuestionBankSummary | null, bankLoading: false, bankUnavailable: false, todaySummary: null as DailyServiceSummary | null, todayLoading: false, todayUnavailable: false,
   admin: { overview: {}, users: [], jobs: [], audit: [], loading: false, error: false, jobsView: 'current', jobsKind: 'service' } as AdminState,
 };
@@ -43,6 +43,8 @@ interface CourseDialog {
   loading: Record<DetailTab, boolean>; failed: Record<DetailTab, boolean>; updatedAt: Record<DetailTab, number>;
 }
 let courseDialog: CourseDialog | null = null;
+let jobDialog: { id: string; historical: boolean } | null = null;
+const jobActions = new Map<string, JobActionState>();
 const courseCache = new CourseDetailsCache({
   homeworks: id => readCourseData(() => api.homeworks(id)),
   exercises: id => readCourseData(async () => (await api.exercises(id)).items),
@@ -57,6 +59,7 @@ const accessible = (): boolean => state.user?.service_access !== false && state.
 const activeJobs = (): AnswerJob[] => state.jobs.filter(job => serviceJob(job) && pendingJob(job));
 function stopPoll(): void { if (pollTimer !== undefined) clearTimeout(pollTimer); pollTimer = undefined; }
 function resetSession(message = ''): void {
+  jobActions.clear(); jobDialog = null;
   userTickets = emptyTickets(); adminTickets = emptyTickets(); ticketDialog = null; ticketRetryKeys.clear(); ticketFormDrafts.clear();
   generation++; jobsRevision++; coursesRevision++; adminRevision++; modalRevision++; bankRevision++; bankLoadedAt = 0; todayRevision++; todayLoadedAt = 0; todayLoadedDate = ''; guidelinesSource = 'login'; stopPoll(); courseDialog = null; courseCache.clear();
   Object.assign(state, { user: null, page: 'courses', courses: [], jobs: [], selected: [], loading: false, signingIn: false, creating: false, notice: '', loginError: message, modal: '', modalKind: '', modalAction: null, search: '', progressHistoryOpen: false, questionBank: null, bankLoading: false, bankUnavailable: false, todaySummary: null, todayLoading: false, todayUnavailable: false, admin: { overview: {}, users: [], jobs: [], audit: [], loading: false, error: false, userSearch: '', userFilter: 'all' } });
@@ -109,16 +112,21 @@ function renderShell(): string {
   const completed = current.filter(job => serviceStatus(job) === 'completed').length;
   return `<div id="view-app" class="app-shell ${admin ? 'admin-app' : 'consumer-app'}"><header class="global-nav topbar ${admin ? 'admin-topbar' : ''}"><div class="top-left"><button class="nav-brand" type="button" data-nav="${admin ? 'admin-overview' : 'courses'}" aria-label="头歌妈妈首页">${brandLogo()}<span class="name">头歌妈妈</span><span class="domain">touge.mom</span></button>${admin ? '<span class="admin-chip">服务管理</span>' : ''}</div><nav class="nav-links" aria-label="${admin ? '管理员导航' : '主导航'}">${links}</nav><div class="nav-user">${avatar()}<span class="user-name">${e(state.user?.name || '同学')}</span><button class="icon-button" data-action="logout" aria-label="退出登录" title="退出登录">${icon('logout')}</button></div></header><div class="mobile-nav">${links}${isAdmin() ? navItem(admin ? 'courses' : 'admin-overview', admin ? '用户端' : '管理后台', admin ? 'courses' : 'overview') : ''}</div><div class="${admin ? 'shell admin-shell' : 'workspace consumer-workspace'}">${admin ? `<aside class="side admin-side" aria-label="管理员导航"><div class="side-label">服务管理</div><nav class="side-nav">${adminSideLinks}</nav><div class="side-foot"><p class="t">服务工作台</p><p>异常与执行记录只在管理端查看，用户端只展示完成进度。</p><button class="btn ghost text-button" data-nav="courses">${icon('courses')}返回用户端</button></div></aside>` : `<aside class="side consumer-side" aria-label="侧栏概况"><div class="side-card"><h3>当前概况</h3><div class="stat-row"><span class="l">我的课程</span><span class="n">${state.courses.length}</span></div><div class="stat-row"><span class="l">已选中</span><span class="n">${selectedCount}</span></div><div class="stat-row"><span class="l">处理中</span><span class="n">${active}</span></div><div class="stat-row"><span class="l">已完成安排</span><span class="n">${completed}</span></div></div>${renderTodaySummary()}<div class="side-card state-legend"><h3>状态图例</h3><div><span class="badge waiting">待安排</span><span class="badge processing">处理中</span><span class="badge completed">已完成</span></div></div><div class="consumer-side-bottom">${renderQuestionBank('sidebar')}</div></aside>`}<main class="main ${admin ? 'admin-main' : 'consumer-main'}">${state.notice ? `<div class="service-notice" role="status">${e(state.notice)}</div>` : ''}${state.page === 'admin-support' ? renderTickets(adminTickets, true) : admin ? renderAdmin(state.page.replace('admin-', '') as AdminPage, state.admin) : state.page === 'support' ? renderTickets(userTickets, false) : state.page === 'courses' ? renderCourses() : renderProgress()}${admin ? '' : `<div class="bank-mobile"><div class="mobile-service-summary">${renderTodaySummary()}</div>${renderQuestionBank('mobile')}</div>`}<footer class="page-footer">头歌妈妈 · 把安排交给我们</footer></main></div></div>`;
 }
+function matchingCourseJobs(course: string): AnswerJob[] {
+  return currentServiceJobs(state.jobs).filter(job => job.request.scope !== 'exercise' && (job.request.scope === 'all' || job.request.course === course));
+}
+function blocksCourseScheduling(job: AnswerJob): boolean {
+  return jobActions.has(job.id) || pendingJob(job) || serviceStatus(job) === 'support' && !canRetryJob(job);
+}
 function courseService(course: string): AnswerJob | undefined {
-  const matching = currentServiceJobs(state.jobs).filter(job => job.request.scope !== 'exercise' && (job.request.scope === 'all' || job.request.course === course));
-  return matching.find(pendingJob) ?? matching[0];
+  const matching = matchingCourseJobs(course);
+  return matching.find(pendingJob) ?? matching.find(blocksCourseScheduling) ?? matching[0];
 }
 function coursePending(course: string): boolean {
-  const latest = courseService(course);
-  return Boolean(latest && (pendingJob(latest) || serviceStatus(latest) === 'support'));
+  return matchingCourseJobs(course).some(blocksCourseScheduling);
 }
 function allServicePending(): boolean {
-  return activeJobs().some(job => job.request.scope !== 'exercise') || currentServiceJobs(state.jobs).some(job => job.request.scope === 'all' && serviceStatus(job) === 'support');
+  return currentServiceJobs(state.jobs).some(job => job.request.scope !== 'exercise' && blocksCourseScheduling(job));
 }
 function renderCourses(): string {
   const visible = state.courses.filter(course => !state.search || course.name.toLowerCase().includes(state.search.toLowerCase()));
@@ -130,11 +138,11 @@ function renderCourses(): string {
   const selectable = state.courses.filter(course => !coursePending(course.identifier));
   const selectedAll = selectable.length > 0 && selectable.every(course => state.selected.includes(course.identifier));
   const latestProgress = latest ? jobProgress(latest) : null;
-  return `<div class="page-head page-heading"><div><span class="eyebrow">我的学习</span><h1>今天，也轻松一点。</h1><p>${e(state.user?.name || '同学')}，选好课程，我们来完成。</p></div><div class="head-actions"><button class="btn button" data-action="refresh" ${state.loading ? 'disabled' : ''}>${icon('refresh')}刷新课程</button><button class="btn accent button primary" data-action="start-all" ${state.loading || state.creating || !state.courses.length || !accessible() || allServicePending() ? 'disabled' : ''}>一键完成全部未完成作业 ${icon('arrow')}</button></div></div>${!accessible() ? '<div class="service-notice">你的服务暂未开通，请联系服务人员。已有完成进度仍可查看。</div>' : ''}<section class="strip" aria-label="课程摘要"><div class="strip-item"><div class="k">我的课程</div><div class="v">${state.courses.length}</div><div class="h">头歌平台同步</div></div><div class="strip-item"><div class="k">当前安排</div><div class="v">${current.length}</div><div class="h">后台持续处理</div></div><div class="strip-item"><div class="k">已选中</div><div class="v">${selectedCount(state.selected)}</div><div class="h">可多选后安排</div></div><div class="strip-item"><div class="k">最近安排进度</div><div class="v">${latestProgress?.percent ?? (completed ? 100 : 0)}%</div><div class="h">当前服务记录</div></div></section><div class="content-grid"><section class="panel-box course-panel"><div class="panel-toolbar"><div><h2>我的课程 <span class="count">${state.courses.length}</span></h2><p class="muted">选择课程，安排其中尚未完成的必做作业。</p></div><div class="toolbar-row"><label class="search-input"><span class="sr-only">搜索课程</span><input data-search placeholder="搜索课程" value="${e(state.search)}"></label><button class="btn button" data-action="select-all" ${state.creating || !accessible() ? 'disabled' : ''}>${selectedAll ? '清空选择' : '全选可安排'}</button></div></div>${state.loading ? '<div class="loading" role="status"><span class="spinner"></span>正在同步你的课程…</div>' : visible.length ? `<div class="course-table-wrap"><table class="course-table" aria-label="我的课程列表"><thead><tr><th class="select-col">选</th><th>课程</th><th>作业</th><th>状态</th><th></th></tr></thead><tbody>${visible.map((course, index) => { const pending = coursePending(course.identifier); const selected = state.selected.includes(course.identifier); return `<tr class="course-row ${selected ? 'selected' : ''}" data-course-row="${e(course.identifier)}"><td class="select-col"><label class="course-select"><input type="checkbox" data-select-course="${e(course.identifier)}" ${selected ? 'checked' : ''} ${pending || state.creating || !accessible() ? 'disabled' : ''}><span class="sr-only">选择${e(course.name)}</span></label></td><td><div class="course-name"><span class="course-index">${String(index + 1).padStart(2, '0')}</span><div><strong>${e(course.name)}</strong>${renderCourseMeta(course)}</div></div></td><td><span class="table-number">${course.homeworkCount === undefined ? '—' : `${course.homeworkCount} 份`}</span></td><td><span class="badge ${pending ? 'processing' : 'waiting'}">${pending ? serviceStatus(courseService(course.identifier)!) === 'support' ? '服务处理中' : '服务已安排' : '可安排'}</span></td><td><button class="text-button" data-course-detail="${e(course.identifier)}">查看详情 ${icon('arrow')}</button></td></tr>`; }).join('')}</tbody></table></div>` : `<div class="panel empty"><h3>${state.search ? '没有找到这门课程' : '还没有课程'}</h3><p>${state.search ? '试试其他课程名称。' : '加入头歌课堂后，刷新这里即可同步。'}</p></div>`}<div class="selection-bar"><label class="select-all"><input type="checkbox" data-action="select-all" ${selectedAll ? 'checked' : ''} ${state.creating || !accessible() ? 'disabled' : ''}> 全选可安排课程</label><span>已选 ${selectedCount(state.selected)} 门课程</span><button class="button primary" data-action="start-selected" ${!state.selected.length || state.creating || !accessible() ? 'disabled' : ''}>${state.creating ? '正在安排…' : '完成所选课程'}</button></div></section><aside class="status-rail side-card"><section class="current-service"><div class="rail-label"><i></i> 我的完成进度</div><h2>${latest ? serviceLabels[serviceStatus(latest)] : completed ? '安排已完成' : '一切准备就绪'}</h2><p>${latest ? e(jobTitle(latest, state.courses)) : '选好课程后，我们会在这里跟进。'}</p>${latest && examSubmitted ? `<p class="rail-exam-status">已交卷${jobProgress(latest).total ? ` · 共 ${jobProgress(latest).total} 道题` : ''}</p>` : latest ? `<div class="large-progress"><strong>${jobProgress(latest).completed}</strong><span>/ ${jobProgress(latest).total || '—'} ${jobProgress(latest).unit}</span></div><div class="rail-track"><span style="width:${jobProgress(latest).percent}%"></span></div>` : '<div class="ready-mark" aria-hidden="true">✓</div>'}<p class="rail-note">${latest && serviceStatus(latest) === 'support' ? '放心，服务人员正在处理，无需重复提交。' : '关闭页面也没关系，进度会为你保留。'}</p><button class="text-button" data-nav="progress">查看全部进度 ${icon('arrow')}</button></section><section class="panel reassurance"><h3>只需要三步</h3><ol><li><b>选择课程</b><p>按需要选择，或一键安排全部。</p></li><li><b>交给我们</b><p>处理过程中无需守候。</p></li><li><b>查看进度</b><p>完成后，结果清楚可见。</p></li></ol></section></aside></div>`;
+  return `<div class="page-head page-heading"><div><span class="eyebrow">我的学习</span><h1>今天，也轻松一点。</h1><p>${e(state.user?.name || '同学')}，选好课程，我们来完成。</p></div><div class="head-actions"><button class="btn button" data-action="refresh" ${state.loading ? 'disabled' : ''}>${icon('refresh')}刷新课程</button><button class="btn accent button primary" data-action="start-all" ${state.loading || state.creating || !state.courses.length || !accessible() || allServicePending() ? 'disabled' : ''}>一键完成全部未完成作业 ${icon('arrow')}</button></div></div>${!accessible() ? '<div class="service-notice">你的服务暂未开通，请联系服务人员。已有完成进度仍可查看。</div>' : ''}<section class="strip" aria-label="课程摘要"><div class="strip-item"><div class="k">我的课程</div><div class="v">${state.courses.length}</div><div class="h">头歌平台同步</div></div><div class="strip-item"><div class="k">当前安排</div><div class="v">${current.length}</div><div class="h">后台持续处理</div></div><div class="strip-item"><div class="k">已选中</div><div class="v">${selectedCount(state.selected)}</div><div class="h">可多选后安排</div></div><div class="strip-item"><div class="k">最近安排进度</div><div class="v">${latestProgress?.percent ?? (completed ? 100 : 0)}%</div><div class="h">当前服务记录</div></div></section><div class="content-grid"><section class="panel-box course-panel"><div class="panel-toolbar"><div><h2>我的课程 <span class="count">${state.courses.length}</span></h2><p class="muted">选择课程，安排其中尚未完成的必做作业。</p></div><div class="toolbar-row"><label class="search-input"><span class="sr-only">搜索课程</span><input data-search placeholder="搜索课程" value="${e(state.search)}"></label><button class="btn button" data-action="select-all" ${state.creating || !accessible() ? 'disabled' : ''}>${selectedAll ? '清空选择' : '全选可安排'}</button></div></div>${state.loading ? '<div class="loading" role="status"><span class="spinner"></span>正在同步你的课程…</div>' : visible.length ? `<div class="course-table-wrap"><table class="course-table" aria-label="我的课程列表"><thead><tr><th class="select-col">选</th><th>课程</th><th>作业</th><th>状态</th><th></th></tr></thead><tbody>${visible.map((course, index) => { const pending = coursePending(course.identifier); const selected = state.selected.includes(course.identifier); return `<tr class="course-row ${selected ? 'selected' : ''}" data-course-row="${e(course.identifier)}"><td class="select-col"><label class="course-select"><input type="checkbox" data-select-course="${e(course.identifier)}" ${selected ? 'checked' : ''} ${pending || state.creating || !accessible() ? 'disabled' : ''}><span class="sr-only">选择${e(course.name)}</span></label></td><td><div class="course-name"><span class="course-index">${String(index + 1).padStart(2, '0')}</span><div><strong>${e(course.name)}</strong>${renderCourseMeta(course)}</div></div></td><td><span class="table-number">${course.homeworkCount === undefined ? '—' : `${course.homeworkCount} 份`}</span></td><td><span class="badge ${pending ? 'processing' : 'waiting'}">${pending ? serviceStatus(courseService(course.identifier)!) === 'support' ? '服务处理中' : '服务已安排' : '可安排'}</span></td><td><button class="text-button" data-course-detail="${e(course.identifier)}">查看详情 ${icon('arrow')}</button></td></tr>`; }).join('')}</tbody></table></div>` : `<div class="panel empty"><h3>${state.search ? '没有找到这门课程' : '还没有课程'}</h3><p>${state.search ? '试试其他课程名称。' : '加入头歌课堂后，刷新这里即可同步。'}</p></div>`}<div class="selection-bar"><label class="select-all"><input type="checkbox" data-action="select-all" ${selectedAll ? 'checked' : ''} ${state.creating || !accessible() ? 'disabled' : ''}> 全选可安排课程</label><span>已选 ${selectedCount(state.selected)} 门课程</span><button class="button primary" data-action="start-selected" ${!state.selected.length || state.creating || !accessible() ? 'disabled' : ''}>${state.creating ? '正在安排…' : '完成所选课程'}</button></div></section><aside class="status-rail side-card"><section class="current-service"><div class="rail-label"><i></i> 我的完成进度</div><h2>${latest ? serviceLabel(latest) : completed ? '安排已完成' : '一切准备就绪'}</h2><p>${latest ? e(jobTitle(latest, state.courses)) : '选好课程后，我们会在这里跟进。'}</p>${latest && examSubmitted ? `<p class="rail-exam-status">已交卷${jobProgress(latest).total ? ` · 共 ${jobProgress(latest).total} 道题` : ''}</p>` : latest ? `<div class="large-progress"><strong>${jobProgress(latest).completed}</strong><span>/ ${jobProgress(latest).total || '—'} ${jobProgress(latest).unit}</span></div><div class="rail-track"><span style="width:${jobProgress(latest).percent}%"></span></div>` : '<div class="ready-mark" aria-hidden="true">✓</div>'}<p class="rail-note">${latest && canRetryJob(latest) ? '本次安排已停止处理，可在完成进度中重新执行。' : latest && serviceStatus(latest) === 'support' ? '放心，服务人员正在处理，无需重复提交。' : '关闭页面也没关系，进度会为你保留。'}</p><button class="text-button" data-nav="progress">查看全部进度 ${icon('arrow')}</button></section><section class="panel reassurance"><h3>只需要三步</h3><ol><li><b>选择课程</b><p>按需要选择，或一键安排全部。</p></li><li><b>交给我们</b><p>处理过程中无需守候。</p></li><li><b>查看进度</b><p>完成后，结果清楚可见。</p></li></ol></section></aside></div>`;
 }
 function selectedCount(values: string[]): number { return values.length; }
 function renderProgress(): string {
-  return `<div class="page-head page-heading"><div><span class="eyebrow">服务记录</span><h1>完成进度</h1><p>查看正在处理和已完成的课程。</p></div><div class="head-actions"><button class="btn button" data-action="jobs-refresh">${icon('refresh')}刷新进度</button></div></div>${renderJobs(state.jobs, state.courses, state.progressHistoryOpen)}`;
+  return `<div class="page-head page-heading"><div><span class="eyebrow">服务记录</span><h1>完成进度</h1><p>查看正在处理和已完成的课程。</p></div><div class="head-actions"><button class="btn button" data-action="jobs-refresh">${icon('refresh')}刷新进度</button></div></div>${renderJobs(state.jobs, state.courses, state.progressHistoryOpen, jobActions)}`;
 }
 function exerciseStatus(exercise: Exercise): { label: string; tone: string } {
   if (exercise.submitted) return exercise.scoreKnown ? { label: '成绩已公布', tone: 'completed' } : { label: '已交卷 · 待公布成绩', tone: 'processing' };
@@ -178,6 +186,10 @@ function renderCourseDetail(dialog: CourseDialog): string {
   return `<h2 id="modal-title" class="course-detail-title">${e(course.name)}</h2><button class="icon-button course-detail-refresh ${dialog.loading.homework || dialog.loading.exercise ? 'refreshing' : ''}" type="button" data-action="detail-refresh" aria-label="刷新作业和考试" title="刷新作业和考试" ${dialog.loading.homework || dialog.loading.exercise ? 'disabled' : ''}>${icon('refresh')}</button><p class="detail-sync-message" role="status">${e(message)}</p><div class="detail-tabs" role="tablist"><button class="detail-tab ${tab === 'homework' ? 'selected' : ''}" data-detail-tab="homework" role="tab" aria-selected="${tab === 'homework'}">课程实验</button><button class="detail-tab ${tab === 'exercise' ? 'selected' : ''}" data-detail-tab="exercise" role="tab" aria-selected="${tab === 'exercise'}">在线考试</button></div>${tab === 'homework' ? homeworkBody : examBody}<div class="modal-actions"><button class="button" data-action="close-modal">关闭</button></div>`;
 }
 function render(): void {
+  if (jobDialog && state.modalKind === 'job') {
+    const job = state.jobs.find(item => item.id === jobDialog?.id);
+    if (job) state.modal = jobDetailContent(job, jobDialog.historical);
+  }
   // Draft values live only in the form controls. Preserve them across opening a
   // read-only dialog without serializing them into markup or persistent state.
   const draft = !state.user && !state.signingIn ? {
@@ -232,8 +244,9 @@ function restoreTicketForm(draft: TicketFormDraft | null): void {
     }
   }
 }
-function showModal(content: string, action: (() => Promise<void> | void) | null = null, kind: '' | 'guidelines' | 'ticket' = ''): void {
+function showModal(content: string, action: (() => Promise<void> | void) | null = null, kind: '' | 'guidelines' | 'ticket' | 'job' = ''): void {
   if (kind !== 'ticket') ticketDialog = null;
+  if (kind !== 'job') jobDialog = null;
   previousFocus = document.activeElement as HTMLElement | null; modalRevision++;
   state.modal = content; state.modalAction = action; state.modalKind = kind; render();
   document.querySelector<HTMLButtonElement>('[data-action="close-modal"]')?.focus();
@@ -241,7 +254,7 @@ function showModal(content: string, action: (() => Promise<void> | void) | null 
 function closeModal(): void {
   const guidelines = state.modalKind === 'guidelines';
   const closedTicket = ticketDialog?.id;
-  state.modal = ''; state.modalKind = ''; state.modalAction = null; modalRevision++; courseDialog = null; ticketDialog = null; render();
+  state.modal = ''; state.modalKind = ''; state.modalAction = null; modalRevision++; courseDialog = null; ticketDialog = null; jobDialog = null; render();
   if (guidelines) document.querySelector<HTMLButtonElement>(`[data-guidelines-source="${guidelinesSource}"]`)?.focus();
   else if (closedTicket) [...document.querySelectorAll<HTMLButtonElement>('[data-ticket-open]')].find(button => button.dataset.ticketOpen === closedTicket)?.focus();
   else if (previousFocus?.isConnected) previousFocus.focus();
@@ -255,7 +268,16 @@ async function loadJobs(): Promise<void> {
   try {
     const result = await api.jobs();
     if (session !== generation || revision !== jobsRevision) return;
-    state.jobs = result.jobs; state.selected = state.selected.filter(id => !coursePending(id)); if (!state.modal) render();
+    const changed = result.jobs.filter(job => !pendingJob(job) && state.jobs.some(previous => previous.id === job.id && pendingJob(previous)));
+    state.jobs = result.jobs;
+    for (const job of state.jobs) if (jobActions.get(job.id) === 'stopping' && !pendingJob(job)) jobActions.delete(job.id);
+    state.selected = state.selected.filter(id => !coursePending(id));
+    if (jobDialog && state.modalKind === 'job') {
+      const job = state.jobs.find(item => item.id === jobDialog?.id);
+      if (job) state.modal = jobDetailContent(job, jobDialog.historical);
+      render();
+    } else if (!state.modal) render();
+    for (const job of changed) refreshJobCourseCache(job);
   } catch (error) {
     if (session !== generation || revision !== jobsRevision) return;
     if (handleError(error)) return;
@@ -353,6 +375,40 @@ async function startService(all: boolean, selected: string[]): Promise<void> {
   state.creating = false; state.selected = [];
   state.notice = accepted === responses.length ? '已收到你的安排，接下来交给我们。完成进度会自动更新。' : '你的安排正在核对，请先查看完成进度，无需重复提交。';
   state.page = 'progress'; render(); void loadJobs();
+}
+function jobDetailContent(job: AnswerJob, historical: boolean): string {
+  const archived = historical || !currentServiceJobs(state.jobs).some(current => current.id === job.id);
+  return `<div id="modal-title">${renderServiceDetail(job, state.courses, archived, jobActions.get(job.id))}</div>`;
+}
+function currentJob(id: string): AnswerJob | undefined { return currentServiceJobs(state.jobs).find(job => job.id === id); }
+function refreshJobCourseCache(job: AnswerJob): void {
+  if (job.request.scope === 'exercise') return;
+  const identifiers = job.request.scope === 'all' ? state.courses.map(course => course.identifier) : job.request.course ? [job.request.course] : [];
+  for (const id of identifiers) void courseCache.getHomeworks(id, true).catch(() => {});
+}
+function confirmJobAction(id: string, action: 'retry' | 'cancel'): void {
+  const job = currentJob(id);
+  if (!job || jobActions.has(id) || !accessible() || !(action === 'retry' ? canRetryJob(job) : canCancelJob(job))) return;
+  const retry = action === 'retry'; courseDialog = null;
+  showModal(`<h2 id="modal-title">${retry ? '重新执行这次安排？' : '停止这个任务？'}</h2><p class="subtext">${e(jobTitle(job, state.courses))}</p><div class="detail-note">${retry ? '继续原来的安排范围，只处理尚未完成的必做内容。已核验通过的关卡会自动跳过，选做内容不会安排。' : '会保留已完成的结果，停止后续处理。请等待任务确认停止，之后可以重新执行未完成的内容。'}</div><div class="modal-actions"><button class="button" data-action="close-modal">再看看</button><button class="button primary" data-action="modal-confirm">${retry ? '确认重新执行' : '确认停止'}</button></div>`, () => performJobAction(id, action));
+}
+async function performJobAction(id: string, action: 'retry' | 'cancel'): Promise<void> {
+  const source = currentJob(id);
+  if (!source || jobActions.has(id) || !accessible() || !(action === 'retry' ? canRetryJob(source) : canCancelJob(source))) { closeModal(); return; }
+  const session = generation; jobsRevision++; stopPoll(); jobActions.set(id, action); closeModal(); state.notice = ''; render();
+  try {
+    const job = action === 'retry' ? await api.retryJob(id) : await api.cancelJob(id);
+    if (session !== generation) return;
+    if (!job || typeof job.id !== 'string' || !job.id || typeof job.status !== 'string' || !job.request) throw new Error('Invalid job response');
+    state.jobs = [job, ...state.jobs.filter(previous => previous.id !== job.id)];
+    if (action === 'cancel' && pendingJob(job)) jobActions.set(id, 'stopping'); else jobActions.delete(id);
+    state.page = 'progress'; state.selected = state.selected.filter(course => !coursePending(course));
+    state.notice = action === 'retry' ? pendingJob(job) ? '已重新安排，已完成的关卡会自动跳过。' : '已找到这次重新安排的结果，请查看完成进度。' : pendingJob(job) ? '已请求停止，正在等待任务确认。停止后可重新执行。' : '任务已停止，已完成的结果会保留。';
+    render(); refreshJobCourseCache(source); scheduleJobs();
+  } catch (error) {
+    if (session !== generation || handleError(error)) return;
+    jobActions.delete(id); state.notice = action === 'retry' ? '暂未确认重新执行结果，请刷新进度后重试。' : '暂未确认停止结果，请刷新进度查看任务状态。'; render(); void loadJobs();
+  }
 }
 function cachedCourseDialog(course: Course, tab: DetailTab): CourseDialog {
   const homeworks = courseCache.peekHomeworks(course.identifier);
@@ -628,8 +684,14 @@ function bindEvents(): void {
     if (courseDialog && exercise) confirmExercise(courseDialog.course, exercise);
   }));
   document.querySelectorAll<HTMLButtonElement>('[data-job-detail]').forEach(button => button.addEventListener('click', () => {
-    const job = state.jobs.find(item => item.id === button.dataset.jobDetail); if (job) showModal(`<div id="modal-title">${renderServiceDetail(job, state.courses, button.dataset.jobHistory === 'true')}</div>`);
+    const job = state.jobs.find(item => item.id === button.dataset.jobDetail);
+    if (job) {
+      courseDialog = null; jobDialog = { id: job.id, historical: button.dataset.jobHistory === 'true' };
+      showModal(jobDetailContent(job, jobDialog.historical), null, 'job');
+    }
   }));
+  document.querySelectorAll<HTMLButtonElement>('[data-job-retry]').forEach(button => button.addEventListener('click', () => confirmJobAction(button.dataset.jobRetry!, 'retry')));
+  document.querySelectorAll<HTMLButtonElement>('[data-job-cancel]').forEach(button => button.addEventListener('click', () => confirmJobAction(button.dataset.jobCancel!, 'cancel')));
   document.querySelector<HTMLDetailsElement>('[data-service-history]')?.addEventListener('toggle', event => {
     state.progressHistoryOpen = (event.currentTarget as HTMLDetailsElement).open;
   });

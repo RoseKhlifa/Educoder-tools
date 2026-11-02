@@ -174,6 +174,8 @@ export interface AnswerJob {
   updated_at: string;
   started_at?: string;
   finished_at?: string;
+  can_retry?: boolean;
+  can_cancel?: boolean;
   error_code?: string;
   message?: string;
   progress?: HomeworkProgress;

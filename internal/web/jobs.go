@@ -411,29 +411,7 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, requestID st
 			}
 			req.IdempotencyKey = header
 		}
-		// The executor captures only this authenticated client. No account,
-		// cookie or execution key enters the durable job request.
-		job, reused, err := s.jobs.manager.Submit(r.Context(), owner, req, func(ctx context.Context, request jobs.Request, report func(jobs.Event)) (jobs.Outcome, error) {
-			return s.runAuthorized(ctx, owner, func(ctx context.Context) (jobs.Outcome, error) {
-				out, err := s.jobs.run(ctx, session.Client, owner, request, func(event jobs.Event) {
-					if p := event.Progress; p != nil && p.CurrentCourse != "" && p.CurrentHomeworkID > 0 && p.CurrentHomeworkTitle != "" {
-						s.rememberHomeworkLabels(ctx, p.CurrentCourse, []educoder.Homework{{ID: p.CurrentHomeworkID, Name: p.CurrentHomeworkTitle}})
-					}
-					report(event)
-				})
-				s.rememberResultLabels(ctx, request, out.Result, false)
-				return out, err
-			})
-		})
-		if err != nil {
-			s.jobError(w, requestID, err)
-			return
-		}
-		w.Header().Set("Location", "/api/jobs/"+job.ID)
-		if reused {
-			w.Header().Set("X-Job-Reused", "true")
-		}
-		s.writeJSON(w, requestID, http.StatusAccepted, toConsumerJob(job))
+		s.submitConsumerJob(w, r, requestID, session, req)
 		return
 	}
 	if len(parts) == 3 && r.Method == http.MethodGet {
@@ -452,6 +430,10 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, requestID st
 			return
 		}
 		s.writeJSON(w, requestID, http.StatusOK, toConsumerJob(job))
+		return
+	}
+	if len(parts) == 4 && parts[3] == "retry" && r.Method == http.MethodPost {
+		s.handleJobRetry(w, r, requestID, session, parts[2])
 		return
 	}
 	s.writeError(w, requestID, http.StatusNotFound, "NOT_FOUND", "任务接口不存在")
