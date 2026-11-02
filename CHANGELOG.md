@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.61 - 2026-11-03
+
+- Classify completed formal environment startup failures as unknown and retry the same bound candidate once within evaluation limits
+
 ## 0.1.60 - 2026-11-03
 
 - Support terminal-only Linux tasks with single-use receipts, full-score verification and workspace-only bank evidence

@@ -115,6 +115,8 @@ HTTP 响应只给 `data.wss_url`。连接其 `/log`，客户端发送明文 JSON
 
 正式评测请求包含保存响应提供的 `sec_key`、`resubmit`、`content_modified`，以及 `first:1`、环境 ID、`tab_type`、含 `commitID` 的 extras。保存失败则不启动 build。写请求不做自动重试，评测轮询次数/时间有界。
 
+求解器有一个窄范围的环境恢复分支：普通单文件编辑器的正式评测已经完整结束、状态为 0、通过数量为 0，而且反馈只有精确的“启动环境失败，请稍后重试，如问题持续存在，请联系平台人员解决。”及平台编译失败占位测试行时，记录 `formal/unknown`，不把候选作为错误代码交给模型。保存与提交哈希均精确匹配当前候选、且原 `MaxEvaluations` 仍有额度时，等待后用同一候选重试正式评测一次；重试计入额度并在请求前保存检查点。再次启动失败则保留待核验。提交或轮询错误、真实编译诊断、不完整结果、哈希不符及终端任务都不走此分支，历史失败证据保持原样。
+
 `game_build.status=1` 是本样本中的启动状态，不能由通用 API 层按“非零即失败”处理；本样本的 `res.success=false` 与 `res.code=0` 同时出现，也不能据前者直接判定失败。
 
 轮询携带保存返回的执行密钥、build 返回的 port，以及 `time_out=false`、`resubmit`、`challenge_id`、`subject_id`、`homework_common_id`。观察到的顺序：

@@ -1027,57 +1027,85 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 		}
 		stage(req, "submitting", "正在保存代码并提交评测")
 		stage(req, "evaluating", "等待正式评测结果")
-		eval, ee := adapter.Submit(ctx, target, candidate.Files[0])
-		if snap.EditMode == "terminal" {
-			// The current workspace can include files created by earlier scripts,
-			// earlier jobs or the user. No clean-baseline proof exists here.
-			eval.ReuseUnproven = true
-		}
-		result.Evaluation = &eval
-		if ee == nil && !eval.Completed {
-			ee = errors.New("evaluation is not terminal; candidate remains unverified")
-		}
-		if ee == nil && eval.Passed && (eval.TestCount <= 0 || eval.PassedCount != eval.TestCount) {
-			ee = errors.New("evaluation pass evidence does not account for every test")
-		}
-		passed := ee == nil && eval.Completed && eval.Passed
-		if ee == nil && ((eval.SavedFilesHash != "" && eval.SavedFilesHash != result.CodeHash) || (eval.SubmittedFilesHash != "" && eval.SubmittedFilesHash != result.CodeHash)) {
-			ee = errors.New("evaluation editor content does not match candidate")
-			passed = false
-		}
-		kind := "formal"
-		if eval.ReuseUnproven {
-			kind = "formal_workspace"
-		}
-		vr := "failed"
-		if passed {
-			vr = "passed"
-		}
-		if ee != nil {
-			vr = "unknown"
-			result.Diagnostics = append(result.Diagnostics, ee.Error())
-		}
-		savedHash, submittedHash := eval.SavedFilesHash, eval.SubmittedFilesHash
-		// Legacy adapters return no explicit hash. Their contract is to save the
-		// exact supplied file. Production returns hashes from read-back checks.
-		if savedHash == "" {
-			savedHash = result.CodeHash
-		}
-		if submittedHash == "" {
-			submittedHash = result.CodeHash
-		}
-		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		ve := s.store.RecordValidation(cleanup, questionbank.Validation{CandidateID: bankID, Kind: kind, Result: vr, FilesHash: result.CodeHash, SavedFilesHash: savedHash, SubmittedFilesHash: submittedHash, RevisionHash: snap.RevisionHash, ContractHash: snap.ContractHash, Feedback: publicText(eval.Feedback), RunID: result.RunID, Terminal: eval.Completed && ee == nil, Complete: eval.Completed, TestCount: eval.TestCount, PassedCount: eval.PassedCount})
-		cancel()
-		if ve != nil {
-			result.Status = "verification_persistence_failed"
-			if ee != nil {
-				result.Status = "uncertain"
+		var eval Evaluation
+		var ee error
+		var passed bool
+		for runtimeAttempt := 0; ; runtimeAttempt++ {
+			eval, ee = adapter.Submit(ctx, target, candidate.Files[0])
+			if snap.EditMode == "terminal" {
+				// The current workspace can include files created by earlier scripts,
+				// earlier jobs or the user. No clean-baseline proof exists here.
+				eval.ReuseUnproven = true
 			}
-			result.Diagnostics = append(result.Diagnostics, "formal evidence persistence failed")
-			state.Result = *result
-			_ = s.persist(ctx, result.RunID, state, result.Status, created)
-			return result, ve
+			result.Evaluation = &eval
+			if ee == nil && !eval.Completed {
+				ee = errors.New("evaluation is not terminal; candidate remains unverified")
+			}
+			if ee == nil && eval.Passed && (eval.TestCount <= 0 || eval.PassedCount != eval.TestCount) {
+				ee = errors.New("evaluation pass evidence does not account for every test")
+			}
+			if ee == nil && ((eval.SavedFilesHash != "" && eval.SavedFilesHash != result.CodeHash) || (eval.SubmittedFilesHash != "" && eval.SubmittedFilesHash != result.CodeHash)) {
+				ee = errors.New("evaluation editor content does not match candidate")
+			}
+			startupFailure := snap.EditMode == "single_file" && ee == nil && formalRuntimeStartupFailure(eval)
+			if startupFailure {
+				ee = errors.New("upstream runtime environment failed to start before formal evaluation")
+			}
+			passed = ee == nil && eval.Completed && eval.Passed
+			kind := "formal"
+			if eval.ReuseUnproven {
+				kind = "formal_workspace"
+			}
+			vr := "failed"
+			if passed {
+				vr = "passed"
+			}
+			if ee != nil {
+				vr = "unknown"
+				result.Diagnostics = append(result.Diagnostics, ee.Error())
+			}
+			savedHash, submittedHash := eval.SavedFilesHash, eval.SubmittedFilesHash
+			// Legacy adapters return no explicit hash. Their contract is to save the
+			// exact supplied file. Production returns hashes from read-back checks.
+			if savedHash == "" {
+				savedHash = result.CodeHash
+			}
+			if submittedHash == "" {
+				submittedHash = result.CodeHash
+			}
+			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			ve := s.store.RecordValidation(cleanup, questionbank.Validation{CandidateID: bankID, Kind: kind, Result: vr, FilesHash: result.CodeHash, SavedFilesHash: savedHash, SubmittedFilesHash: submittedHash, RevisionHash: snap.RevisionHash, ContractHash: snap.ContractHash, Feedback: publicText(eval.Feedback), RunID: result.RunID, Terminal: eval.Completed && ee == nil, Complete: eval.Completed, TestCount: eval.TestCount, PassedCount: eval.PassedCount})
+			cancel()
+			if ve != nil {
+				result.Status = "verification_persistence_failed"
+				if ee != nil {
+					result.Status = "uncertain"
+				}
+				result.Diagnostics = append(result.Diagnostics, "formal evidence persistence failed")
+				state.Result = *result
+				_ = s.persist(ctx, result.RunID, state, result.Status, created)
+				return result, ve
+			}
+			// Only the exact completed pre-execution failure can be replayed, once,
+			// with source-bound read-back evidence and an unused evaluation slot.
+			// A polling error or any other unknown build never reaches this branch.
+			if startupFailure && runtimeAttempt == 0 && attempt+1 < req.MaxEvaluations && eval.SavedFilesHash == result.CodeHash && eval.SubmittedFilesHash == result.CodeHash && ctx.Err() == nil {
+				stage(req, "environment_retry", "上游正式评测环境未启动，稍后使用相同代码重试一次")
+				result.Diagnostics = append(result.Diagnostics, "上游正式评测环境未启动，未将本次响应作为代码失败证据")
+				if waitErr := waitRuntimeRetry(ctx); waitErr == nil {
+					attempt++
+					state.Attempts = attempt + 1
+					state.Result = *result
+					if err := s.persist(ctx, result.RunID, state, "submitting", created); err != nil {
+						result.Status = "checkpoint_persistence_failed"
+						return result, err
+					}
+					continue
+				} else {
+					ee = waitErr
+				}
+			}
+			break
 		}
 		if passed {
 			if eval.ReuseUnproven {
@@ -1128,6 +1156,28 @@ func languageOf(s problem.Snapshot) string {
 		return s.Files[0].Language
 	}
 	return ""
+}
+
+// A completed status=0 can still mean the platform never started the runtime.
+// Accept only its exact environment marker and optional adapter-generated
+// public-test placeholders; any actual compiler diagnostic remains a code failure.
+func formalRuntimeStartupFailure(eval Evaluation) bool {
+	if !eval.Completed || eval.Passed || eval.Status != "0" || eval.PassedCount != 0 || eval.ReuseUnproven {
+		return false
+	}
+	lines := strings.Split(strings.TrimSuffix(strings.ReplaceAll(eval.Feedback, "\r\n", "\n"), "\n"), "\n")
+	if lines[0] != runtimeStartupFailureMessage {
+		return false
+	}
+	for _, line := range lines[1:] {
+		var input, expected, actual string
+		const format = "Public test: input=%q expected=%q actual=%q"
+		n, err := fmt.Sscanf(line, format, &input, &expected, &actual)
+		if err != nil || n != 3 || line != fmt.Sprintf(format, input, expected, actual) || actual != "编译失败，请在测试结果中查看具体的错误信息" {
+			return false
+		}
+	}
+	return true
 }
 
 // retryableGenerationError only covers failures before any upstream save or
