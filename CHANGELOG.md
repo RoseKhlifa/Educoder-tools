@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.58 - 2026-11-02
+
+- Unify question bank inventory counts across objective programming and graphic questions
+
 ## 0.1.57 - 2026-11-02
 
 - Show verified graphic questions and imported graphic references in the question bank overview

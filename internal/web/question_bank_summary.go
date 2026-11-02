@@ -15,23 +15,23 @@ import (
 type questionBankSummaryCache struct {
 	mu      sync.Mutex
 	bank    *questionbank.Store
-	value   questionbank.Summary
+	value   questionbank.InventorySummary
 	expires time.Time
 }
 
-func (c *questionBankSummaryCache) load(ctx context.Context, bank *questionbank.Store) (questionbank.Summary, error) {
+func (c *questionBankSummaryCache) load(ctx context.Context, bank *questionbank.Store) (questionbank.InventorySummary, error) {
 	return c.loadAtLeast(ctx, bank, 0)
 }
 
-func (c *questionBankSummaryCache) loadAtLeast(ctx context.Context, bank *questionbank.Store, minimum int64) (questionbank.Summary, error) {
+func (c *questionBankSummaryCache) loadAtLeast(ctx context.Context, bank *questionbank.Store, minimum int64) (questionbank.InventorySummary, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.bank == bank && time.Now().Before(c.expires) && c.value.TotalVerifiedQuestions >= minimum {
+	if c.bank == bank && time.Now().Before(c.expires) && c.value.TotalQuestions >= minimum {
 		return c.value, nil
 	}
-	value, err := bank.Summary(ctx)
+	value, err := bank.InventorySummary(ctx)
 	if err != nil {
-		return questionbank.Summary{}, err
+		return questionbank.InventorySummary{}, err
 	}
 	c.bank, c.value, c.expires = bank, value, time.Now().Add(time.Minute)
 	return value, nil
@@ -69,7 +69,7 @@ func (s *Server) handleQuestionBankSummary(w http.ResponseWriter, r *http.Reques
 	}
 	// A collection can grow the bank while the shared minute cache is warm.
 	// Refresh in that case instead of returning impossible personal/global data.
-	if contributed > value.TotalVerifiedQuestions {
+	if contributed > value.TotalQuestions {
 		value, err = s.questionBankSummary.loadAtLeast(ctx, s.jobs.bank, contributed)
 		if err != nil {
 			s.writeError(w, requestID, http.StatusServiceUnavailable, "QUESTION_BANK_UNAVAILABLE", "题库概况暂不可用，请稍后重试")
@@ -77,7 +77,7 @@ func (s *Server) handleQuestionBankSummary(w http.ResponseWriter, r *http.Reques
 		}
 	}
 	s.writeJSON(w, requestID, http.StatusOK, struct {
-		questionbank.Summary
+		questionbank.InventorySummary
 		ContributedQuestions int64 `json:"contributed_questions"`
 	}{value, contributed})
 }

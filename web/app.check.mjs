@@ -64,7 +64,7 @@ async function app(overrides={}) {
     if(url==='/api/courses')return ok(courses);
     if(url==='/api/service/today-summary')return ok({date:serviceDate(),timezone:'Asia/Shanghai',completed_students:7,completed_questions:103,total_served_students:28,total_completed_questions:1042});
     if(url.startsWith('/api/tickets')||url.startsWith('/api/admin/tickets'))return ok({items:[],next_cursor:'',limit:30});
-    if(url==='/api/question-bank/summary')return ok({verified_objective_questions:272,verified_programming_problems:8, verified_graphic_problems: 0, external_graphic_candidates: 0,total_verified_questions:280,contributed_questions:12});
+    if(url==='/api/question-bank/summary')return ok({objective_questions:272,programming_problems:8, graphic_problems: 0,total_questions:280,contributed_questions:12});
     if(url==='/api/jobs')return options.method==='POST'?ok(job({request:JSON.parse(options.body)})):ok({jobs:[]});
     if(url.endsWith('/homeworks'))return ok([{id:1,name:'测试作业',challengeCount:2,finishedChallengeCount:1,requiredProgressKnown:true,requiredChallengeCount:2,finishedRequiredChallengeCount:1}]);
     if(url.endsWith('/exercises'))return ok({items:[]});
@@ -177,7 +177,7 @@ await test('consumer course service and administrator boundary',async t=>{
     assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
   });
 
-  await t.test('the sidebar shows only verified bank totals and keeps the guidelines reachable', async () => {
+  await t.test('the sidebar shows unified bank totals and keeps the guidelines reachable', async () => {
     const page=await app();assert.match(page.html(), /题库概况/);assert.match(page.html(), /<strong>280<\/strong>/);
     assert.match(page.html(), /<dt>客观题<\/dt><dd>272<\/dd>/);assert.match(page.html(), /<dt>编程题<\/dt><dd>8<\/dd>/);
     assert.match(page.html(), /您已为题库贡献 <strong>12<\/strong> 道题，感谢您的付出。/);assert.doesNotMatch(page.html(), /bank-count-note|bank-reuse-note/);assert.match(page.html(), /不承诺成绩或完成时限/);
@@ -193,43 +193,39 @@ await test('consumer course service and administrator boundary',async t=>{
     assert.equal(page.requests.some(item=>item.options.method==='POST'),false);
   });
   await t.test('unavailable or invalid bank counts never become a fabricated zero', async () => {
-    for(const response of [()=>failure(503,'QUESTION_BANK_UNAVAILABLE','private-bank-details'),()=>ok({verified_objective_questions:-1,verified_programming_problems:0, verified_graphic_problems: 0, external_graphic_candidates: 0,total_verified_questions:0})]) {
+    for(const response of [()=>failure(503,'QUESTION_BANK_UNAVAILABLE','private-bank-details'),()=>ok({objective_questions:-1,programming_problems:0, graphic_problems: 0,total_questions:0})]) {
       const page=await app({'/api/question-bank/summary':response});
       const bank=page.html().split('aria-label="题库概况"')[1].split('</section>')[0];
       assert.match(bank,/题库概况暂未同步/);assert.doesNotMatch(bank,/bank-total|private-bank-details/);
     }
-    const empty=await app({'/api/question-bank/summary':()=>ok({verified_objective_questions:0,verified_programming_problems:0, verified_graphic_problems: 0, external_graphic_candidates: 0,total_verified_questions:0})});
+    const empty=await app({'/api/question-bank/summary':()=>ok({objective_questions:0,programming_problems:0, graphic_problems: 0,total_questions:0})});
     assert.match(empty.html(), /bank-total"><strong>0<\/strong>/);assert.doesNotMatch(empty.html(), /题库概况暂未同步/);
   });
-  await t.test('graphic questions are a separate verified category while imported references never inflate the total', async () => {
-    let summary={verified_objective_questions:833,verified_programming_problems:54,verified_graphic_problems:0,external_graphic_candidates:70,total_verified_questions:887};
+  await t.test('all stored question categories share one total without verification or reference labels', async () => {
+    let summary={objective_questions:833,programming_problems:255,graphic_problems:70,total_questions:1158};
     const page=await app({'/api/question-bank/summary':()=>ok(summary)});
     let bank=page.html().split('aria-label="题库概况"')[1].split('</section>')[0];
-    assert.match(bank, /bank-total"><strong>887<\/strong>/);
-    assert.match(bank, /<dt>绘图题<\/dt><dd>0<\/dd>/);
-    assert.match(bank, /bank-graphic-reference/);
-    assert.match(bank, /<strong>70<\/strong> 份绘图参考/);
-    assert.doesNotMatch(bank, /957/);
-    summary={...summary,verified_graphic_problems:2,total_verified_questions:889};
+    assert.match(bank, /bank-total"><strong>1,158<\/strong><span>道题目<\/span>/);
+    assert.match(bank, /<dt>绘图题<\/dt><dd>70<\/dd>/);
+    assert.doesNotMatch(bank, /已验证|未验证|候选|绘图参考|bank-graphic-reference/);
+    summary={...summary,graphic_problems:72,total_questions:1160};
     page.get('[data-action="bank-refresh"]').dispatch('click');await settle();
     bank=page.html().split('aria-label="题库概况"')[1].split('</section>')[0];
-    assert.match(bank, /bank-total"><strong>889<\/strong>/);
-    assert.match(bank, /<dt>编程题<\/dt><dd>54<\/dd>/);
-    assert.match(bank, /<dt>绘图题<\/dt><dd>2<\/dd>/);
-    assert.match(page.html().split('class="bank-mobile"')[1], /<dt>绘图题<\/dt><dd>2<\/dd>/);
-    summary={...summary,external_graphic_candidates:0};
-    page.get('[data-action="bank-refresh"]').dispatch('click');await settle();
-    assert.doesNotMatch(page.html(), /bank-graphic-reference/);
+    assert.match(bank, /bank-total"><strong>1,160<\/strong>/);
+    assert.match(bank, /<dt>编程题<\/dt><dd>255<\/dd>/);
+    assert.match(bank, /<dt>绘图题<\/dt><dd>72<\/dd>/);
+    assert.match(page.html().split('class="bank-mobile"')[1], /<dt>绘图题<\/dt><dd>72<\/dd>/);
+    assert.doesNotMatch(bank, /已验证|未验证|候选|绘图参考|bank-graphic-reference/);
   });
-  await t.test('missing contribution evidence stays unknown while verified totals remain usable', async () => {
-    const page=await app({'/api/question-bank/summary':()=>ok({verified_objective_questions:272,verified_programming_problems:8, verified_graphic_problems: 0, external_graphic_candidates: 0,total_verified_questions:280})});
+  await t.test('missing contribution evidence stays unknown while inventory totals remain usable', async () => {
+    const page=await app({'/api/question-bank/summary':()=>ok({objective_questions:272,programming_problems:8, graphic_problems: 0,total_questions:280})});
     const bank=page.html().split('aria-label="题库概况"')[1].split('</section>')[0];
     assert.match(bank,/bank-total"><strong>280<\/strong>/);assert.match(bank,/正在核对您的题库贡献，感谢您的支持。/);
     assert.doesNotMatch(bank,/您已为题库贡献.*(?:<strong>)?0/);
   });
   await t.test('a bank response after logout never restores private account UI', async () => {
     const late=deferred();const page=await app({'/api/question-bank/summary':()=>late.promise});
-    page.get('[data-action="logout"]').dispatch('click');late.resolve(ok({verified_objective_questions:900,verified_programming_problems:1, verified_graphic_problems: 0, external_graphic_candidates: 0,total_verified_questions:901,contributed_questions:77}));await settle();
+    page.get('[data-action="logout"]').dispatch('click');late.resolve(ok({objective_questions:900,programming_problems:1, graphic_problems: 0,total_questions:901,contributed_questions:77}));await settle();
     assert.match(page.html(), /id="login-form"/);assert.doesNotMatch(page.html(), /题库概况|901|77|课堂甲/);
     assert.equal(page.timers.size,0);
   });

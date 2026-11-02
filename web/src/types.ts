@@ -67,11 +67,10 @@ export interface TicketCreateRequest { subject: string; category: TicketCategory
 export interface TicketReplyRequest { body: string; idempotency_key: string }
 
 export interface QuestionBankSummary {
-  verified_objective_questions: number;
-  verified_programming_problems: number;
-  verified_graphic_problems: number;
-  external_graphic_candidates: number;
-  total_verified_questions: number;
+  objective_questions: number;
+  programming_problems: number;
+  graphic_problems: number;
+  total_questions: number;
   contributed_questions?: number;
 }
 

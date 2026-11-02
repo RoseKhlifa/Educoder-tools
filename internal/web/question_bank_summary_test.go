@@ -34,6 +34,10 @@ func TestQuestionBankSummaryIsSafeAuthenticatedAggregation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	q.Question = "PRIVATE_UNVERIFIED_STEM_SENTINEL"
+	if _, err := f.bank.UpsertObjectiveQuestion(ctx, q); err != nil {
+		t.Fatal(err)
+	}
 	// Counts may include externally sourced graphic candidates, but this public
 	// aggregate must never expose their titles, files, answers or provenance.
 	source := t.TempDir()
@@ -57,11 +61,12 @@ func TestQuestionBankSummaryIsSafeAuthenticatedAggregation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	candidate, err := f.bank.AddCandidate(ctx, ref, questionbank.CandidateInput{Files: []problem.SolutionFile{{Path: "submit/diagram.mdj", Content: `{"_type":"Project","name":"PRIVATE_GRAPHIC_ANSWER_SENTINEL"}`}}, Source: "PRIVATE_SOURCE_SENTINEL"})
+	_, err = f.bank.AddCandidate(ctx, ref, questionbank.CandidateInput{Files: []problem.SolutionFile{{Path: "submit/diagram.mdj", Content: `{"_type":"Project","name":"PRIVATE_GRAPHIC_ANSWER_SENTINEL"}`}}, Source: "PRIVATE_SOURCE_SENTINEL"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := f.bank.RecordValidation(ctx, questionbank.Validation{CandidateID: candidate.ID, Kind: "formal", Result: "passed", FilesHash: candidate.FilesHash, SavedFilesHash: candidate.FilesHash, SubmittedFilesHash: candidate.FilesHash, RevisionHash: candidate.RevisionHash, ContractHash: candidate.ContractHash, Terminal: true, Complete: true, TestCount: 1, PassedCount: 1}); err != nil {
+	code := problem.Snapshot{Kind: "programming", Title: "PRIVATE_CODE_TITLE_SENTINEL", EditMode: "code", Files: []problem.File{{Path: "src/main.cpp", Language: "cpp"}}}
+	if _, err := f.bank.UpsertSnapshot(ctx, code); err != nil {
 		t.Fatal(err)
 	}
 	url := f.server.URL + "/api/question-bank/summary"
@@ -84,7 +89,7 @@ func TestQuestionBankSummaryIsSafeAuthenticatedAggregation(t *testing.T) {
 	if response.StatusCode != http.StatusOK || response.Header.Get("Cache-Control") != "no-store" || body.Error != nil {
 		t.Fatalf("authenticated ordinary user = %d %+v", response.StatusCode, body)
 	}
-	if len(body.Data) != 6 || body.Data["contributed_questions"] != float64(0) || body.Data["verified_objective_questions"] != float64(1) || body.Data["verified_programming_problems"] != float64(0) || body.Data["verified_graphic_problems"] != float64(1) || body.Data["external_graphic_candidates"] != float64(1) || body.Data["total_verified_questions"] != float64(2) {
+	if len(body.Data) != 5 || body.Data["contributed_questions"] != float64(0) || body.Data["objective_questions"] != float64(2) || body.Data["programming_problems"] != float64(1) || body.Data["graphic_problems"] != float64(2) || body.Data["total_questions"] != float64(5) {
 		t.Fatalf("summary leaked data or miscounted evidence: %+v", body.Data)
 	}
 	// Cache access still validates the current platform principal each time.
@@ -162,7 +167,7 @@ func TestQuestionBankSummaryKeepsContributionAccountBoundAcrossGlobalCacheHits(t
 	}{{f.aliceClient, "1"}, {f.bobClient, "0"}, {f.adminClient, "0"}, {f.aliceClient, "1"}} {
 		// Query strings are never accepted as a choice of contribution owner.
 		res = doJSON(t, check.client, http.MethodGet, url+"?owner="+f.alice.Owner(), "")
-		if res.StatusCode != http.StatusOK || !strings.Contains(res.Body, `"contributed_questions":`+check.count) || !strings.Contains(res.Body, `"total_verified_questions":1`) || strings.Contains(res.Body, f.alice.ID) {
+		if res.StatusCode != http.StatusOK || !strings.Contains(res.Body, `"contributed_questions":`+check.count) || !strings.Contains(res.Body, `"total_questions":1`) || strings.Contains(res.Body, f.alice.ID) {
 			t.Fatalf("account-bound summary %d %s", res.StatusCode, res.Body)
 		}
 	}
@@ -172,7 +177,7 @@ func TestQuestionBankSummaryCacheAvoidsRepeatedQueriesAndExpires(t *testing.T) {
 	f := newPlatformHTTPFixture(t, nil)
 	url := f.server.URL + "/api/question-bank/summary"
 	res := doJSON(t, f.aliceClient, http.MethodGet, url, "")
-	if res.StatusCode != http.StatusOK || !strings.Contains(res.Body, `"total_verified_questions":0`) {
+	if res.StatusCode != http.StatusOK || !strings.Contains(res.Body, `"total_questions":0`) {
 		t.Fatalf("genuine empty bank summary = %d %s", res.StatusCode, res.Body)
 	}
 	if err := f.bank.Close(); err != nil {
@@ -180,7 +185,7 @@ func TestQuestionBankSummaryCacheAvoidsRepeatedQueriesAndExpires(t *testing.T) {
 	}
 	// Only the global aggregate is shared; personal values are queried fresh.
 	// A closed DB proves the cached global value does not rescan the bank.
-	if value, err := f.app.questionBankSummary.load(context.Background(), f.bank); err != nil || value.TotalVerifiedQuestions != 0 {
+	if value, err := f.app.questionBankSummary.load(context.Background(), f.bank); err != nil || value.TotalQuestions != 0 {
 		t.Fatalf("global cache did not coalesce repeated queries: %+v %v", value, err)
 	}
 	res = doJSON(t, f.bobClient, http.MethodGet, url, "")

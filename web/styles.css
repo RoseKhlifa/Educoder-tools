@@ -1679,8 +1679,6 @@ td { border-color:var(--line); }
 .bank-counts > div { min-width:0; border:1px solid var(--line); border-radius:6px; padding:7px 6px; background:var(--surface-2); }
 .bank-counts dt { font-size:10px; color:var(--muted); }
 .bank-counts dd { font-size:15px; font-weight:600; font-variant-numeric:tabular-nums; margin:3px 0 0; overflow-wrap:anywhere; }
-.bank-graphic-reference { color:var(--muted); font-size:10px; margin:9px 0 0; line-height:1.8; }
-.bank-graphic-reference strong { color:var(--coral-deep); font-weight:600; font-variant-numeric:tabular-nums; }
 .bank-count-note { color:var(--muted-2); font-size:10px; margin:8px 0 0; line-height:1.7; }
 .bank-empty { font-size:12px; color:var(--muted); margin:12px 0; }
 .bank-reuse-note { color:var(--muted); font-size:11px; line-height:1.85; margin:11px 0 0; }

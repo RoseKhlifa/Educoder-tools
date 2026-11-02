@@ -119,7 +119,7 @@ await test('browser API uses the Go workbench contract', async t => {
   });
   await t.test('question-bank summary uses authenticated read-only counts and retains genuine zeroes', async () => {
     let request;
-    const summary = { verified_objective_questions: 0, verified_programming_problems: 19, verified_graphic_problems: 3, external_graphic_candidates: 70, total_verified_questions: 22 };
+    const summary = { objective_questions: 0, programming_problems: 19, graphic_problems: 3, total_questions: 22 };
     globalThis.fetch = async (url, options) => {
       request = { url, options };
       return envelope({ ...summary, questions: ['not part of this public contract'], owner: 'private-owner', answers: ['private-answer'] });
@@ -129,33 +129,30 @@ await test('browser API uses the Go workbench contract', async t => {
     assert.equal(request.options.credentials, 'include');
     assert.equal(request.options.body, undefined);
     assert.ok(request.options.method === undefined || request.options.method === 'GET');
-    globalThis.fetch = async () => envelope({ verified_objective_questions: 0, verified_programming_problems: 0, verified_graphic_problems: 0, external_graphic_candidates: 0, total_verified_questions: 0 });
-    assert.deepEqual(await new BrowserApi().questionBankSummary(), { verified_objective_questions: 0, verified_programming_problems: 0, verified_graphic_problems: 0, external_graphic_candidates: 0, total_verified_questions: 0 });
+    globalThis.fetch = async () => envelope({ objective_questions: 0, programming_problems: 0, graphic_problems: 0, total_questions: 0 });
+    assert.deepEqual(await new BrowserApi().questionBankSummary(), { objective_questions: 0, programming_problems: 0, graphic_problems: 0, total_questions: 0 });
   });
   await t.test('question-bank summary rejects missing, coerced, negative, fractional, unsafe or inconsistent counts', async () => {
-    const valid = { verified_objective_questions: 2, verified_programming_problems: 3, verified_graphic_problems: 0, external_graphic_candidates: 0, total_verified_questions: 5 };
-    const invalid = [null, [], {}, { ...valid, verified_objective_questions: undefined },
-      { ...valid, verified_objective_questions: '2' }, { ...valid, verified_programming_problems: null , verified_graphic_problems: 0, external_graphic_candidates: 0},
-      { ...valid, verified_objective_questions: -1 }, { ...valid, verified_objective_questions: 2.5 },
-      { ...valid, total_verified_questions: Number.MAX_SAFE_INTEGER + 1 },
-      { ...valid, total_verified_questions: 0 },
-      { ...valid, verified_graphic_problems: undefined }, { ...valid, external_graphic_candidates: undefined },
-      { ...valid, verified_graphic_problems: '0' }, { ...valid, verified_graphic_problems: -1 },
-      { ...valid, verified_graphic_problems: 0.5 }, { ...valid, verified_graphic_problems: null },
-      { ...valid, external_graphic_candidates: '70' }, { ...valid, external_graphic_candidates: -1 },
-      { ...valid, external_graphic_candidates: 0.5 }, { ...valid, external_graphic_candidates: null },
-      { ...valid, external_graphic_candidates: Number.MAX_SAFE_INTEGER + 1 },
-      { ...valid, verified_graphic_problems: 2 },
-      { ...valid, external_graphic_candidates: 70, total_verified_questions: 75 },
-      { verified_objective_questions: Number.MAX_SAFE_INTEGER, verified_programming_problems: 1, verified_graphic_problems: 0, external_graphic_candidates: 0, total_verified_questions: Number.MAX_SAFE_INTEGER },
+    const valid = { objective_questions: 2, programming_problems: 3, graphic_problems: 0, total_questions: 5 };
+    const invalid = [null, [], {}, { ...valid, objective_questions: undefined },
+      { ...valid, objective_questions: '2' }, { ...valid, programming_problems: null , graphic_problems: 0},
+      { ...valid, objective_questions: -1 }, { ...valid, objective_questions: 2.5 },
+      { ...valid, total_questions: Number.MAX_SAFE_INTEGER + 1 },
+      { ...valid, total_questions: 0 },
+      { ...valid, graphic_problems: undefined },
+      { ...valid, graphic_problems: '0' }, { ...valid, graphic_problems: -1 },
+      { ...valid, graphic_problems: 0.5 }, { ...valid, graphic_problems: null },
+      { ...valid, graphic_problems: 2 },
+      { ...valid, total_questions: 75 },
+      { objective_questions: Number.MAX_SAFE_INTEGER, programming_problems: 1, graphic_problems: 0, total_questions: Number.MAX_SAFE_INTEGER },
     ];
     for (const value of invalid) {
       globalThis.fetch = async () => envelope(value);
       await assert.rejects(new BrowserApi().questionBankSummary(), error => error instanceof ApiRequestError && error.code === 'INVALID_RESPONSE' && !error.isSessionExpired, JSON.stringify(value));
     }
   });
-  await t.test('personal bank contributions retain evidence counts and reject invalid or inflated numbers', async () => {
-    const base = { verified_objective_questions: 2, verified_programming_problems: 3, verified_graphic_problems: 0, external_graphic_candidates: 0, total_verified_questions: 5 };
+  await t.test('personal bank contributions retain counts and reject invalid or inflated numbers', async () => {
+    const base = { objective_questions: 2, programming_problems: 3, graphic_problems: 0, total_questions: 5 };
     for (const contributed_questions of [0, 4, 5]) {
       globalThis.fetch = async () => envelope({ ...base, contributed_questions });
       assert.deepEqual(await new BrowserApi().questionBankSummary(), { ...base, contributed_questions });
