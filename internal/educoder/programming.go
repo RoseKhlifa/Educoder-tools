@@ -21,6 +21,7 @@ type TaskKind string
 
 const (
 	TaskKindProgramming TaskKind = "programming"
+	TaskKindGraphic     TaskKind = "graphic"
 	TaskKindChoice      TaskKind = "choice"
 	// TaskKindObjective is an explicit alias for callers that use the
 	// objective-question terminology. Both values serialize as "choice".
@@ -31,19 +32,34 @@ const (
 var errResponseNotModified = errors.New("upstream response not modified")
 
 type ProgrammingEnvironment struct {
-	EnvironmentID int64  `json:"shixun_environment_id"`
-	TabType       int    `json:"tab_type"`
-	Name          string `json:"name"`
+	EnvironmentID int64   `json:"shixun_environment_id"`
+	TabType       int     `json:"tab_type"`
+	Name          string  `json:"name"`
+	VNCURL        VNCFlag `json:"vnc_url,omitempty"`
 }
 
 // Kind requires every observed discriminator. Missing zero-valued fields do
 // not silently turn an unobserved question type into a programming task.
 func (t *Task) Kind() TaskKind {
-	if t != nil && t.ST != nil && *t.ST == 0 && t.Challenge.ST != nil && *t.Challenge.ST == 0 && t.Challenge.WithCodeFile != nil && *t.Challenge.WithCodeFile {
-		return TaskKindProgramming
-	}
+	// Choice tasks can share their experiment's VNC environment. Never route
+	// them into the graphic writer based only on that environment.
 	if t != nil && t.ST != nil && *t.ST == 1 && t.Challenge.ST != nil && *t.Challenge.ST == 1 && len(t.Chooses) > 0 {
 		return TaskKindChoice
+	}
+	if t != nil && len(t.Chooses) == 0 && len(t.GraphicPaths()) == 1 {
+		if _, err := graphicEnvironment(t); err == nil {
+			return TaskKindGraphic
+		}
+	}
+	if t != nil && len(t.GraphicPaths()) > 0 {
+		for _, env := range t.Environments {
+			if env.TabType == 3 || bool(env.VNCURL) || bool(t.VNCURL) {
+				return TaskKindUnknown
+			}
+		}
+	}
+	if t != nil && t.ST != nil && *t.ST == 0 && t.Challenge.ST != nil && *t.Challenge.ST == 0 && t.Challenge.WithCodeFile != nil && *t.Challenge.WithCodeFile {
+		return TaskKindProgramming
 	}
 	return TaskKindUnknown
 }

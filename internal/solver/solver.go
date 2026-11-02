@@ -91,6 +91,9 @@ type Target struct {
 
 type LoadedProblem struct {
 	Snapshot problem.Snapshot
+	// ExternalIdentity locates source references without changing portable hashes.
+	ExternalIdentity questionbank.ExternalIdentity
+	graphicDocument  *educoder.GraphicDocument
 	// Key is a per-runtime lock key such as myshixun ID. It is not persisted.
 	Key    string
 	target Target
@@ -464,6 +467,9 @@ func (s *Service) Run(ctx context.Context, adapter Adapter, req Request) (*Resul
 	if err == nil {
 		ref, err = s.store.UpsertSnapshot(ctx, snap)
 	}
+	if err == nil {
+		err = s.bindExternalCandidates(ctx, ref, locked)
+	}
 	if err != nil {
 		result.Status = "load_failed"
 		if ctx.Err() != nil {
@@ -558,6 +564,20 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			candidates = append(candidates, c)
 		}
 	}
+	if len(candidates) == 0 {
+		for _, c := range allCandidates {
+			if c.Status != "candidate" && c.Status != "selftest_passed" {
+				continue
+			}
+			imported, lookupErr := s.isExternalCandidate(ctx, c.ID)
+			if lookupErr != nil {
+				return result, lookupErr
+			}
+			if imported {
+				candidates = append(candidates, c)
+			}
+		}
+	}
 	if len(candidates) == 0 && req.Mode != ModeGenerateOnly && len(snap.PublicTests) > 0 {
 		for _, c := range allCandidates {
 			if legacyNewlineOnlyRejection(c) {
@@ -617,6 +637,11 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				result.Diagnostics = append(result.Diagnostics, "旧候选仅因末尾换行比较被拒绝，正在重新执行全部公开自测和正式评测")
 			}
 		} else {
+			if snap.EditMode == "graphic" {
+				result.Status = "external_answer_unavailable"
+				result.Diagnostics = append(result.Diagnostics, "当前绘图题没有匹配且可验证的外部答案，请检查题目路径或评测反馈")
+				return result, nil
+			}
 			if s.provider == nil {
 				result.Status = "needs_provider"
 				result.Diagnostics = append(result.Diagnostics, "题库没有可用候选且未配置模型 provider")
@@ -1471,6 +1496,9 @@ func (s *Service) resumeRun(ctx context.Context, adapter Adapter, req Request, r
 	}
 	if ref != state.SnapshotRef {
 		return nil, errors.New("problem revision or execution contract changed; start a new run")
+	}
+	if err := s.bindExternalCandidates(runCtx, ref, locked); err != nil {
+		return nil, err
 	}
 	state.Limits = runLimits{req.MaxModelCalls, req.MaxEvaluations, req.BudgetMicroUSD}
 	state.Mode = req.Mode

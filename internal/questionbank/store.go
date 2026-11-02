@@ -111,6 +111,11 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate completion summary indexes: %w", err)
 	}
+	if _, err = tx.Exec(externalSchema); err != nil {
+		tx.Rollback()
+		db.Close()
+		return nil, fmt.Errorf("migrate external source inventory: %w", err)
+	}
 	if err = tx.Commit(); err != nil {
 		db.Close()
 		return nil, err

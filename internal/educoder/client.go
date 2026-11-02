@@ -128,9 +128,10 @@ type Homework struct {
 }
 
 type Task struct {
-	RequiredStatus string `json:"status"`
-	ST             *int   `json:"st"`
-	GameCount      int    `json:"game_count"`
+	RequiredStatus string  `json:"status"`
+	VNCURL         VNCFlag `json:"vnc_url,omitempty"`
+	ST             *int    `json:"st"`
+	GameCount      int     `json:"game_count"`
 	Game           struct {
 		ID         int64  `json:"id"`
 		Identifier string `json:"identifier"`
@@ -318,7 +319,7 @@ func (c *Client) requestWithStatuses(ctx context.Context, method, path string, q
 }
 
 func isProgrammingExecutionPath(path string) bool {
-	if strings.HasPrefix(path, "/api/myshixuns/") && strings.HasSuffix(path, "/update_file.json") {
+	if strings.HasPrefix(path, "/api/myshixuns/") && (strings.HasSuffix(path, "/update_file.json") || strings.HasSuffix(path, "/start.json")) {
 		return true
 	}
 	if strings.HasPrefix(path, "/api/tasks/") {

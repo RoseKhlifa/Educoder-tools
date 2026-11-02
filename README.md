@@ -85,7 +85,11 @@ go run ./cmd/web
 
 可选 `cmd/educoder` 和 `cmd/coursebatch` 继续用于维护、协议验证和显式批次调试；它们复用 Go 协议与求解模块，用户端不依赖这些命令。凭据仅通过进程环境、标准输入或本地忽略配置提供，不能写进源码或命令示例的真实值。
 
+`cmd/bankimport` 用于把固定 Git commit 的公开外部题库导入应用题库。它只写入来源清单和未验证候选绑定，不会把外部声明直接当作正确答案；完整流程、固定 commit 和 544/271/273 的实测报告见 [外部题库导入](docs/external-answer-bank.md)。绘图题的 SSH/SFTP 与 `game_build` 协议见 [绘图题协议](docs/graphic-protocol.md)。
+
 - [代码题协议](docs/programming-protocol.md)：题目、代码读取、自测、提交和进度协议。
+- [绘图题协议](docs/graphic-protocol.md)：StarUML `.mdj` 文件的运行环境、SSH/SFTP、提交和复核链路。
+- [外部题库导入](docs/external-answer-bank.md)：固定公开仓库版本的安全导入、匹配与验证边界。
 - [已通过答案采集](docs/verified-collection.md)：登录后的只读核验、证据门槛与采集限制。
 - [架构](docs/architecture.md)：模块边界与旧方案清理情况。
 - [平台与运维](docs/PLATFORM.md)：用户、管理员、用户准则、API 与数据隔离。

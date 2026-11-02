@@ -10,22 +10,25 @@ import (
 
 	"educoder-cli/internal/educoder"
 	"educoder-cli/internal/problem"
+	"educoder-cli/internal/questionbank"
 )
 
 // EducoderAdapter binds the generic solver to the already authenticated
 // protocol client. It deliberately exposes no session or execution key to the
 // solver's persisted state.
 type EducoderAdapter struct {
-	Client   *educoder.Client
-	mu       sync.Mutex
-	expected map[string]map[string]string
+	Client           *educoder.Client
+	mu               sync.Mutex
+	expected         map[string]map[string]string
+	graphic          *educoder.GraphicProtocol
+	graphicDocuments map[string]*educoder.GraphicDocument
 }
 
 func NewEducoderAdapter(client *educoder.Client) (*EducoderAdapter, error) {
 	if client == nil {
 		return nil, errors.New("educoder client is required")
 	}
-	return &EducoderAdapter{Client: client}, nil
+	return &EducoderAdapter{Client: client, graphic: educoder.NewGraphicProtocol(client, nil)}, nil
 }
 
 // RunClient is a convenience for callers that already own an authenticated
@@ -42,6 +45,9 @@ func (a *EducoderAdapter) Load(ctx context.Context, target Target) (LoadedProble
 	t, err := a.Client.LoadTask(ctx, target.Course, target.HomeworkID, target.Game)
 	if err != nil {
 		return LoadedProblem{}, err
+	}
+	if t.Kind() == educoder.TaskKindGraphic {
+		return a.loadGraphic(ctx, t, target)
 	}
 	pt, err := a.Client.ReadProgramming(ctx, t)
 	if err != nil {
@@ -70,7 +76,7 @@ func (a *EducoderAdapter) Load(ctx context.Context, target Target) (LoadedProble
 		}
 	}
 	snap := problem.Snapshot{SchemaVersion: problem.SchemaVersion, Kind: "programming", Title: t.Challenge.Subject, StatementMarkdown: pt.Markdown, Files: files, PublicTests: public, EditMode: "single_file", SnapshotCompleteness: "observed", EnvironmentContract: environment}
-	return LoadedProblem{Snapshot: snap, Key: strconv.FormatInt(t.MyShixun.ID, 10), target: target}, nil
+	return LoadedProblem{Snapshot: snap, ExternalIdentity: questionbank.ExternalIdentity{Experiment: t.Shixun.Name, Title: t.Challenge.Subject, Position: t.Challenge.Position}, Key: strconv.FormatInt(t.MyShixun.ID, 10), target: target}, nil
 }
 
 // Only the solver calls bindSnapshot, after acquiring the runtime lock. A
@@ -86,6 +92,12 @@ func (a *EducoderAdapter) bindSnapshot(loaded LoadedProblem) {
 		a.expected = map[string]map[string]string{}
 	}
 	a.expected[loaded.target.Game] = hashes
+	if loaded.graphicDocument != nil {
+		if a.graphicDocuments == nil {
+			a.graphicDocuments = map[string]*educoder.GraphicDocument{}
+		}
+		a.graphicDocuments[loaded.target.Game] = loaded.graphicDocument
+	}
 }
 
 func (a *EducoderAdapter) guardEditor(ctx context.Context, t *educoder.Task, file problem.SolutionFile) error {
@@ -164,6 +176,9 @@ func (a *EducoderAdapter) Submit(ctx context.Context, target Target, file proble
 	t, err := a.task(ctx, target)
 	if err != nil {
 		return Evaluation{}, err
+	}
+	if t.Kind() == educoder.TaskKindGraphic {
+		return a.submitGraphic(ctx, t, target, file)
 	}
 	if err := a.guardEditor(ctx, t, file); err != nil {
 		return Evaluation{}, err

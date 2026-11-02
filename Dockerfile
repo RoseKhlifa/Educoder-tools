@@ -9,9 +9,11 @@ FROM golang:1.25.5-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum VERSION version.go ./
 COPY cmd/web ./cmd/web
+COPY cmd/bankimport ./cmd/bankimport
 COPY internal ./internal
 ARG VCS_REF=unknown
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X educoder-cli.Commit=${VCS_REF}" -o /out/educoder-tools ./cmd/web
+RUN CGO_ENABLED=0 go build -trimpath -o /out/educoder-bankimport ./cmd/bankimport
 
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates \
@@ -20,6 +22,7 @@ RUN apk add --no-cache ca-certificates \
     && mkdir -p /data && chown 10001:10001 /data
 WORKDIR /app
 COPY --from=build /out/educoder-tools /usr/local/bin/educoder-tools
+COPY --from=build /out/educoder-bankimport /usr/local/bin/educoder-bankimport
 COPY web/index.html web/styles.css ./web/
 COPY web/assets/brand-logo.png ./web/assets/brand-logo.png
 COPY --from=frontend /src/web/dist ./web/dist

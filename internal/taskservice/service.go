@@ -216,7 +216,7 @@ func (s *Service) Run(ctx context.Context, client *educoder.Client, req Request,
 	}
 	defer unlock()
 	switch task.Kind() {
-	case educoder.TaskKindProgramming:
+	case educoder.TaskKindProgramming, educoder.TaskKindGraphic:
 		if req.Mode == solver.ModeSubmit {
 			// A direct single-level programming request bypasses RunHomework.
 			// Recheck the assignment history before invoking the solver, which is

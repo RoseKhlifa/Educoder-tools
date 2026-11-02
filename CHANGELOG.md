@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.56 - 2026-11-02
+
+- Import pinned public programming and StarUML answer references into the Go question bank and execute matched graphic tasks through the direct SSH/SFTP protocol
+
 ## 0.1.55 - 2026-11-02
 
 - Run verified collection to exhaustion without overall deadlines or aggregate caps using a dedicated worker lane
