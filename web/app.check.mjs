@@ -80,10 +80,10 @@ await test('consumer course service and administrator boundary',async t=>{
     const child=job({id:'recovery-child',status:'waiting'}),pending=deferred();
     const page=await app({'/api/jobs':()=>ok({jobs:[source]}),'/api/jobs/job-1/recover':()=>pending.promise});
     page.get('[data-nav="progress"]').dispatch('click');await settle();
-    page.get('[data-job-recover="job-1"]').dispatch('click');assert.match(page.html(),/先核对上次安排/);
+    page.get('[data-job-recover="job-1"]').dispatch('click');assert.match(page.html(),/先核对上次任务/);
     page.get('[data-action="modal-confirm"]').dispatch('click');
-    assert.match(page.html(),/正在安排复核/);pending.resolve(ok(child));await settle();
-    assert.match(page.html(),/已安排复核/);assert.match(page.html(),/data-job-detail="recovery-child"/);
+    assert.match(page.html(),/正在复核/);pending.resolve(ok(child));await settle();
+    assert.match(page.html(),/已提交复核/);assert.match(page.html(),/data-job-detail="recovery-child"/);
     assert.equal(page.requests.filter(item=>item.url==='/api/jobs/job-1/recover').length,1);
     assert.equal(page.requests.some(item=>item.url==='/api/jobs'&&item.options.method==='POST'),false);
   });
@@ -110,15 +110,15 @@ await test('consumer course service and administrator boundary',async t=>{
     page.get('[data-job-detail="retry-source"]').dispatch('click');
     assert.match(page.html().slice(page.html().indexOf('role="dialog"')),/data-job-retry="retry-source"/);
     page.get('[data-job-retry="retry-source"]').dispatch('click');
-    assert.match(page.html(),/继续原来的安排范围/);assert.match(page.html(),/已核验通过的关卡会自动跳过/);
+    assert.match(page.html(),/继续处理原来的范围/);assert.match(page.html(),/已核验通过的关卡会自动跳过/);
     assert.equal(page.requests.some(item=>item.options.method==='POST'),false);
     const confirm=page.get('[data-action="modal-confirm"]');confirm.dispatch('click');confirm.dispatch('click');await settle();
     const posted=page.requests.filter(item=>item.url==='/api/jobs/retry-source/retry');
     assert.equal(posted.length,1);assert.equal(posted[0].options.method,'POST');assert.deepEqual(JSON.parse(posted[0].options.body),{});
     assert.equal(page.requests.some(item=>item.url==='/api/jobs'&&item.options.method==='POST'),false);
-    assert.match(page.html(),/disabled>正在重新安排/);assert.doesNotMatch(page.html(),/已重新安排，/);
+    assert.match(page.html(),/disabled>正在重新执行/);assert.doesNotMatch(page.html(),/已重新开始处理，/);
     rows=[child,source];pending.resolve(ok(child));await settle();
-    assert.match(page.html(),/已重新安排，已完成的关卡会自动跳过/);
+    assert.match(page.html(),/已重新开始处理，已完成的关卡会自动跳过/);
     const current=page.html().split('data-service-history')[0];assert.match(current,/data-job-detail="retry-child"/);assert.doesNotMatch(current,/data-job-detail="retry-source"/);
     assert.match(page.html(),/data-job-detail="retry-source" data-job-history="true"/);
     assert.doesNotMatch(page.html(),/data-job-retry="retry-source"/);
@@ -157,7 +157,7 @@ await test('consumer course service and administrator boundary',async t=>{
     const page=await app({'/api/jobs':()=>ok({jobs:rows})});page.get('[data-nav="progress"]').dispatch('click');await settle();
     page.get('[data-job-detail="source-dialog"]').dispatch('click');assert.match(page.html().slice(page.html().indexOf('role="dialog"')),/data-job-retry="source-dialog"/);
     rows=[child,source];await page.tick();const dialog=page.html().slice(page.html().indexOf('role="dialog"'));
-    assert.match(dialog,/历史记录：以下为当次安排/);assert.doesNotMatch(dialog,/data-job-retry|data-job-cancel/);
+    assert.match(dialog,/历史记录：以下为本次任务/);assert.doesNotMatch(dialog,/data-job-retry|data-job-cancel/);
   });
   await t.test('retryable terminal jobs unlock selection while active and unresolved support remain blocked', async () => {
     for (const [status,can_retry,blocked] of [['support',true,false],['failed',true,false],['support',false,true],['support',undefined,true],['running',true,true]]) {
@@ -278,7 +278,7 @@ await test('consumer course service and administrator boundary',async t=>{
     });
     const row = page.html().match(/<tr class="course-row[\s\S]*?data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '';
     assert.match(row, /class="table-number homework-count"[^>]*>2<\/span>/);
-    assert.match(row, /可安排/); assert.doesNotMatch(row, /3 份/);
+    assert.match(row, /可处理/); assert.doesNotMatch(row, /3 份/);
     assert.match(page.html(), /<th>未完成作业<\/th>/); assert.doesNotMatch(page.html(), /<th>作业<\/th>/);
   });
   await t.test('empty successful required list is an authoritative completed course and disables scheduling', async () => {
@@ -294,7 +294,7 @@ await test('consumer course service and administrator boundary',async t=>{
   await t.test('unknown required evidence stays one unresolved assignment and is never shown as zero', async () => {
     const page = await app({ '/api/courses/COURSE_A/homeworks': () => ok([{ id: 1, name: '待核验', requiredProgressKnown: false }]) });
     const row = page.html().match(/<tr class="course-row[\s\S]*?data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '';
-    assert.match(row, /homework-count"[^>]*>1<\/span>/); assert.match(row, /可安排/);
+    assert.match(row, /homework-count"[^>]*>1<\/span>/); assert.match(row, /可处理/);
     assert.equal(page.get('[data-select-course="COURSE_A"]').disabled, false);
   });
   await t.test('fresh zero work overrides historical support without rewriting partial execution history', async () => {
@@ -467,7 +467,7 @@ await test('consumer course service and administrator boundary',async t=>{
   });
   await t.test('selected course starts one background course job after explicit scope confirmation',async()=>{
     const page=await app();const input=page.get('[data-select-course="COURSE_A"]');input.checked=true;input.dispatch('change');page.get('[data-action="start-selected"]').dispatch('click');assert.match(page.html(),/把这些课程交给我们/);assert.equal(page.requests.some(item=>item.options.method==='POST'),false);page.get('[data-action="modal-confirm"]').dispatch('click');await settle();
-    const posted=page.requests.filter(item=>item.url==='/api/jobs'&&item.options.method==='POST');assert.equal(posted.length,1);const payload=JSON.parse(posted[0].options.body);assert.equal(payload.scope,'course');assert.equal(payload.course,'COURSE_A');assert.equal(payload.mode,'submit');assert.ok(payload.idempotency_key);assert.equal(payload.game,undefined);assert.equal(payload.homework_id,undefined);assert.match(page.html(),/已收到你的安排/);
+    const posted=page.requests.filter(item=>item.url==='/api/jobs'&&item.options.method==='POST');assert.equal(posted.length,1);const payload=JSON.parse(posted[0].options.body);assert.equal(payload.scope,'course');assert.equal(payload.course,'COURSE_A');assert.equal(payload.mode,'submit');assert.ok(payload.idempotency_key);assert.equal(payload.game,undefined);assert.equal(payload.homework_id,undefined);assert.match(page.html(),/已收到你的请求/);
   });
   await t.test('all unfinished uses one all-scope job without a client-side per-homework execution loop',async()=>{
     const page=await app();page.get('[data-action="start-all"]').dispatch('click');assert.match(page.html(),/完成全部未完成作业/);assert.match(page.html(),/课堂甲/);assert.match(page.html(),/课堂乙/);page.get('[data-action="modal-confirm"]').dispatch('click');await settle();const post=page.requests.filter(item=>item.url==='/api/jobs'&&item.options.method==='POST');assert.equal(post.length,1);const body=JSON.parse(post[0].options.body);assert.equal(body.scope,'all');assert.equal(body.course,undefined);assert.equal(body.game,undefined);
@@ -578,12 +578,12 @@ await test('consumer course service and administrator boundary',async t=>{
   await t.test('course detail counts only required levels and never presents optional levels as unfinished', async () => {
     const page = await app({'/api/courses/COURSE_A/homeworks': () => ok([{id:1,name:'必做已全部完成',challengeCount:10,finishedChallengeCount:5,requiredProgressKnown:true,requiredChallengeCount:5,finishedRequiredChallengeCount:5}])});
     page.get('[data-course-detail="COURSE_A"]').dispatch('click'); await settle();
-    assert.match(page.html(),/已完成 · 5 \/ 5 必做关卡/); assert.doesNotMatch(page.html(),/5 \/ 10|待完成/); assert.match(page.html(),/只安排必做关卡/);
+    assert.match(page.html(),/已完成 · 5 \/ 5 必做关卡/); assert.doesNotMatch(page.html(),/5 \/ 10|待完成/); assert.match(page.html(),/只处理必做关卡/);
   });
   await t.test('missing required progress does not reuse upstream totals as a completion oracle', async () => {
     const page = await app({'/api/courses/COURSE_A/homeworks': () => ok([{id:1,name:'进度待核验',challengeCount:10,finishedChallengeCount:5,requiredProgressKnown:false}])});
     page.get('[data-course-detail="COURSE_A"]').dispatch('click'); await settle();
-    assert.match(page.html(),/安排时核验必做进度/); assert.doesNotMatch(page.html(),/5 \/ 10|待完成/);
+    assert.match(page.html(),/开始处理时核验必做进度/); assert.doesNotMatch(page.html(),/5 \/ 10|待完成/);
   });
   await t.test('administrator details retain nested assignment and level failure reasons while consumer details omit them', async () => {
     const details = { status: 'needs_service', reason_code: 'SERVICE_REQUIRED', homeworks: [{ title: '二叉树作业', status: 'needs_service', reason_code: 'attempts_exhausted', result: { diagnostics: ['operator-only diagnostic'], levels: [{ title: '第 4 关', status: 'failed', reason_code: 'model_output_truncated' }] } }] };
@@ -609,7 +609,9 @@ await test('consumer course service and administrator boundary',async t=>{
     assert.match(page.html(), /<strong>4<\/strong><span>\/ 4 份作业/);
     page.get('[data-nav="progress"]').dispatch('click'); await settle();
     const current = page.html().split('<details')[0];
-    assert.match(current, /data-job-detail="latest-course-done"/);
+    assert.doesNotMatch(current, /data-job-detail="latest-course-done"/);
+    assert.match(current, /当前没有需要处理的任务/);
+    assert.match(page.html(), /data-job-detail="latest-course-done" data-job-history="true"/);
     assert.doesNotMatch(current, /data-job-detail="old-course-support"|3 \/ 4 份作业|服务处理中/);
     assert.equal(page.get('[data-service-history]').open, false);
   });

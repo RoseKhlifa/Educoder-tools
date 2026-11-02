@@ -58,7 +58,7 @@ await test('current operations keep live service targets clear and retain previo
       assert.ok(admin.includes(label), `missing readable reason ${code}`);
       const consumer = renderServiceDetail(item) + renderServiceJob(item);
       assert.ok(!consumer.includes(code)); assert.ok(!consumer.includes(label)); assert.doesNotMatch(consumer, /PRIVATE_TRACE|PRIVATE_DIAG/);
-      assert.match(consumer, /考试事项由服务人员跟进/);
+      assert.match(consumer, /考试事项需要服务人员跟进/);
     }
   });
   await t.test('exam targets remain independent and use names, question progress, submission and grade states', () => {
@@ -79,7 +79,7 @@ await test('current operations keep live service targets clear and retain previo
     const older = attempt('old-error', 1, { updated_at: '2026-02-01T00:00:00Z' });
     const latest = attempt('new-complete', 2, { status: 'succeeded' });
     const input = [older, latest], parts = partitionAdminJobs(input);
-    assert.deepEqual(ids(parts.current), ['new-complete']); assert.deepEqual(ids(parts.history), ['old-error']);
+    assert.deepEqual(ids(parts.current), []); assert.deepEqual(ids(parts.history), ['new-complete', 'old-error']);
     assert.deepEqual(ids(input), ['old-error', 'new-complete'], 'partition must not reorder shared application state');
     const history = visible(renderAdmin('operations', { ...state(input), jobsView: 'history' }));
     assert.match(history, /历史执行记录|当次未完成/); assert.doesNotMatch(history, /需要处理/);
@@ -89,8 +89,8 @@ await test('current operations keep live service targets clear and retain previo
   await t.test('all queued and running attempts stay visible while terminal attempts for their target move to history', () => {
     const rows = [attempt('older-failure', 1), attempt('running', 2, { status: 'running' }), attempt('queued', 3, { status: 'queued' }), attempt('terminal-after-running', 4)];
     const parts = partitionAdminJobs(rows);
-    assert.deepEqual(ids(parts.current), ['queued', 'running']);
-    assert.deepEqual(ids(parts.history), ['terminal-after-running', 'older-failure']);
+    assert.deepEqual(ids(parts.current), ['terminal-after-running', 'queued', 'running']);
+    assert.deepEqual(ids(parts.history), ['older-failure']);
   });
   await t.test('owner, mode, scope, course, homework and game identities remain separate', () => {
     const requests = [
@@ -203,7 +203,8 @@ await test('administrator sees people and work instead of storage identifiers', 
     const all = job({ id: 'all', status: 'succeeded', request: { scope: 'all', mode: 'submit' }, context: undefined, result: { status: 'passed' } });
     const queued = job({ id: 'queued', status: 'queued', context: undefined, result: {} });
     const html = visible(renderAdmin('operations', state([completed, all, queued])));
-    assert.match(html, /课程全部必做作业/); assert.match(html, /所有课程必做作业/); assert.match(html, /等待同步作业/);
+    const history = visible(renderAdmin('operations', { ...state([completed, all, queued]), jobsView: 'history' }));
+    assert.match(history, /课程全部必做作业/); assert.match(history, /所有课程必做作业/); assert.match(html, /等待同步作业/);
     assert.doesNotMatch(html, /作业名称待补充|作业名称未留存/);
   });
   await t.test('server-provided and historical metadata cannot inject HTML in a list or detail', () => {
@@ -231,7 +232,7 @@ await test('administrator sees people and work instead of storage identifiers', 
   });
   await t.test('legacy collection time limits preserve results and do not count as support failures', () => {
     const value = job({ request: { mode: 'collect_verified' }, context: { user: { name: '示例采集用户' } }, error_code: 'execution_failed', started_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:03:00Z', result: { collected: 0, duplicates: 12, skipped: 4, unconfirmed: 3, failed: 0, limit_reached: true, reasons: { no_confirmed_full_score: 1, programming_submitted_source_unproven: 2, objective_media_content_unproven: 1, request_byte_or_time_limit: 1 } } });
-    const list = visible(renderAdmin('operations', state([value]))), detail = visible(renderAdminJobDetail(value));
+    const list = visible(renderAdmin('operations', { ...state([value]), jobsView: 'history' })), detail = visible(renderAdminJobDetail(value));
     assert.match(list, /达到采集上限/); assert.match(list, /约 3 分钟/); assert.match(list, /尚未扫描完全部内容/); assert.doesNotMatch(list, /需要处理|采集完成/);
     const overview = renderAdmin('overview', state([value]));
     assert.doesNotMatch(overview, /data-admin-job-detail=/); assert.match(overview, /当前需跟进<\/span><strong>0/);

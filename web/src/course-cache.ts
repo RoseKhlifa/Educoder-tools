@@ -194,9 +194,10 @@ export class CourseDetailsCache {
     task.status = 'running';
     session.active++;
     if (task.lane === 'background') session.activeBackground++;
-    void Promise.resolve().then(() => {
+    void Promise.resolve(undefined).then((): Promise<Data> => {
       if (session !== this.session) throw new CourseCacheClearedError();
-      return this.loaders[task.kind](task.identifier);
+      const loader = task.kind === 'homeworks' ? this.loaders.homeworks : this.loaders.exercises;
+      return loader(task.identifier);
     }).then(
       data => {
         const current = session === this.session;

@@ -69,6 +69,13 @@ await test('consumer completion progress shows one current arrangement per origi
     assert.match(renderServiceJob(unknown), /进度待更新/);
     assert.doesNotMatch(renderServiceJob(unknown), /0 \/ 0|100%/);
   });
+  await t.test('running details expose public progress even before result rows are available', () => {
+    const running = job('progress-only', 1, { status: 'running', progress: { current_title: '正在处理第 4 关', total_levels: 8, completed_levels: 3 } });
+    const html = renderServiceDetail(running);
+    assert.match(html, /detail-progress-card/);
+    assert.match(html, /正在处理第 4 关/);
+    assert.match(html, /3 \/ 8 关/);
+  });
   await t.test('exams have separate targets from homework IDs and from one another', () => {
     const exercise = exercise_id => ({ scope: 'exercise', course: 'COURSE_A', exercise_id, mode: 'submit' });
     const rows = [job('old-exam', 1, { request: exercise(701) }), job('new-exam', 4, { request: exercise(701), status: 'submitted' }), job('other-exam', 3, { request: exercise(702) }), job('same-number-homework', 2, { request: { scope: 'homework', course: 'COURSE_A', homework_id: 701, mode: 'submit' } })];
@@ -102,12 +109,12 @@ await test('consumer completion progress shows one current arrangement per origi
     const completed = job('older-completed', 2, { status: 'succeeded' });
     const latest = job('latest-completed', 3, { status: 'succeeded', result: { total_homeworks: 4, completed_homeworks: 4 } });
     const rows = [old, latest, completed], before = JSON.stringify(rows), parts = partitionServiceJobs(rows);
-    assert.deepEqual(ids(parts.current), ['latest-completed']); assert.deepEqual(ids(parts.history), ['older-completed', 'older-error']);
+    assert.deepEqual(ids(parts.current), []); assert.deepEqual(ids(parts.history), ['latest-completed', 'older-completed', 'older-error']);
     assert.equal(JSON.stringify(rows), before); assert.deepEqual(currentServiceJobs(rows), parts.current);
     const html = renderJobs(rows, courses), shown = visible(html);
-    assert.match(shown, /data-job-detail="latest-completed"/); assert.doesNotMatch(shown, /older-error|older-completed|服务人员/);
-    assert.match(shown, /已完成 <b>1<\/b>/); assert.match(shown, /4 \/ 4 份作业/);
-    assert.match(html, /<details class="service-history" data-service-history>/); assert.match(html, /历史记录 <span class="count">2/);
+    assert.doesNotMatch(shown, /data-job-detail="latest-completed"/); assert.doesNotMatch(shown, /服务人员/);
+    assert.match(html, /<div class="progress-empty">/); assert.match(html, /4 \/ 4 份作业/);
+    assert.match(html, /<details class="service-history" data-service-history>/); assert.match(html, /历史记录 <span class="count">3/);
   });
   await t.test('every genuinely queued or running request remains visible even if a newer terminal request exists', () => {
     const rows = [job('failed-before', 1), job('running', 2, { status: 'running', result: { service_status: 'completed' } }), job('waiting', 3, { status: 'waiting' }), job('queued', 4, { status: 'queued' }), job('processing', 5, { status: 'processing' }), job('newer-ended', 6, { status: 'succeeded' })];
@@ -148,7 +155,7 @@ await test('consumer completion progress shows one current arrangement per origi
   await t.test('history uses past-tense status and details without claiming failed work is still active', () => {
     const old = job('old', 1, { status: 'support', result: { homeworks: [{ title: '作业一', status: 'support' }, { title: '作业二', status: 'completed' }] } });
     const html = renderServiceJob(old, courses, true) + renderServiceDetail(old, courses, true);
-    assert.match(html, /当次未完成/); assert.match(html, /当次已完成/); assert.match(html, /当次进度/); assert.match(html, /data-job-history="true"/);
+    assert.match(html, /当次未完成/); assert.match(html, /当次已完成/); assert.match(html, /本次进度/); assert.match(html, /data-job-history="true"/);
     assert.doesNotMatch(html, /服务人员正在处理|服务处理中|正在逐项完成|会在处理后更新|关闭页面也会继续/);
     assert.match(renderServiceDetail(old, courses), /本次处理已暂停/);
   });

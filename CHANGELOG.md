@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.66 - 2026-11-03
+
+- Clarify current task progress, move completed records to history, improve live details and unify user-facing copy
+
 ## 0.1.65 - 2026-11-03
 
 - Reuse durable verified collection checkpoints across logins and add reconciled user and admin continuation actions
