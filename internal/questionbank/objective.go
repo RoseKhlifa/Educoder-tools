@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"regexp"
 )
 
 // Objective answers have their own schema and never enter source-file contracts.
@@ -61,6 +62,18 @@ func (s *Store) AddObjectiveCandidate(ctx context.Context, key string, snapshot 
 	return ObjectiveCandidate{ID: id, Hash: hash, Candidate: c, Source: source}, err
 }
 func (s *Store) FindObjectiveVerified(ctx context.Context, key string) (ObjectiveCandidate, error) {
+	return s.findObjectiveVerified(ctx, key, nil, false)
+}
+
+// FindObjectiveVerifiedWithResources permits whole-task image answers only
+// when the exact persisted hash placeholders are bound to valid current image
+// bytes at the same question/option positions. Resources must include SHA256;
+// URL-only legacy snapshots and individual image answers remain ineligible.
+func (s *Store) FindObjectiveVerifiedWithResources(ctx context.Context, key string, resources []answer.ImageResource) (ObjectiveCandidate, error) {
+	return s.findObjectiveVerified(ctx, key, resources, true)
+}
+
+func (s *Store) findObjectiveVerified(ctx context.Context, key string, resources []answer.ImageResource, imageAware bool) (ObjectiveCandidate, error) {
 	var c ObjectiveCandidate
 	var snapshot answer.ObjectiveSnapshot
 	var snapshotJSON string
@@ -77,15 +90,26 @@ func (s *Store) FindObjectiveVerified(ctx context.Context, key string) (Objectiv
 	if err = answer.ValidateObjectiveSnapshot(snapshot); err != nil {
 		return c, err
 	}
-	// The legacy whole-task snapshot has image locators but no content hashes.
-	// It cannot establish that an image is unchanged. Image-aware callers use
-	// UpsertObjectiveQuestionWithResources and the individual-answer API.
-	if objectiveSnapshotHasMedia(snapshot) {
+	hasMedia := objectiveSnapshotHasMedia(snapshot)
+	if !imageAware && hasMedia {
 		return c, ErrNotFound
+	}
+	if imageAware {
+		// Validate the current fetched bytes (including MIME, dimensions, digest
+		// and position) before accepting the snapshot's content-hash contract.
+		if err = answer.ValidateObjectiveResources(snapshot, resources); err != nil {
+			return c, err
+		}
+		if !objectiveSnapshotResourcesMatch(snapshot, resources) {
+			return c, ErrNotFound
+		}
 	}
 	var raw string
 	err = s.db.QueryRowContext(ctx, `SELECT c.id,c.candidate_hash,c.candidate_json,c.source FROM objective_candidates c WHERE c.snapshot_hash=? AND EXISTS(SELECT 1 FROM objective_verifications v WHERE v.candidate_id=c.id AND v.result='full_score') ORDER BY c.id DESC LIMIT 1`, key).Scan(&c.ID, &c.Hash, &raw, &c.Source)
 	if errors.Is(err, sql.ErrNoRows) {
+		if hasMedia {
+			return c, ErrNotFound
+		}
 		return s.objectiveCandidateFromAnswers(ctx, key, snapshot)
 	}
 	if err != nil {
@@ -98,16 +122,67 @@ func (s *Store) FindObjectiveVerified(ctx context.Context, key string) (Objectiv
 	return c, err
 }
 
+var objectiveCanonicalImage = regexp.MustCompile(`<img src="sha256:([0-9a-f]{64})">`)
+var objectiveUnsupportedSnapshotMedia = regexp.MustCompile(`(?is)<\s*(?:img|svg|object|embed|video|audio|canvas|iframe|picture|source)\b|!\[|\bsrcset\s*=|\burl\s*\(`)
+
+// Only the canonical placeholder emitted after fetching an image is supported.
+// The binding includes the question and option, so matching bytes in another
+// option or a shared statement cannot substitute for the referenced image.
+func objectiveSnapshotResourcesMatch(snapshot answer.ObjectiveSnapshot, resources []answer.ImageResource) bool {
+	type binding struct {
+		position int
+		option   string
+		hash     string
+	}
+	available := make(map[binding]bool, len(resources))
+	for _, resource := range resources {
+		if !objectiveSHA256Pattern.MatchString(resource.SHA256) {
+			return false
+		}
+		available[binding{resource.QuestionPosition, resource.OptionLabel, resource.SHA256}] = true
+	}
+	used := make(map[binding]bool, len(resources))
+	matchText := func(text string, position int, option string) bool {
+		if objectiveUnsupportedSnapshotMedia.MatchString(objectiveCanonicalImage.ReplaceAllString(text, "")) {
+			return false
+		}
+		for _, match := range objectiveCanonicalImage.FindAllStringSubmatch(text, -1) {
+			key := binding{position, option, match[1]}
+			if !available[key] {
+				return false
+			}
+			used[key] = true
+		}
+		return true
+	}
+	positions := make(map[int]bool, len(snapshot.Questions))
+	for _, question := range snapshot.Questions {
+		if positions[question.Position] {
+			return false
+		}
+		positions[question.Position] = true
+		if !matchText(snapshot.Title, question.Position, "") || !matchText(snapshot.Statement, question.Position, "") || !matchText(question.Question, question.Position, "") {
+			return false
+		}
+		for _, option := range question.Options {
+			if !matchText(option.Text, question.Position, option.Label) {
+				return false
+			}
+		}
+	}
+	return len(used) == len(available)
+}
+
 func objectiveSnapshotHasMedia(snapshot answer.ObjectiveSnapshot) bool {
-	if objectiveMediaPattern.MatchString(snapshot.Title) || objectiveMediaPattern.MatchString(snapshot.Statement) {
+	if objectiveUnsupportedSnapshotMedia.MatchString(snapshot.Title) || objectiveUnsupportedSnapshotMedia.MatchString(snapshot.Statement) {
 		return true
 	}
 	for _, q := range snapshot.Questions {
-		if objectiveMediaPattern.MatchString(q.Question) {
+		if objectiveUnsupportedSnapshotMedia.MatchString(q.Question) {
 			return true
 		}
 		for _, option := range q.Options {
-			if objectiveMediaPattern.MatchString(option.Text) {
+			if objectiveUnsupportedSnapshotMedia.MatchString(option.Text) {
 				return true
 			}
 		}

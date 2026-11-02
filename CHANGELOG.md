@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.51 - 2026-11-02
+
+- Fix verified image question bank reuse across accounts
+
 ## 0.1.50 - 2026-11-02
 
 - Add feedback tickets service and contribution statistics guidelines credits and progress fixes

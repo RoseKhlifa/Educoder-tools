@@ -2,6 +2,8 @@
 
 登录成功后，HTTP 服务在进程内提交 `collect_verified` job，返回登录结果及 `collection.job_id/status/reused`。扫描不依赖模型配置，不运行 CLI，不创建实训实例，不写编辑器、不自测、不评测、不提交、不调用模型。队列满时仍然登录成功，响应 `collection.queued=false` 和错误码。
 
+采集与正式答题的整关满分缓存分别保存。只读采集当前仍跳过缺少图片内容核验的含图关卡；正式答题已经下载并验证图片时，则可用当前图片字节与 SHA256 引用匹配整关历史满分答卷。该路径不要求登录采集先成功，也不把“已完成”标记直接当成可复用单题答案。图片内容或题目快照改变时重新匹配，不能仅凭作业同名复用。
+
 ## 已核实的数据来源和边界
 
 现有接口包括课堂列表 `GET /api/users/{login}/courses.json`；作业列表 `GET /api/courses/{course}/homework_commons.json`；关卡分数 `GET /api/homework_commons/{id}/shixun_challenge_data.json`；任务详情 `GET /api/tasks/{game}.json`；当前源码 `GET /api/tasks/{game}/rep_content.json`。采集作业时使用所有状态 `status=0`，不限定 `type`。

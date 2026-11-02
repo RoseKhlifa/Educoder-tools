@@ -365,7 +365,7 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 		}
 	}()
 	emit("bank_lookup", "正在查询客观题题库")
-	cached, cacheErr := s.store.FindObjectiveVerified(ctx, hash)
+	cached, cacheErr := s.store.FindObjectiveVerifiedWithResources(ctx, hash, resources)
 	if cacheErr != nil && !errors.Is(cacheErr, questionbank.ErrNotFound) {
 		r.Status = "failed"
 		return r, cacheErr
