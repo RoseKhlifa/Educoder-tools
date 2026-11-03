@@ -303,8 +303,39 @@ export interface EducoderApi {
   adminSetTicketStatus(id: string, status: TicketStatus): Promise<SupportTicketDetail>;
 }
 
+export interface BrowserApiOptions {
+  /** Revision embedded in the document that loaded the application. */
+  initialAssetRevision?: string;
+  /** Called once for each distinct newer revision observed on an API response. */
+  onAssetRevisionChange?: (revision: string) => void;
+}
+
 export class BrowserApi implements EducoderApi {
-  constructor(private readonly baseUrl = '') {}
+  private observedAssetRevision: string;
+  private readonly seenAssetRevisions = new Set<string>();
+
+  constructor(private readonly baseUrl = '', options: BrowserApiOptions = {}) {
+    this.observedAssetRevision = options.initialAssetRevision?.trim() ?? '';
+    if (this.observedAssetRevision) this.seenAssetRevisions.add(this.observedAssetRevision);
+    this.onAssetRevisionChange = options.onAssetRevisionChange;
+  }
+
+  private readonly onAssetRevisionChange?: (revision: string) => void;
+
+  private observeAssetRevision(response: Response): void {
+    const revision = response.headers.get('X-App-Asset-Revision')?.trim() ?? '';
+    if (!revision || this.seenAssetRevisions.has(revision)) return;
+    this.seenAssetRevisions.add(revision);
+    // A document without the meta tag is an older shell. Adopt the first
+    // response as its baseline so it does not immediately warn on itself.
+    if (!this.observedAssetRevision) {
+      this.observedAssetRevision = revision;
+      return;
+    }
+    if (revision === this.observedAssetRevision) return;
+    this.observedAssetRevision = revision;
+    this.onAssetRevisionChange?.(revision);
+  }
 
   private async request<T>(path: string, options: RequestInit = {}): Promise<T> {
     const response = await fetch(`${this.baseUrl}${path}`, {
@@ -312,6 +343,7 @@ export class BrowserApi implements EducoderApi {
       credentials: 'include',
       headers: { Accept: 'application/json', ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers },
     });
+    this.observeAssetRevision(response);
     const requestId = response.headers.get('X-Request-Id') ?? undefined;
     let payload: unknown = null;
     try { payload = await response.json(); } catch {

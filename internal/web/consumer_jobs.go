@@ -107,7 +107,7 @@ func toConsumerJob(j jobs.Job) consumerJob {
 	req := j.Request
 	req.IdempotencyKey = ""
 	out := consumerJob{ID: j.ID, Status: status, Phase: status, Kind: "service", Request: req, CreatedAt: j.CreatedAt, UpdatedAt: j.UpdatedAt, Message: message, CanRetry: canRetryJob(j), CanRecover: canRecoverJob(j), CanCancel: isRestartableRequest(req) && (j.Status == jobs.Queued || j.Status == jobs.Running)}
-	if j.Request.RecoveryOf != "" {
+	if recoveryOriginalID(j) != "" {
 		recovery := publicRecovery(j)
 		out.Recovery = &recovery
 		out.Message = recovery.Message
@@ -214,5 +214,24 @@ func publicRecovery(j jobs.Job) consumerRecovery {
 			state, message = "blocked", "复核未通过，未发送新的提交；可再次复核"
 		}
 	}
-	return consumerRecovery{OriginalID: j.Request.RecoveryOf, State: state, Message: message}
+	return consumerRecovery{OriginalID: recoveryOriginalID(j), State: state, Message: message}
+}
+
+func recoveryOriginalID(j jobs.Job) string {
+	if j.Request.RecoveryOf != "" {
+		return j.Request.RecoveryOf
+	}
+	// v0.1.65 children predate RecoveryOf. The server-owned key and persisted
+	// reconciliation failure together identify their read-only recovery path.
+	id, ok := strings.CutPrefix(j.Request.IdempotencyKey, "recover-job:")
+	if !ok || len(id) != 32 || strings.Trim(id, "0123456789abcdef") != "" {
+		return ""
+	}
+	var result struct {
+		ReasonCode string `json:"reason_code"`
+	}
+	if json.Unmarshal(j.Result, &result) != nil || result.ReasonCode != "recovery_recheck_required" {
+		return ""
+	}
+	return id
 }

@@ -1,6 +1,6 @@
 import { ApiRequestError, BrowserApi } from './api.js';
 import { partitionAdminJobs, renderAdmin, renderAdminJobDetail, type AdminPage, type AdminState } from './admin.js';
-import { canCancelJob, canRetryJob, canRecoverJob, serviceLabel, type JobActionState, currentServiceJobs, jobProgress, jobTitle, pendingJob, renderJobs, renderServiceDetail, serviceJob, serviceStatus } from './jobs.js';
+import { canCancelJob, canRetryJob, canRecoverJob, recoveryNotice, serviceLabel, type JobActionState, currentServiceJobs, jobProgress, jobTitle, pendingJob, renderJobs, renderServiceDetail, serviceJob, serviceStatus } from './jobs.js';
 import { count, escapeHtml as e, icon } from './ui.js';
 import { renderUserGuidelines } from './guidelines.js';
 import { CourseDetailsCache, type CourseCacheEvent } from './course-cache.js';
@@ -9,7 +9,17 @@ import type { AnswerJob, Course, Exercise, Homework, User, QuestionBankSummary, 
 
 const root = document.querySelector<HTMLDivElement>('#app');
 if (!root) throw new Error('Missing application root');
-const api = new BrowserApi();
+const assetRevisionMeta = document.querySelector<HTMLMetaElement>('meta[name="app-asset-revision"]');
+let assetUpdateAvailable = false;
+const api = new BrowserApi('', {
+  initialAssetRevision: assetRevisionMeta?.content ?? '',
+  onAssetRevisionChange: () => {
+    assetUpdateAvailable = true;
+    // Keep this independent from the session state. A logout or an expired
+    // session must not hide a notice that the loaded page is stale.
+    render();
+  },
+});
 type Page = 'courses' | 'progress' | 'support' | 'admin-support' | `admin-${AdminPage}`;
 interface TicketScreen extends TicketState { revision: number; detailRevision: number; detailError: string; detailLoading: boolean }
 const emptyTickets = (): TicketScreen => ({ items: [], loading: false, error: '', filter: 'all', nextCursor: '', submitting: false, detail: null, revision: 0, detailRevision: 0, detailError: '', detailLoading: false });
@@ -26,6 +36,7 @@ const state = {
 };
 let generation = 0;
 let jobsRevision = 0;
+let recoveryNoticeID = '';
 let coursesRevision = 0;
 let adminRevision = 0;
 let modalRevision = 0;
@@ -87,7 +98,7 @@ const accessible = (): boolean => state.user?.service_access !== false && state.
 const activeJobs = (): AnswerJob[] => state.jobs.filter(job => serviceJob(job) && pendingJob(job));
 function stopPoll(): void { if (pollTimer !== undefined) clearTimeout(pollTimer); pollTimer = undefined; }
 function resetSession(message = ''): void {
-  jobActions.clear(); adminRecoveries.clear(); jobDialog = null; homeworkSync.clear();
+  jobActions.clear(); recoveryNoticeID = ''; adminRecoveries.clear(); jobDialog = null; homeworkSync.clear();
   userTickets = emptyTickets(); adminTickets = emptyTickets(); ticketDialog = null; ticketRetryKeys.clear(); ticketFormDrafts.clear();
   generation++; jobsRevision++; coursesRevision++; adminRevision++; modalRevision++; bankRevision++; bankLoadedAt = 0; todayRevision++; todayLoadedAt = 0; todayLoadedDate = ''; guidelinesSource = 'login'; stopPoll(); courseDialog = null; courseCache.clear();
   Object.assign(state, { user: null, page: 'courses', courses: [], jobs: [], selected: [], loading: false, signingIn: false, creating: false, notice: '', loginError: message, modal: '', modalKind: '', modalAction: null, search: '', progressHistoryOpen: false, questionBank: null, bankLoading: false, bankUnavailable: false, todaySummary: null, todayLoading: false, todayUnavailable: false, admin: { overview: {}, users: [], jobs: [], audit: [], loading: false, error: false, userSearch: '', userFilter: 'all' } });
@@ -96,6 +107,13 @@ function resetSession(message = ''): void {
 function handleError(error: unknown): boolean {
   if (error instanceof ApiRequestError && error.isSessionExpired) { resetSession('登录已过期，请重新登录。你的任务进度会保留。'); return true; }
   return false;
+}
+function renderAssetUpdateNotice(): string {
+  if (!assetUpdateAvailable) return '';
+  return '<div class="asset-update-banner" role="status"><span>检测到头歌妈妈已发布新版本，刷新页面后继续使用。</span><button class="button" type="button" data-action="asset-update-refresh">刷新页面</button></div>';
+}
+function reloadForAssetUpdate(): void {
+  if (typeof window !== 'undefined' && typeof window.location?.reload === 'function') window.location.reload();
 }
 function brandLogo(): string {
   return '<img class="brand-logo" src="/assets/brand-logo.png?v=0.1.50" alt="头歌妈妈" width="40" height="40" decoding="async">';
@@ -276,7 +294,7 @@ function render(): void {
   const replyDraft = state.user ? captureTicketForm('#ticket-reply-form') : null;
   if (createDraft) ticketFormDrafts.set('create:user', createDraft);
   if (replyDraft) ticketFormDrafts.set(`reply:${replyDraft.scope}:${replyDraft.id}`, replyDraft);
-  root!.innerHTML = `${state.user ? renderShell() : renderLogin()}${state.modal ? `<div class="modal-backdrop"><section class="modal${state.modalKind === 'guidelines' ? ' guidelines-modal' : state.modalKind === 'ticket' ? ' ticket-modal' : ''}" data-ticket-scope="${state.modalKind === 'ticket' && ticketDialog ? ticketDialog.admin ? 'admin' : 'user' : ''}" role="dialog" aria-modal="true" aria-labelledby="modal-title" tabindex="-1"><button class="icon-button modal-close" type="button" data-action="close-modal" aria-label="关闭">${icon('close')}</button><div class="modal-content">${state.modal}</div></section></div>` : ''}`;
+  root!.innerHTML = `${renderAssetUpdateNotice()}${state.user ? renderShell() : renderLogin()}${state.modal ? `<div class="modal-backdrop"><section class="modal${state.modalKind === 'guidelines' ? ' guidelines-modal' : state.modalKind === 'ticket' ? ' ticket-modal' : ''}" data-ticket-scope="${state.modalKind === 'ticket' && ticketDialog ? ticketDialog.admin ? 'admin' : 'user' : ''}" role="dialog" aria-modal="true" aria-labelledby="modal-title" tabindex="-1"><button class="icon-button modal-close" type="button" data-action="close-modal" aria-label="关闭">${icon('close')}</button><div class="modal-content">${state.modal}</div></section></div>` : ''}`;
   if (draft) {
     const account = document.querySelector<HTMLInputElement>('#login');
     const password = document.querySelector<HTMLInputElement>('#password');
@@ -347,6 +365,8 @@ async function loadJobs(): Promise<void> {
     if (session !== generation || revision !== jobsRevision) return;
     const changed = result.jobs.filter(job => !pendingJob(job) && state.jobs.some(previous => previous.id === job.id && pendingJob(previous)));
     state.jobs = result.jobs;
+    const noticedRecovery = state.jobs.find(job => job.id === recoveryNoticeID);
+    if (noticedRecovery) state.notice = recoveryNotice(noticedRecovery) || state.notice;
     for (const job of state.jobs) if (jobActions.get(job.id) === 'stopping' && !pendingJob(job)) jobActions.delete(job.id);
     state.selected = state.selected.filter(id => courseSelectable(id));
     if (jobDialog && state.modalKind === 'job') {
@@ -482,8 +502,8 @@ async function performJobAction(id: string, action: 'retry' | 'recover' | 'cance
     if (!job || typeof job.id !== 'string' || !job.id || typeof job.status !== 'string' || !job.request) throw new Error('Invalid job response');
     state.jobs = [job, ...state.jobs.filter(previous => previous.id !== job.id)];
     if (action === 'cancel' && pendingJob(job)) jobActions.set(id, 'stopping'); else jobActions.delete(id);
-    state.page = 'progress'; state.selected = state.selected.filter(course => courseSelectable(course));
-    state.notice = action === 'recover' ? '已提交复核，确认上次结果后继续剩余内容。' : action === 'retry' ? pendingJob(job) ? '已重新开始处理，已完成的关卡会自动跳过。' : '已找到本次重试结果，请查看完成进度。' : pendingJob(job) ? '已请求停止，正在等待任务确认。停止后可重新执行。' : '任务已停止，已完成的结果会保留。'
+    state.page = 'progress'; if (action === 'recover') recoveryNoticeID = job.id; state.selected = state.selected.filter(course => courseSelectable(course));
+    state.notice = action === 'recover' ? recoveryNotice(job) || '已提交复核，确认上次结果后继续剩余内容。' : action === 'retry' ? pendingJob(job) ? '已重新开始处理，已完成的关卡会自动跳过。' : '已找到本次重试结果，请查看完成进度。' : pendingJob(job) ? '已请求停止，正在等待任务确认。停止后可重新执行。' : '任务已停止，已完成的结果会保留。'
     render(); refreshJobCourseCache(source); scheduleJobs();
   } catch (error) {
     if (session !== generation || handleError(error)) return;
@@ -852,6 +872,7 @@ function bindEvents(): void {
       }
       case 'close-modal': closeModal(); break;
       case 'modal-confirm': { const action = state.modalAction; state.modalAction = null; if (action) void action(); break; }
+      case 'asset-update-refresh': reloadForAssetUpdate(); break;
     }
   }));
   document.querySelector<HTMLImageElement>('[data-avatar]')?.addEventListener('error', () => { if (state.user) { state.user.avatarUrl = undefined; render(); } });

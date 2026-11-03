@@ -270,7 +270,7 @@ func TestStaticModuleGraphVersionsOnlyPublishedLocalDependencies(t *testing.T) {
 		return w
 	}
 	index := get(handler, "/")
-	if !strings.Contains(index.Body.String(), `/dist/app.js?v=release`) {
+	if !strings.Contains(index.Body.String(), `v=release`) || !strings.Contains(index.Body.String(), `__asset=`) || !strings.Contains(index.Body.String(), `name="app-asset-revision"`) {
 		t.Fatal("entry point version must be preserved")
 	}
 	response := get(handler, "/dist/app.js?v=release")

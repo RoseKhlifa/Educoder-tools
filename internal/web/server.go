@@ -139,6 +139,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	requestID := newRequestID()
 	w.Header().Set("X-Request-Id", requestID)
 	w.Header().Set("X-App-Version", buildinfo.Current())
+	if assets, ok := s.static.(interface{ assetRevision() string }); ok {
+		w.Header().Set("X-App-Asset-Revision", assets.assetRevision())
+	}
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("X-Frame-Options", "DENY")
 	w.Header().Set("Referrer-Policy", "no-referrer")

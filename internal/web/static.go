@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -79,7 +80,18 @@ func newStaticHandler(dir string) http.Handler {
 		_, _ = fmt.Fprintf(graph, "%d:%s:%d:", len(name), name, len(assets[name].body))
 		_, _ = graph.Write(assets[name].body)
 	}
+	for _, name := range []string{"/index.html", "/styles.css"} {
+		if asset, ok := assets[name]; ok {
+			_, _ = fmt.Fprintf(graph, "%d:%s:%d:", len(name), name, len(asset.body))
+			_, _ = graph.Write(asset.body)
+		}
+	}
 	revision := fmt.Sprintf("%x", graph.Sum(nil))[:16]
+	if entry, ok := assets["/index.html"]; ok {
+		entry.body = versionEntryHTML(entry.body, revision)
+		entry.modified = time.Time{}
+		assets["/index.html"] = entry
+	}
 	for name, asset := range assets {
 		if publicJS(strings.TrimPrefix(name, "/")) {
 			asset.body = versionModuleImports(name, asset.body, assets, revision)
@@ -97,6 +109,48 @@ func newStaticHandler(dir string) http.Handler {
 		assets[name] = asset
 	}
 	return assets
+}
+
+var publicEntryAsset = regexp.MustCompile(`(?:src|href)=["']([^"']+)["']`)
+var publicAssetRevision = regexp.MustCompile(`name="app-asset-revision" content="([a-f0-9]{16})"`)
+
+func versionEntryHTML(body []byte, revision string) []byte {
+	meta := []byte(`<meta name="app-asset-revision" content="` + revision + `">`)
+	if bytes.Contains(body, []byte("</head>")) {
+		body = bytes.Replace(body, []byte("</head>"), append(meta, []byte("</head>")...), 1)
+	} else {
+		body = append(meta, body...)
+	}
+	return publicEntryAsset.ReplaceAllFunc(body, func(attribute []byte) []byte {
+		match := publicEntryAsset.FindSubmatch(attribute)
+		if len(match) != 2 {
+			return attribute
+		}
+		parsed, err := url.Parse(string(match[1]))
+		if err != nil || parsed.IsAbs() || parsed.Host != "" {
+			return attribute
+		}
+		name := strings.TrimPrefix(strings.TrimPrefix(parsed.Path, "./"), "/")
+		if name != "dist/app.js" && name != "styles.css" {
+			return attribute
+		}
+		q := parsed.Query()
+		q.Set("__asset", revision)
+		parsed.RawQuery = q.Encode()
+		return bytes.Replace(attribute, match[1], []byte(parsed.String()), 1)
+	})
+}
+
+func (s staticHandler) assetRevision() string {
+	asset, ok := s["/index.html"]
+	if !ok {
+		return ""
+	}
+	match := publicAssetRevision.FindSubmatch(asset.body)
+	if len(match) == 2 {
+		return string(match[1])
+	}
+	return ""
 }
 
 // moduleToken records source offsets so rewriting changes only literal module

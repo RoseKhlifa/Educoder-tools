@@ -216,6 +216,13 @@ func TestHTTPUnresolvedRecoveryRemainsRecoverableWithoutRunning(t *testing.T) {
 	if strings.Contains(string(public), "关卡 2") || !strings.Contains(string(public), `"can_recover":true`) {
 		t.Fatal("consumer recovery boundary invalid")
 	}
+	for _, route := range []string{"/api/jobs", "/api/jobs/" + child.ID} {
+		response := f.request(t, f.aliceClient, "GET", route, "")
+		if response.StatusCode != 200 || !strings.Contains(response.Body, `"state":"blocked"`) || !strings.Contains(response.Body, `"original_id":"`+original.ID+`"`) || strings.Contains(response.Body, `"recovery_of"`) {
+			t.Fatalf("recovery HTTP projection failed: %s", response.Body)
+		}
+		assertConsumerBoundary(t, response.Body)
+	}
 	current.progress.Challenges[1].GameScore = "10"
 	again := f.request(t, f.aliceClient, "POST", "/api/jobs/"+child.ID+"/recover", "{}")
 	if again.StatusCode != 202 || f.waitJob(t, decodeJob(t, again).ID).Status != jobs.Succeeded || calls.Load() != 1 {

@@ -16,7 +16,7 @@ class Element {
 }
 class Input extends Element {}
 class Document {
-  items = []; html = ''; listeners = new Map(); activeElement = null;
+  items = []; html = ''; listeners = new Map(); activeElement = null; assetRevision = '';
   constructor() { const document = this; this.root = { get innerHTML() { return document.html; }, set innerHTML(value) {
     document.html = value; document.items.forEach(item => { item.isConnected = false; });
     const modalStart = value.indexOf('role="dialog"');
@@ -31,7 +31,7 @@ class Document {
       const end=value.indexOf('</form>',form.start);form.controls=document.items.filter(item=>item.start>form.start&&item.start<end&&'name'in item.attributes);
     }
   } }; }
-  querySelector(selector) { return selector === '#app' ? this.root : this.querySelectorAll(selector)[0] ?? null; }
+  querySelector(selector) { return selector === '#app' ? this.root : selector === 'meta[name="app-asset-revision"]' ? this.assetRevision ? {content:this.assetRevision} : null : this.querySelectorAll(selector)[0] ?? null; }
   querySelectorAll(selector) {
     if(selector.includes(',')) return [...new Set(selector.split(',').flatMap(part=>this.querySelectorAll(part.trim())))].sort((a,b)=>a.start-b.start);
     if(selector.startsWith('.modal ')) return this.items.filter(item=>item.inModal&&(item.tag===selector.slice(7)||selector.slice(7)==='a[href]'&&item.tag==='a'&&'href'in item.attributes));
@@ -40,6 +40,7 @@ class Document {
   addEventListener(name, handler) { this.listeners.set(name,handler); }
 }
 const ok = data => new Response(JSON.stringify({data,error:null}));
+const okWithHeaders = (data, headers) => new Response(JSON.stringify({data,error:null}), {headers});
 const failure=(status,code,message)=>new Response(JSON.stringify({data:null,error:{code,message}}),{status});
 const user={login:'demo',name:'<测试同学>',avatarUrl:'/api/avatar'};
 const courses=[{identifier:'COURSE_A',name:'课堂甲',homeworkCount:2,teacherName:'合成老师',studentCount:25},{identifier:'COURSE_B',name:'课堂乙',homeworkCount:3,teacherName:'<老师>',studentCount:0}];
@@ -52,9 +53,9 @@ const supportDetail=(ticket=supportTicket(),body='请帮忙核对课程完成情
 const supportList=(items,next_cursor='')=>({items,next_cursor,limit:30});
 const fillSupport=(page,subject='测试问题',body='测试反馈内容',category='task')=>{page.get('#ticket-subject').value=subject;page.get('#ticket-category').value=category;page.get('#ticket-body').value=body;};
 let version=0;
-async function app(overrides={}) {
-  const document=new Document(),requests=[],timers=new Map();let timerId=0;
-  globalThis.HTMLInputElement=Input;globalThis.document=document;globalThis.window={};
+async function app(overrides={}, options={}) {
+  const document=new Document(),requests=[],timers=new Map();let timerId=0,reloadCount=0;document.assetRevision=options.assetRevision||'';
+  globalThis.HTMLInputElement=Input;globalThis.document=document;globalThis.window={location:{reload(){reloadCount++;}}};
   globalThis.setTimeout=(handler,delay)=>{const id=++timerId;timers.set(id,{handler,delay});return id;};globalThis.clearTimeout=id=>timers.delete(id);
   globalThis.localStorage=globalThis.sessionStorage={setItem(){throw new Error('no browser persistence');}};
   globalThis.fetch=async(url,options)=>{
@@ -72,9 +73,69 @@ async function app(overrides={}) {
     throw new Error(`Unexpected URL ${url}`);
   };
   await import(`./dist/app.js?test=${++version}`);await settle();
-  return {requests,timers,document,html:()=>document.html,get(selector){const element=document.querySelector(selector);assert.ok(element,`Missing ${selector}`);return element;},async tick(){const tasks=[...timers.entries()];for(const[id,timer]of tasks){timers.delete(id);timer.handler();}await settle();}};
+  return {requests,timers,document,html:()=>document.html,reloads:()=>reloadCount,get(selector){const element=document.querySelector(selector);assert.ok(element,`Missing ${selector}`);return element;},async tick(){const tasks=[...timers.entries()];for(const[id,timer]of tasks){timers.delete(id);timer.handler();}await settle();}};
 }
 await test('consumer course service and administrator boundary',async t=>{
+  await t.test('real support envelopes update recovery notice from active read to blocked without announcing a retry', async () => {
+    const source=job({status:'support',can_recover:true,result:{service_status:'support',total_homeworks:19,completed_homeworks:13}});
+    const child=job({id:'wire-recovery',status:'processing',can_recover:false,created_at:'2026-11-03T06:00:00Z',result:{service_status:'processing',total_homeworks:19,completed_homeworks:13},recovery:{original_id:'job-1',state:'reconciling',message:'正在只读复核上次提交结果，尚未开始新的提交'}});
+    let rows=[source];
+    const page=await app({'/api/jobs':()=>ok({jobs:rows}),'/api/jobs/job-1/recover':()=>{rows=[child,source];return ok(child);}});
+    page.get('[data-nav="progress"]').dispatch('click');await settle();
+    page.get('[data-job-recover="job-1"]').dispatch('click');page.get('[data-action="modal-confirm"]').dispatch('click');await settle();
+    assert.match(page.html(),/正在复核上次结果，尚未开始新的提交/);assert.match(page.html(),/13 \/ 19 份作业/);
+    rows=[{...child,status:'support',can_recover:true,recovery:{...child.recovery,state:'blocked',message:'复核未通过，未发送新的提交；可再次复核'}},source];await page.tick();
+    assert.match(page.html(),/本次复核未通过，尚未启动重试/);assert.match(page.html(),/再次复核并继续/);
+    assert.doesNotMatch(page.html(),/已提交复核，确认上次结果后继续剩余内容|已重新开始处理/);
+    page.get('[data-job-detail="wire-recovery"]').dispatch('click');
+    assert.match(page.html().slice(page.html().indexOf('role="dialog"')),/复核未通过/);
+  });
+  await t.test('new asset revisions stay visible until the user chooses to refresh', async () => {
+    const page = await app({
+      '/api/auth/me': () => okWithHeaders({user, platform:{role:'user',status:'active'}}, {'X-App-Asset-Revision':'asset-old'}),
+      '/api/courses': () => okWithHeaders(courses, {'X-App-Asset-Revision':'asset-new'}),
+    }, {assetRevision:'asset-old'});
+    assert.match(page.html(), /检测到头歌妈妈已发布新版本/);
+    assert.match(page.html(), /data-action="asset-update-refresh"/);
+    assert.equal(page.reloads(), 0, 'detecting a release must never refresh automatically');
+    page.get('[data-nav="support"]').dispatch('click');await settle();
+    fillSupport(page,'尚未发送的反馈','PRIVATE draft text');
+    page.get('[data-nav="progress"]').dispatch('click');await settle();
+    assert.match(page.html(), /检测到头歌妈妈已发布新版本/);
+    page.get('[data-nav="support"]').dispatch('click');await settle();
+    assert.equal(page.get('#ticket-body').value,'PRIVATE draft text');
+    page.get('[data-action="logout"]').dispatch('click');await settle();
+    assert.match(page.html(), /检测到头歌妈妈已发布新版本/);
+    assert.equal(page.reloads(), 0);
+    page.get('[data-action="asset-update-refresh"]').dispatch('click');
+    assert.equal(page.reloads(), 1);
+    assert.equal(page.requests.some(({url})=>url==='/version'),false);
+  });
+  await t.test('an update detected while restoring login keeps private form drafts out of markup', async () => {
+    const restore=deferred();
+    const page=await app({'/api/auth/me':()=>restore.promise},{assetRevision:'asset-old'});
+    page.get('#login').value='private-account';page.get('#password').value='private-password';
+    const response=failure(401,'AUTH_REQUIRED','expired');response.headers.set('X-App-Asset-Revision','asset-new');
+    restore.resolve(response);await settle();
+    assert.match(page.html(),/检测到头歌妈妈已发布新版本/);
+    assert.equal(page.get('#login').value,'private-account');assert.equal(page.get('#password').value,'private-password');
+    assert.doesNotMatch(page.html(),/private-account|private-password/);
+    assert.equal(page.reloads(),0);assert.equal(page.requests.length,1);
+  });
+  await t.test('an update arriving during feedback editing preserves the draft focus and caret', async () => {
+    let reads=0;
+    const page=await app({'/api/tickets?limit=30':()=>okWithHeaders(supportList([]),{'X-App-Asset-Revision':++reads===1?'asset-old':'asset-new'})},{assetRevision:'asset-old'});
+    page.get('[data-nav="support"]').dispatch('click');await settle();
+    fillSupport(page,'正在编辑的标题','尚未发送的私有内容');
+    page.get('#ticket-body').focus();page.get('#ticket-body').setSelectionRange(3,5,'backward');
+    page.get('[data-ticket-refresh]').dispatch('click');await settle();
+    assert.match(page.html(),/检测到头歌妈妈已发布新版本/);
+    assert.equal(page.get('#ticket-body').value,'尚未发送的私有内容');
+    assert.equal(page.document.activeElement,page.get('#ticket-body'));
+    assert.equal(page.get('#ticket-body').selectionStart,3);assert.equal(page.get('#ticket-body').selectionEnd,5);
+    assert.equal(page.get('#ticket-body').selectionDirection,'backward');
+    assert.doesNotMatch(page.html(),/尚未发送的私有内容/);assert.equal(page.reloads(),0);
+  });
   await t.test('uncertain service tasks expose a guarded recovery action and reuse the returned child', async () => {
     const source=job({status:'support',can_retry:false,can_recover:true,result:{service_status:'support',total_homeworks:19,completed_homeworks:13}});
     const child=job({id:'recovery-child',status:'waiting'}),pending=deferred();

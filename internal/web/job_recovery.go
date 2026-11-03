@@ -153,6 +153,10 @@ func recoveryTargets(original jobs.Job) ([]recoveryTarget, error) {
 }
 
 func recoveryPreflight(ctx context.Context, client EducoderClient, original jobs.Job) error {
+	return recoveryPreflightWithEvidence(ctx, client, original, nil)
+}
+
+func recoveryPreflightWithEvidence(ctx context.Context, client EducoderClient, original jobs.Job, preformal func(context.Context, string, int64, int64) (bool, error)) error {
 	targets, err := recoveryTargets(original)
 	if err != nil {
 		return err
@@ -215,14 +219,24 @@ func recoveryPreflight(ctx context.Context, client EducoderClient, original jobs
 			continue
 		}
 		for challengeID := range target.challenges {
-			confirmed := false
+			confirmed, found := false, false
 			for _, challenge := range progress.Challenges {
 				if challenge.ChallengeID == challengeID {
+					found = true
 					confirmed = challenge.IsOptional() || challenge.HasFullScore()
 					break
 				}
 			}
 			if !confirmed {
+				if found && preformal != nil {
+					allowed, evidenceErr := preformal(ctx, target.course, target.homeworkID, challengeID)
+					if evidenceErr != nil {
+						return errors.New("读取原执行证据失败，未继续执行")
+					}
+					if allowed {
+						continue
+					}
+				}
 				return fmt.Errorf("作业 %d 关卡 %d 的提交结果仍未确认满分，未继续执行", target.homeworkID, challengeID)
 			}
 		}
@@ -300,10 +314,10 @@ func (s *Server) submitJobRecovery(w http.ResponseWriter, r *http.Request, reque
 			if !session.ExpiresAt.After(s.store.now()) {
 				return recoveryBlocked(original, errors.New("用户登录已过期，请重新登录后再次复核")), nil
 			}
-			if err := recoveryPreflight(ctx, session.Client, original); err != nil {
+			if err := recoveryPreflightWithEvidence(ctx, session.Client, original, s.preformalRecoveryEvidence(owner, original)); err != nil {
 				return recoveryBlocked(original, err), nil
 			}
-			report(jobs.Event{Phase: "loading", Message: "已确认上次不确定关卡满分或无需安排，正在继续剩余作业"})
+			report(jobs.Event{Phase: "loading", Message: "已确认上次结果或核实尚未正式提交，正在继续剩余作业"})
 			out, err := s.jobs.run(ctx, session.Client, owner, request, func(event jobs.Event) {
 				if p := event.Progress; p != nil && p.CurrentCourse != "" && p.CurrentHomeworkID > 0 && strings.TrimSpace(p.CurrentHomeworkTitle) != "" {
 					s.rememberHomeworkLabels(ctx, p.CurrentCourse, []educoder.Homework{{ID: p.CurrentHomeworkID, Name: p.CurrentHomeworkTitle}})

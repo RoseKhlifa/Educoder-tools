@@ -15,6 +15,19 @@ function recoveryMessage(job: AnswerJob): string {
   const recovery = job.recovery;
   return typeof recovery?.message === 'string' ? recovery.message : '';
 }
+export function recoveryNotice(job: AnswerJob): string {
+  if (!job.recovery) return '';
+  switch (recoveryState(job)) {
+    case 'queued': return '已提交复核，正在等待开始。';
+    case 'reconciling': return '正在复核上次结果，尚未开始新的提交。';
+    case 'continuing': return '复核已通过，正在继续剩余内容。';
+    case 'blocked': return '本次复核未通过，尚未启动重试；已完成进度保留。';
+    case 'completed': return '本次复核与后续处理已完成。';
+    case 'stopped': return '本次复核已停止，已完成进度保留。';
+    case 'failed': return '复核后的处理仍未完成，已保留进度。';
+    default: return '';
+  }
+}
 function recoveryLabel(job: AnswerJob): string {
   switch (recoveryState(job)) {
     case 'queued': return '复核排队中';
@@ -126,7 +139,7 @@ export function renderServiceJob(job: AnswerJob, courses: Course[] = [], histori
   const status = serviceStatus(job);
   const progress = jobProgress(job);
   const submitted = job.request.scope === 'exercise' && ['submitted', 'awaiting_review', 'graded'].includes(status);
-  return `<article class="service-job service-job-compact hw-card status-${status}${historical ? ' service-job-history' : ''}" data-service-record="${historical ? 'history' : 'current'}"><div class="hw-top job-heading"><div class="hw-title"><span class="job-symbol" aria-hidden="true">${status === 'completed' || submitted ? '✓' : status === 'support' ? '·' : '◌'}</span><div><h3>${e(jobTitle(job, courses))}</h3><p class="meta">${e(dateTime(job.created_at))} · ${historical ? '本次任务' : '开始时间'}</p></div></div><div class="hw-badges"><span class="badge ${historical ? 'stopped' : status}">${historical ? displayLabel(status, true) : serviceLabel(job)}</span></div></div><div class="hw-progress job-footer"><div class="job-progress">${submitted ? '' : `<div class="progress-track bar-wrap" aria-hidden="true"><span class="progress-fill" style="width:${progress.percent}%"></span></div>`}<span>${historical ? '本次进度 · ' : ''}${progressText(job)}</span></div><button class="text-button" data-job-detail="${e(job.id)}"${historical ? ' data-job-history="true"' : ''}>${historical ? '查看记录' : '查看详情'}</button>${renderJobActions(job, historical, action)}</div></article>`;
+  return `<article class="service-job service-job-compact hw-card status-${status}${historical ? ' service-job-history' : ''}" data-service-record="${historical ? 'history' : 'current'}"><div class="hw-top job-heading"><div class="hw-title"><span class="job-symbol" aria-hidden="true">${status === 'completed' || submitted ? '✓' : status === 'support' ? '·' : '◌'}</span><div><h3>${e(jobTitle(job, courses))}</h3><p class="meta">${e(dateTime(job.created_at))} · ${historical ? '本次任务' : '开始时间'}</p></div></div><div class="hw-badges"><span class="badge ${historical ? 'stopped' : status}">${historical ? displayLabel(status, true) : serviceLabel(job)}</span></div></div><div class="hw-progress job-footer"><div class="job-progress">${submitted ? '' : `<div class="progress-track bar-wrap" aria-hidden="true"><span class="progress-fill" style="width:${progress.percent}%"></span></div>`}<span>${historical ? '本次进度 · ' : ''}${progressText(job)}</span></div>${!historical && recoveryMessage(job) ? `<p class="job-recovery-message" role="status">${e(recoveryNotice(job))}</p>` : ''}<button class="text-button" data-job-detail="${e(job.id)}"${historical ? ' data-job-history="true"' : ''}>${historical ? '查看记录' : '查看详情'}</button>${renderJobActions(job, historical, action)}</div></article>`;
 }
 export function renderJobs(jobs: AnswerJob[], courses: Course[] = [], historyOpen = false, actions: ReadonlyMap<string, JobActionState> = new Map()): string {
   const { current, history } = partitionServiceJobs(jobs);

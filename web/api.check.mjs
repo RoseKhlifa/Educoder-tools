@@ -7,6 +7,36 @@ const ticket = { id: 'ticket/opaque ?#', subject: '测试反馈', category: 'tas
 const ticketDetail = { ticket, messages: [{ id: 'message/1', author_role: 'user', body: '课程状态需要核对\n第二行', created_at: '2026-11-02T03:00:00Z' }] };
 
 await test('browser API uses the Go workbench contract', async t => {
+  await t.test('asset revision changes notify once without an extra version request', async () => {
+    const revisions = [];
+    const returnedRevisions = ['', 'asset-old', 'asset-new', 'asset-new', 'asset-newer', 'asset-new'];
+    const requests = [];
+    globalThis.fetch = async (url, options) => {
+      requests.push({url, options});
+      return new Response(JSON.stringify({ data: { ok: true }, error: null }), {
+        status: 200,
+        headers: { 'X-App-Asset-Revision': returnedRevisions.shift() },
+      });
+    };
+    const api = new BrowserApi('', { initialAssetRevision: 'asset-old', onAssetRevisionChange: revision => revisions.push(revision) });
+    for (let index = 0; index < 6; index++) await api.job(`job-${index}`);
+    assert.deepEqual(revisions, ['asset-new', 'asset-newer']);
+    assert.equal(requests.length, 6, 'revision observation must reuse existing API calls');
+    assert.ok(requests.every(({url}) => url.startsWith('/api/jobs/job-')));
+  });
+  await t.test('revision checks observe errors and learn a baseline for shells without metadata', async () => {
+    const revisions = [], headers = {'X-App-Asset-Revision':'asset-new'};
+    globalThis.fetch = async () => new Response(JSON.stringify({data:null,error:{code:'AUTH_REQUIRED',message:'expired'}}), {status:401,headers});
+    const api = new BrowserApi('', {initialAssetRevision:'asset-old',onAssetRevisionChange:revision=>revisions.push(revision)});
+    await assert.rejects(api.me(), error => error.isSessionExpired);
+    assert.deepEqual(revisions, ['asset-new']);
+    const unknownBaseline = new BrowserApi('', {onAssetRevisionChange:revision=>revisions.push(revision)});
+    await assert.rejects(unknownBaseline.me(), error => error.isSessionExpired);
+    assert.deepEqual(revisions, ['asset-new'], 'the first observed revision of a document without metadata is only a baseline');
+    headers['X-App-Asset-Revision']='asset-newer';
+    await assert.rejects(unknownBaseline.me(), error => error.isSessionExpired);
+    assert.deepEqual(revisions, ['asset-new','asset-newer']);
+  });
   await t.test('support tickets use session-bound lists and opaque IDs with safe pagination', async () => {
     const requests = [];
     globalThis.fetch = async (url, options) => { requests.push({ url, options }); return envelope(url.includes('/ticket%2F') ? ticketDetail : { items: [ticket], next_cursor: 'next/+&=', limit: 30 }); };
