@@ -633,12 +633,25 @@ func (c *Client) HomeworkProgress(ctx context.Context, course string, homeworkID
 	if validIdentifier(course) != nil || homeworkID <= 0 {
 		return nil, errors.New("进度读取需要课堂标识和正整数作业 ID")
 	}
-	var response struct {
-		Data HomeworkProgress `json:"data"`
-	}
 	ref := "/classrooms/" + course + "/shixun_homework/" + strconv.FormatInt(homeworkID, 10) + "/detail?tabs=1"
-	if err := c.request(ctx, http.MethodGet, "/api/homework_commons/"+strconv.FormatInt(homeworkID, 10)+"/shixun_challenge_data.json", nil, nil, ref, &response); err != nil {
-		return nil, err
+	for attempt := 1; ; attempt++ {
+		var response struct {
+			Data HomeworkProgress `json:"data"`
+		}
+		err := c.requestWithReadDiagnostics(ctx, http.MethodGet, "/api/homework_commons/"+strconv.FormatInt(homeworkID, 10)+"/shixun_challenge_data.json", nil, nil, ref, &response, true, 0)
+		if err == nil {
+			return &response.Data, nil
+		}
+		var readError *HomeworkProgressReadError
+		if !errors.As(err, &readError) {
+			return nil, err
+		}
+		readError.Attempts = attempt
+		if attempt >= homeworkProgressReadAttempts || !readError.transient() {
+			return nil, readError
+		}
+		if err := waitHomeworkProgressRetry(ctx, attempt); err != nil {
+			return nil, &HomeworkProgressReadError{Stage: "backoff", Category: "canceled", Attempts: attempt, canceled: err}
+		}
 	}
-	return &response.Data, nil
 }

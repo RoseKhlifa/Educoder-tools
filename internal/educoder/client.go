@@ -204,6 +204,22 @@ func (c *Client) request(ctx context.Context, method, path string, query url.Val
 // Some task endpoints use positive status values as lifecycle states. Callers
 // select only the statuses observed for that endpoint; other APIs keep status 0.
 func (c *Client) requestWithStatuses(ctx context.Context, method, path string, query url.Values, body any, ref string, out any, statuses ...int) error {
+	return c.requestWithReadDiagnostics(ctx, method, path, query, body, ref, out, false, statuses...)
+}
+
+// Only the exact homework-progress read opts into fixed error metadata. Other
+// protocol operations retain their existing errors and retry behavior.
+func (c *Client) requestWithReadDiagnostics(ctx context.Context, method, path string, query url.Values, body any, ref string, out any, progressRead bool, statuses ...int) (err error) {
+	stage, category, status := "prepare", "invalid_request", 0
+	var diagnosticCause error
+	defer func() {
+		if progressRead && err != nil {
+			if diagnosticCause == nil {
+				diagnosticCause = err
+			}
+			err = newHomeworkProgressReadError(ctx, stage, category, status, diagnosticCause)
+		}
+	}()
 	if query == nil {
 		query = url.Values{}
 	}
@@ -250,8 +266,10 @@ func (c *Client) requestWithStatuses(ctx context.Context, method, path string, q
 		}
 	}
 	req.Header.Set("Pc-Authorization", session)
+	stage, category = "transport", "transport"
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
+		diagnosticCause = err
 		// Transport errors can include the full signed URL. Preserve context
 		// cancellation for errors.Is, and keep other transport details private.
 		if ctx.Err() != nil {
@@ -269,18 +287,22 @@ func (c *Client) requestWithStatuses(ctx context.Context, method, path string, q
 		return fmt.Errorf("%s %s: request failed", method, path)
 	}
 	defer resp.Body.Close()
+	status = resp.StatusCode
 	if c.Trace != nil {
 		c.Trace(fmt.Sprintf("%s %s -> %d", method, path, resp.StatusCode))
 	}
 	// Keep the response bounded; the task descriptions can be fairly large.
+	stage, category = "body", "body_read"
 	data, err := io.ReadAll(io.LimitReader(resp.Body, (16<<20)+1))
 	if err != nil {
 		return err
 	}
 	if len(data) > 16<<20 {
+		category = "response_limit"
 		return errors.New("upstream response exceeded limit")
 	}
 	if resp.StatusCode == http.StatusNotModified {
+		stage, category = "http", "http_status"
 		return errResponseNotModified
 	}
 	var envelope struct {
@@ -296,6 +318,7 @@ func (c *Client) requestWithStatuses(ctx context.Context, method, path string, q
 		message = ""
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		stage, category = "http", "http_status"
 		return fmt.Errorf("%s %s: HTTP %d%s", method, path, resp.StatusCode, messageSuffix(message))
 	}
 	var code float64
@@ -307,11 +330,13 @@ func (c *Client) requestWithStatuses(ctx context.Context, method, path string, q
 			}
 		}
 		if !accepted {
+			stage, category = "api", "api_status"
 			return fmt.Errorf("%s %s: API status %v%s", method, path, code, messageSuffix(message))
 		}
 	}
 	if out != nil {
 		if err := json.Unmarshal(data, out); err != nil {
+			stage, category = "decode", "schema"
 			return fmt.Errorf("%s %s: expected JSON response: %w", method, path, err)
 		}
 	}

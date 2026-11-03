@@ -208,6 +208,10 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 				return stop(e, "canceled")
 			}
 			h.Status, h.ReasonCode = "needs_service", "progress_unavailable"
+			var readError *educoder.HomeworkProgressReadError
+			if errors.As(e, &readError) {
+				h.Result = &BatchResult{Kind: "homework", Scope: "homework", Status: "progress_unavailable", ReasonCode: "progress_unavailable", Diagnostics: []string{readError.Error()}}
+			}
 			out.NeedsServiceHomeworks++
 			emit("service_pending", "这份作业已转交服务人员处理", nil)
 			continue

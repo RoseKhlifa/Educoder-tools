@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.73 - 2026-11-03
+
+- Retry only transient homework progress reads with bounded attempts and private operator diagnostics while retaining fresh-score requirements
+
 ## 0.1.72 - 2026-11-03
 
 - Keep model service availability failures out of code-quality escalation while preserving charged calls and durable recovery budgets
