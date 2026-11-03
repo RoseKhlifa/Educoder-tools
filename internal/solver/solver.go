@@ -561,7 +561,7 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 	state.RepairHistory = history
 	runtimeOnlyRejected := make(map[string]bool)
 	for _, c := range allCandidates {
-		if legacyRuntimeOnlyRejection(c) {
+		if legacyRuntimeOnlyRejection(c) || snap.EditMode == "single_file" && legacyFormalRuntimeOnlyRejection(c) {
 			runtimeOnlyRejected[c.FilesHash] = true
 		}
 	}
@@ -1188,7 +1188,11 @@ func formalRuntimeStartupFailure(eval Evaluation) bool {
 	if !eval.Completed || eval.Passed || eval.Status != "0" || eval.PassedCount != 0 || eval.ReuseUnproven {
 		return false
 	}
-	lines := strings.Split(strings.TrimSuffix(strings.ReplaceAll(eval.Feedback, "\r\n", "\n"), "\n"), "\n")
+	return formalRuntimeStartupFeedback(eval.Feedback)
+}
+
+func formalRuntimeStartupFeedback(feedback string) bool {
+	lines := strings.Split(strings.TrimSuffix(strings.ReplaceAll(feedback, "\r\n", "\n"), "\n"), "\n")
 	if lines[0] != runtimeStartupFailureMessage {
 		return false
 	}

@@ -80,11 +80,46 @@ func legacyRuntimeFeedback(f answer.Feedback) bool {
 func codeRepairFeedback(feedback []answer.Feedback) []answer.Feedback {
 	out := make([]answer.Feedback, 0, len(feedback))
 	for _, entry := range feedback {
-		if !legacyRuntimeFeedback(entry) {
+		if !legacyRuntimeFeedback(entry) && !(entry.Kind == "formal" && formalRuntimeStartupFeedback(entry.Message)) {
 			out = append(out, entry)
 		}
 	}
 	return out
+}
+
+// Historical formal verifications did not persist the raw upstream status.
+// Their exact, source-bound environment diagnostic permits a fresh retest,
+// never a trust promotion or replacement of the historical failure.
+func legacyFormalRuntimeOnlyRejection(c questionbank.Candidate) bool {
+	if c.Status != "rejected" || c.FilesHash == "" {
+		return false
+	}
+	hash, err := problem.HashFiles(c.Files)
+	if err != nil || hash != c.FilesHash {
+		return false
+	}
+	found := false
+	for _, v := range c.Validations {
+		if v.Result == "unknown" {
+			return false
+		}
+		if v.Result != "failed" {
+			continue
+		}
+		if v.Kind == "selftest" {
+			one := c
+			one.Validations = []questionbank.Validation{v}
+			if !legacyRuntimeOnlyRejection(one) {
+				return false
+			}
+			continue
+		}
+		if v.Kind != "formal" || !v.Terminal || !v.Complete || v.TestCount < 1 || v.PassedCount != 0 || v.FilesHash != c.FilesHash || v.SavedFilesHash != c.FilesHash || v.SubmittedFilesHash != c.FilesHash || v.RevisionHash != c.RevisionHash || v.ContractHash != c.ContractHash || !formalRuntimeStartupFeedback(v.Feedback) {
+			return false
+		}
+		found = true
+	}
+	return found
 }
 
 func legacyRuntimeOnlyRejection(c questionbank.Candidate) bool {

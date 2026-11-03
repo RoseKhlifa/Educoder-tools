@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.69 - 2026-11-03
+
+- Retest exact historical formal environment failures before model repair while preserving source-bound evidence
+
 ## 0.1.68 - 2026-11-03
 
 - Resume proven preformal selftest failures and detect stale browser resources with explicit recovery outcomes
