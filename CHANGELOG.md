@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.70 - 2026-11-03
+
+- Distinguish interrupted model response bodies and allow four minutes without replaying unknown billed calls
+
 ## 0.1.69 - 2026-11-03
 
 - Retest exact historical formal environment failures before model repair while preserving source-bound evidence

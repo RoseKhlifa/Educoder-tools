@@ -45,7 +45,7 @@ type Config struct {
 }
 
 func DefaultConfig() Config {
-	return Config{HTTPAddr: "0.0.0.0:11454", APIBaseURL: educoder.DefaultBaseURL, SessionTTL: 8 * time.Hour, StaticDir: filepath.FromSlash("web"), DataDir: "data", JobWorkers: 16, JobQueueSize: 256, JobPerOwner: 16, JobPerOwnerRunning: 4, JobTimeout: 30 * time.Minute, ModelConcurrency: 8, ModelTimeout: 2 * time.Minute}
+	return Config{HTTPAddr: "0.0.0.0:11454", APIBaseURL: educoder.DefaultBaseURL, SessionTTL: 8 * time.Hour, StaticDir: filepath.FromSlash("web"), DataDir: "data", JobWorkers: 16, JobQueueSize: 256, JobPerOwner: 16, JobPerOwnerRunning: 4, JobTimeout: 30 * time.Minute, ModelConcurrency: 8, ModelTimeout: 4 * time.Minute}
 }
 
 func LoadConfig() (Config, error) {

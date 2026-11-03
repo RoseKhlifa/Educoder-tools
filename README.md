@@ -78,7 +78,7 @@ go run ./cmd/web
 | `JOB_WORKERS` / `JOB_QUEUE_SIZE` | `16` / `256` |
 | `JOB_PER_ACCOUNT_PENDING` / `JOB_PER_ACCOUNT_RUNNING` | `16` / `4` |
 | `JOB_TIMEOUT` | `30m` |
-| `MODEL_CONCURRENCY` / `MODEL_TIMEOUT` | `8` / `2m`；实际供应商 RPM 由供应商账号决定 |
+| `MODEL_CONCURRENCY` / `MODEL_TIMEOUT` | `8` / `4m`；实际供应商 RPM 由供应商账号决定 |
 | `DEEPSEEK_API_KEY_FILE` | 推荐用 Docker secret 的文件路径 |
 
 ## 数据与身份边界

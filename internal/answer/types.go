@@ -127,6 +127,12 @@ type Error struct {
 	HTTPStatus    int
 	Retryable     bool
 	BilledUnknown bool
+	// Response metadata contains only fixed classifications and byte counts,
+	// never the response body or the underlying transport error's text.
+	ResponsePhase string
+	ReadCause     string
+	BytesRead     int64
+	ExpectedBytes int64
 }
 
 // IsRetryableError classifies provider-only failures. Callers must separately
@@ -156,8 +162,25 @@ func IsTruncatedOutput(err error) bool {
 }
 
 func (e *Error) Error() string {
+	message := "model provider " + e.Kind
 	if e.HTTPStatus != 0 {
-		return fmt.Sprintf("model provider %s (HTTP %d)", e.Kind, e.HTTPStatus)
+		message = fmt.Sprintf("%s (HTTP %d)", message, e.HTTPStatus)
 	}
-	return "model provider " + e.Kind
+	if e.ResponsePhase == "body" {
+		cause := e.ReadCause
+		switch cause {
+		case "deadline", "canceled", "unexpected_eof", "read":
+		default:
+			cause = "read"
+		}
+		bytesRead, expectedBytes := e.BytesRead, e.ExpectedBytes
+		if bytesRead < 0 {
+			bytesRead = 0
+		}
+		if expectedBytes < -1 {
+			expectedBytes = -1
+		}
+		message += fmt.Sprintf(" [phase=body cause=%s bytes_read=%d expected_bytes=%d]", cause, bytesRead, expectedBytes)
+	}
+	return message
 }
