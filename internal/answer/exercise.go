@@ -273,7 +273,7 @@ func (d *DeepSeek) GenerateExercise(ctx context.Context, req ExerciseRequest) (E
 		return r, &Error{Kind: "response_read_failed", HTTPStatus: resp.StatusCode, BilledUnknown: true}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return r, &Error{Kind: "upstream_error", HTTPStatus: resp.StatusCode, Retryable: resp.StatusCode == 429 || resp.StatusCode >= 500, BilledUnknown: true}
+		return r, providerHTTPError(resp.StatusCode, resp.Header)
 	}
 	var decoded chatResponse
 	if json.Unmarshal(raw, &decoded) != nil {

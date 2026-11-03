@@ -127,6 +127,9 @@ type Error struct {
 	HTTPStatus    int
 	Retryable     bool
 	BilledUnknown bool
+	// RetryAfterSeconds is sanitized and capped; the original header is never
+	// retained in diagnostics or persisted run records.
+	RetryAfterSeconds int
 	// Response metadata contains only fixed classifications and byte counts,
 	// never the response body or the underlying transport error's text.
 	ResponsePhase string

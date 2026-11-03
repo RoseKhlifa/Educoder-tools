@@ -29,6 +29,7 @@ type Config struct {
 	MaxEvaluations          int
 	ProgrammingRepairRounds int
 	BudgetMicroUSD          int64
+	ProviderRetryWait       answer.RetryWait `json:"-"`
 }
 type Request struct {
 	Owner, Course, Game, IdempotencyKey string
@@ -70,6 +71,7 @@ type Result struct {
 	ScoreKnown       bool           `json:"score_known,omitempty"`
 	Programming      *solver.Result `json:"programming,omitempty"`
 	Diagnostics      []string       `json:"diagnostics,omitempty"`
+	providerRetry    answer.AvailabilityRetry
 }
 type Service struct {
 	store            *questionbank.Store
@@ -115,7 +117,7 @@ func New(store *questionbank.Store, provider Provider, cfg Config) *Service {
 			exerciseProvider = limited
 		}
 	}
-	return &Service{store: store, provider: wrapped, exerciseProvider: exerciseProvider, programming: solver.New(store, prog, solver.Config{Timeout: cfg.Timeout, MaxModelCalls: cfg.MaxModelCalls, MaxEvaluations: cfg.MaxEvaluations, BudgetMicroUSD: cfg.BudgetMicroUSD}), cfg: cfg, targets: make(map[string]*targetLock)}
+	return &Service{store: store, provider: wrapped, exerciseProvider: exerciseProvider, programming: solver.New(store, prog, solver.Config{Timeout: cfg.Timeout, MaxModelCalls: cfg.MaxModelCalls, MaxEvaluations: cfg.MaxEvaluations, BudgetMicroUSD: cfg.BudgetMicroUSD, ProviderRetryWait: cfg.ProviderRetryWait}), cfg: cfg, targets: make(map[string]*targetLock)}
 }
 func (s *Service) lock(ctx context.Context, key string) (func(), error) {
 	s.targetMu.Lock()
@@ -290,9 +292,10 @@ func objectiveSnapshot(t *educoder.ChoiceTask) answer.ObjectiveSnapshot {
 }
 
 type objectiveState struct {
-	Result Result        `json:"result"`
-	Target solver.Target `json:"target"`
-	Mode   solver.Mode   `json:"mode"`
+	Result        Result                   `json:"result"`
+	Target        solver.Target            `json:"target"`
+	Mode          solver.Mode              `json:"mode"`
+	ProviderRetry answer.AvailabilityRetry `json:"provider_retry,omitempty"`
 }
 
 func (s *Service) persistObjective(ctx context.Context, req Request, r *Result, created time.Time) error {
@@ -301,7 +304,7 @@ func (s *Service) persistObjective(ctx context.Context, req Request, r *Result, 
 		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 		defer cancel()
 	}
-	raw, err := json.Marshal(objectiveState{Result: *r, Target: solver.Target{Course: req.Course, HomeworkID: req.HomeworkID, Game: req.Game}, Mode: req.Mode})
+	raw, err := json.Marshal(objectiveState{Result: *r, Target: solver.Target{Course: req.Course, HomeworkID: req.HomeworkID, Game: req.Game}, Mode: req.Mode, ProviderRetry: r.providerRetry})
 	if err != nil {
 		return err
 	}
@@ -416,6 +419,13 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 				r.Status = "budget_exhausted"
 				return r, nil
 			}
+			if r.providerRetry.Streak > 0 {
+				emit("generating", "模型服务暂时繁忙，稍后自动重试")
+				if waitErr := r.providerRetry.Wait(ctx, s.cfg.ProviderRetryWait); waitErr != nil {
+					r.Status = "canceled"
+					return r, waitErr
+				}
+			}
 			emit("generating", "正在生成或修复客观题答案")
 			generated, e := s.provider.GenerateObjective(ctx, pr)
 			r.ModelCalls++
@@ -440,6 +450,11 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			if usageErr != nil {
 				r.Status = "usage_persistence_failed"
 				return r, errors.Join(e, usageErr)
+			}
+			if e != nil && len(generated.Candidate.Answers) == 0 {
+				r.providerRetry.Observe(e)
+			} else {
+				r.providerRetry.Observe(nil)
 			}
 			if e != nil {
 				if retryableObjectiveModelError(e) && attempt+1 < s.cfg.MaxEvaluations && r.ModelCalls < s.cfg.MaxModelCalls && ctx.Err() == nil {

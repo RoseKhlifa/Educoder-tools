@@ -60,13 +60,14 @@ func stage(req Request, phase, message string) {
 // mutation. One exact pre-execution environment-start failure may retry the
 // same self-test; other retries are model generation and confirmed-code repair.
 type Config struct {
-	MaxModelCalls  int
-	MaxEvaluations int
-	BudgetMicroUSD int64
-	Timeout        time.Duration
-	Profile        answer.Profile
-	RepairProfile  answer.Profile
-	ProProfile     answer.Profile
+	MaxModelCalls     int
+	MaxEvaluations    int
+	BudgetMicroUSD    int64
+	Timeout           time.Duration
+	Profile           answer.Profile
+	RepairProfile     answer.Profile
+	ProProfile        answer.Profile
+	ProviderRetryWait answer.RetryWait `json:"-"`
 }
 
 func defaultConfig() Config {
@@ -206,6 +207,7 @@ func New(store Store, provider answer.Provider, cfg Config) *Service {
 	if cfg.ProProfile.Model != "" {
 		d.ProProfile = cfg.ProProfile
 	}
+	d.ProviderRetryWait = cfg.ProviderRetryWait
 	return &Service{store: store, provider: provider, cfg: d, generations: make(map[string]*generationCall), locks: make(map[string]*runtimeLock)}
 }
 
@@ -728,6 +730,13 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				_ = s.persist(ctx, result.RunID, state, result.Status, created)
 				return result, nil
 			}
+			if state.GenerationRecovery.ProviderRetry.Streak > 0 {
+				stage(req, "generating", "模型服务暂时繁忙，稍后自动重试")
+				if waitErr := state.GenerationRecovery.ProviderRetry.Wait(ctx, s.cfg.ProviderRetryWait); waitErr != nil {
+					result.Status = "interrupted"
+					return result, waitErr
+				}
+			}
 			stage(req, "generating", "正在生成或修复候选答案")
 			dispatched := false
 			gen, ge, billed := s.generateOnce(ctx, generationKey(providerReq), providerReq, func() error {
@@ -793,6 +802,7 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				}
 				availabilityFailure := providerAvailabilityFailure(gen, ge)
 				if availabilityFailure {
+					state.GenerationRecovery.ProviderRetry.Observe(ge)
 					// Coalesced requests share a provider result without adding a
 					// model call. Discount only this run's own dispatched call from
 					// profile escalation, never from its actual usage or budgets.
@@ -804,6 +814,7 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 					// change code in response to a provider outage.
 					state.Feedback = append([]answer.Feedback(nil), feedback...)
 				} else {
+					state.GenerationRecovery.ProviderRetry.Observe(nil)
 					state.Feedback = boundedFeedback(feedback, answer.Feedback{Kind: "model", Message: ge.Error()})
 				}
 				result.Diagnostics = append(result.Diagnostics, ge.Error())
@@ -841,6 +852,7 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				_ = s.persist(ctx, result.RunID, state, result.Status, created)
 				return result, ge
 			}
+			state.GenerationRecovery.ProviderRetry.Observe(nil)
 			state.GenerationRecovery.OutputFailures = 0
 			candidate = gen.Candidate
 			state.LastCandidate = &candidate

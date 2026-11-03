@@ -28,7 +28,7 @@ func TestAvailabilityFailuresKeepSelectedProfileAndUnknownCharges(t *testing.T) 
 	}}
 	req := recoveryRequest()
 	req.MaxModelCalls, req.MaxEvaluations = 5, 5
-	r, err := New(store, p, Config{}).Run(context.Background(), adapter, req)
+	r, err := New(store, p, Config{ProviderRetryWait: skipProviderRetryWait}).Run(context.Background(), adapter, req)
 	if err != nil || r.Status != "selftest_passed" || r.ModelCalls != 3 || r.ReservedMicroUSD != 20 || r.CostMicroUSD != 3 || adapter.selfTests != 1 || adapter.submits != 0 {
 		t.Fatalf("result=%+v err=%v tests=%d submits=%d", r, err, adapter.selfTests, adapter.submits)
 	}
@@ -59,7 +59,7 @@ func TestAvailabilityFailuresDoNotSuppressRealRepairEscalation(t *testing.T) {
 	req := recoveryRequest()
 	req.MaxModelCalls, req.MaxEvaluations = 5, 5
 	a := &fakeAdapter{snap: testSnapshot()}
-	r, err := New(store, p, Config{}).Run(context.Background(), a, req)
+	r, err := New(store, p, Config{ProviderRetryWait: skipProviderRetryWait}).Run(context.Background(), a, req)
 	if err != nil || r.Status != "selftest_passed" || r.ModelCalls != 4 || a.selfTests != 3 || r.ReservedMicroUSD != 10 || r.CostMicroUSD != 9 {
 		t.Fatalf("result=%+v err=%v tests=%d", r, err, a.selfTests)
 	}
@@ -85,7 +85,7 @@ func TestAvailabilityFailureKeepsTruncationRecovery(t *testing.T) {
 	}}
 	req := recoveryRequest()
 	req.MaxModelCalls, req.MaxEvaluations = 5, 5
-	r, err := New(store, p, Config{}).Run(context.Background(), &fakeAdapter{snap: testSnapshot()}, req)
+	r, err := New(store, p, Config{ProviderRetryWait: skipProviderRetryWait}).Run(context.Background(), &fakeAdapter{snap: testSnapshot()}, req)
 	if err != nil || r.Status != "selftest_passed" || r.ModelCalls != 3 || r.ReservedMicroUSD != 10 || r.CostMicroUSD != 5 {
 		t.Fatalf("result=%+v err=%v", r, err)
 	}
@@ -104,11 +104,11 @@ func TestAvailabilityDistinctionSurvivesExplicitContinuation(t *testing.T) {
 	}}
 	req := recoveryRequest()
 	req.MaxModelCalls, req.MaxEvaluations, req.BudgetMicroUSD = 1, 1, 100
-	r, err := New(store, p, Config{}).Run(context.Background(), &fakeAdapter{snap: testSnapshot()}, req)
+	r, err := New(store, p, Config{ProviderRetryWait: skipProviderRetryWait}).Run(context.Background(), &fakeAdapter{snap: testSnapshot()}, req)
 	if err == nil || r.Status != "model_error" || r.ModelCalls != 1 || r.ReservedMicroUSD != 10 {
 		t.Fatalf("first=%+v err=%v", r, err)
 	}
-	r, err = New(store, p, Config{}).ContinueRun(context.Background(), &fakeAdapter{snap: testSnapshot()}, req, r.RunID, Continuation{AdditionalModelCalls: 1, AdditionalEvaluations: 1})
+	r, err = New(store, p, Config{ProviderRetryWait: skipProviderRetryWait}).ContinueRun(context.Background(), &fakeAdapter{snap: testSnapshot()}, req, r.RunID, Continuation{AdditionalModelCalls: 1, AdditionalEvaluations: 1})
 	if err != nil || r.Status != "selftest_passed" || r.ModelCalls != 2 || r.ReservedMicroUSD != 10 || r.CostMicroUSD != 3 || len(store.usages) != 2 {
 		t.Fatalf("continued=%+v err=%v usage=%+v", r, err, store.usages)
 	}
@@ -133,7 +133,7 @@ func TestAvailabilityFailuresStillExhaustCallAndMoneyBudgets(t *testing.T) {
 			req := recoveryRequest()
 			req.MaxModelCalls, req.MaxEvaluations, req.BudgetMicroUSD = tc.calls, 5, tc.budget
 			a := &fakeAdapter{snap: testSnapshot()}
-			r, _ := New(store, p, Config{}).Run(context.Background(), a, req)
+			r, _ := New(store, p, Config{ProviderRetryWait: skipProviderRetryWait}).Run(context.Background(), a, req)
 			if r.Status != tc.status || r.ModelCalls != tc.want || len(p.requests) != tc.want || r.ReservedMicroUSD != int64(tc.want*10) || a.selfTests != 0 || a.submits != 0 {
 				t.Fatalf("result=%+v calls=%d tests=%d submits=%d", r, len(p.requests), a.selfTests, a.submits)
 			}

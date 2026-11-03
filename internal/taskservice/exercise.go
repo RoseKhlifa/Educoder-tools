@@ -54,10 +54,11 @@ type ExerciseProgress struct {
 // memory and are never copied into jobs, public results or reusable verified
 // answer tables merely because the platform acknowledged a submission.
 type exerciseState struct {
-	Result          ExerciseResult `json:"result"`
-	Mode            solver.Mode    `json:"mode"`
-	MutationStarted bool           `json:"mutation_started"`
-	CommitStarted   bool           `json:"commit_started"`
+	Result          ExerciseResult           `json:"result"`
+	Mode            solver.Mode              `json:"mode"`
+	MutationStarted bool                     `json:"mutation_started"`
+	CommitStarted   bool                     `json:"commit_started"`
+	ProviderRetry   answer.AvailabilityRetry `json:"provider_retry,omitempty"`
 }
 type exerciseProtocol interface {
 	ExercisePaper(context.Context, string, int64) (*educoder.ExercisePaper, error)
@@ -268,6 +269,12 @@ func (s *Service) runExercise(ctx context.Context, client exerciseProtocol, req 
 			r.ReasonCode = "model_budget_exhausted"
 			return r, nil
 		}
+		if state.ProviderRetry.Streak > 0 {
+			emit("generating", "模型服务暂时繁忙，稍后自动重试")
+			if waitErr := state.ProviderRetry.Wait(ctx, s.cfg.ProviderRetryWait); waitErr != nil {
+				return r, waitErr
+			}
+		}
 		r.ReservedMicroUSD += estimate.CostMicroUSD
 		r.ModelCalls++
 		if e := persist(); e != nil {
@@ -298,6 +305,11 @@ func (s *Service) runExercise(ctx context.Context, client exerciseProtocol, req 
 			r.Status = "usage_persistence_failed"
 			r.ReasonCode = "usage_persistence_failed"
 			return r, errors.Join(modelErr, usageErr)
+		}
+		if modelErr != nil && len(generated.Candidate.Answers) == 0 {
+			state.ProviderRetry.Observe(modelErr)
+		} else {
+			state.ProviderRetry.Observe(nil)
 		}
 		if e := persist(); e != nil {
 			return r, e

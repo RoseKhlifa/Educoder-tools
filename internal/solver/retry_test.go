@@ -119,7 +119,7 @@ func TestTransientModelRetryRetainsUnresolvedUsageReservation(t *testing.T) {
 	}}
 	req := recoveryRequest()
 	req.MaxModelCalls, req.MaxEvaluations = 5, 5
-	r, err := New(store, provider, Config{}).Run(context.Background(), adapter, req)
+	r, err := New(store, provider, Config{ProviderRetryWait: skipProviderRetryWait}).Run(context.Background(), adapter, req)
 	if err != nil || r.Status != "selftest_passed" || r.ModelCalls != 2 || r.CostMicroUSD != 3 || r.ReservedMicroUSD != 10 {
 		t.Fatalf("result=%+v err=%v", r, err)
 	}

@@ -275,7 +275,7 @@ func (d *DeepSeek) GenerateObjective(ctx context.Context, req ObjectiveRequest) 
 		return ObjectiveResult{Duration: time.Since(started)}, &Error{Kind: "response_read_failed", HTTPStatus: resp.StatusCode, BilledUnknown: true}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return ObjectiveResult{Duration: time.Since(started)}, &Error{Kind: "upstream_error", HTTPStatus: resp.StatusCode, Retryable: resp.StatusCode == 429 || resp.StatusCode >= 500, BilledUnknown: true}
+		return ObjectiveResult{Duration: time.Since(started)}, providerHTTPError(resp.StatusCode, resp.Header)
 	}
 	var decoded chatResponse
 	if err := json.Unmarshal(raw, &decoded); err != nil {

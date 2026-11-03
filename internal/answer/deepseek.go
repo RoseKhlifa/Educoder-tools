@@ -253,10 +253,10 @@ func (d *DeepSeek) Generate(ctx context.Context, req Request) (Result, error) {
 		// Receiving response headers does not establish whether generation was
 		// charged. Keep the reservation, and do not automatically repeat a 200
 		// response whose body was interrupted, even when its deadline expired.
-		return Result{Duration: time.Since(started)}, &Error{Kind: "response_read_failed", HTTPStatus: resp.StatusCode, Retryable: resp.StatusCode >= 500, BilledUnknown: true, ResponsePhase: "body", ReadCause: cause, BytesRead: int64(len(respBody)), ExpectedBytes: resp.ContentLength}
+		return Result{Duration: time.Since(started)}, &Error{Kind: "response_read_failed", HTTPStatus: resp.StatusCode, Retryable: resp.StatusCode >= 500, BilledUnknown: true, ResponsePhase: "body", ReadCause: cause, BytesRead: int64(len(respBody)), ExpectedBytes: resp.ContentLength, RetryAfterSeconds: retryAfterSeconds(resp.Header.Get("Retry-After"), time.Now())}
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Result{Duration: time.Since(started)}, &Error{Kind: "upstream_error", HTTPStatus: resp.StatusCode, Retryable: resp.StatusCode == 429 || resp.StatusCode >= 500, BilledUnknown: true}
+		return Result{Duration: time.Since(started)}, providerHTTPError(resp.StatusCode, resp.Header)
 	}
 	var decoded chatResponse
 	if err := json.Unmarshal(respBody, &decoded); err != nil {

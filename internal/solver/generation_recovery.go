@@ -19,11 +19,12 @@ const maxUnproductiveGenerations = 3
 // hashes. Continuation grants more capacity without resetting an ineffective
 // profile or endlessly repeating an identical failed answer.
 type generationRecovery struct {
-	CompactOutput                bool `json:"compact_output,omitempty"`
-	RepeatedCandidates           int  `json:"repeated_candidates,omitempty"`
-	OutputFailures               int  `json:"output_failures,omitempty"`
-	ProviderAvailabilityFailures int  `json:"provider_availability_failures,omitempty"`
-	ProBodyDeadlineFallbackUsed  bool `json:"pro_body_deadline_fallback_used,omitempty"`
+	CompactOutput                bool                     `json:"compact_output,omitempty"`
+	RepeatedCandidates           int                      `json:"repeated_candidates,omitempty"`
+	OutputFailures               int                      `json:"output_failures,omitempty"`
+	ProviderAvailabilityFailures int                      `json:"provider_availability_failures,omitempty"`
+	ProBodyDeadlineFallbackUsed  bool                     `json:"pro_body_deadline_fallback_used,omitempty"`
+	ProviderRetry                answer.AvailabilityRetry `json:"provider_retry,omitempty"`
 }
 
 func (g *generationRecovery) restore(feedback []answer.Feedback) {
@@ -74,22 +75,7 @@ func providerAvailabilityFailure(result answer.Result, err error) bool {
 	if len(result.Candidate.Files) > 0 {
 		return false
 	}
-	var providerErr *answer.Error
-	if !errors.As(err, &providerErr) || !providerErr.Retryable {
-		return false
-	}
-	switch providerErr.Kind {
-	case "upstream_error":
-		return providerErr.HTTPStatus == 429 || providerErr.HTTPStatus >= 500 && providerErr.HTTPStatus < 600
-	case "network_error", "timeout":
-		return providerErr.HTTPStatus == 0
-	case "response_read_failed":
-		// A 200 response whose body was interrupted has a separate, bounded
-		// recovery policy. Never broaden it through this classification.
-		return providerErr.HTTPStatus >= 500 && providerErr.HTTPStatus < 600 && providerErr.ReadCause != "canceled"
-	default:
-		return false
-	}
+	return answer.IsAvailabilityError(err)
 }
 
 func (g *generationRecovery) fallbackAfterProBodyDeadline(cfg Config, profile answer.Profile, err error) bool {

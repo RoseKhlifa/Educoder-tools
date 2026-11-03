@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.78 - 2026-11-03
+
+- Back off transient model failures with cancellable jitter and bounded Retry-After across programming objective and exercise generation
+
 ## 0.1.77 - 2026-11-03
 
 - Retry explicit read-only course and roster metadata without multiplying collection attempts or treating missing pages as empty work
