@@ -238,6 +238,87 @@ await test('browser API uses the Go workbench contract', async t => {
     const courses = await new BrowserApi().courses();
     assert.deepEqual(courses.map(course => course.identifier), ['CLASSROOM_A', 'CLASSROOM_B']);
   });
+  await t.test('course and homework catalogs require explicit lists while accepting real empty and legacy wrapper lists', async () => {
+    const requests = [];
+    const api = new BrowserApi();
+    for (const [method, wrapper, rows, expected] of [
+      ['courses', 'courses', [{ course_identifier: 'COURSE_A', course_name: '课程一' }, { firstCategoryUrl: '/classrooms/COURSE-B/shixun_homework', course_name: '课程二' }, { id: 123, name: '旧课堂' }], ['COURSE_A', 'COURSE-B', '123']],
+      ['homeworks', 'homeworks', [{ homework_id: '42', homework_name: '作业一', challenge_count: 3, finished_challenge_count: 0 }], [42]],
+    ]) {
+      for (const value of [[], { [wrapper]: [] }, { items: [] }, rows, { [wrapper]: rows }, { items: rows }]) {
+        globalThis.fetch = async (url, options) => { requests.push({ url, options }); return envelope(value); };
+        const result = await api[method]('COURSE_A');
+        const inputRows = Array.isArray(value) ? value : value[wrapper] ?? value.items;
+        assert.deepEqual(result.map(row => method === 'courses' ? row.identifier : row.id), inputRows.length ? expected : []);
+        if (method === 'homeworks' && result.length) {
+          assert.equal(result[0].challengeCount, 3);
+          assert.equal(result[0].finishedChallengeCount, 0);
+        }
+      }
+      for (const value of [null, false, 0, '', '[]', {}, { data: null }, { [wrapper]: null }, { [wrapper]: {} }, { items: null }, { items: {} }, { [wrapper]: null, items: [] }]) {
+        globalThis.fetch = async () => envelope(value);
+        await assert.rejects(api[method]('COURSE_A'), error => error instanceof ApiRequestError && error.status === 200 && error.code === 'INVALID_RESPONSE' && !error.isSessionExpired, `${method}: ${JSON.stringify(value)}`);
+      }
+    }
+    for (const { url, options } of requests) {
+      assert.match(url, /^\/api\/courses(?:\/COURSE_A\/homeworks)?$/);
+      assert.equal(options.credentials, 'include');
+      assert.equal(options.body, undefined);
+      assert.ok(options.method === undefined || options.method === 'GET');
+    }
+  });
+  await t.test('invalid catalog rows and duplicate identities fail instead of silently dropping work', async () => {
+    const invalidRows = [null, [], '', false, 123, {}];
+    for (const value of [...invalidRows, { identifier: '' }, { identifier: 'COURSE/A' }, { identifier: ' COURSE_A' }, { identifier: '课程' }, { identifier: true }, { identifier: {} }, { id: -1 }, { id: 1.5 }]) {
+      globalThis.fetch = async () => envelope([{ identifier: 'VALID', name: '课程' }, value]);
+      await assert.rejects(new BrowserApi().courses(), error => error.code === 'INVALID_RESPONSE', JSON.stringify(value));
+    }
+    for (const value of [...invalidRows, { id: 0 }, { id: -1 }, { id: 1.5 }, { id: Number.MAX_SAFE_INTEGER + 1 }, { id: 'NaN' }, { id: '1e2' }, { id: ' 2 ' }, { id: true }, { id: {} }]) {
+      globalThis.fetch = async () => envelope([{ id: 1, name: '作业' }, value]);
+      await assert.rejects(new BrowserApi().homeworks('COURSE_A'), error => error.code === 'INVALID_RESPONSE', JSON.stringify(value));
+    }
+    globalThis.fetch = async () => envelope([{ identifier: 'COURSE_A' }, { course_identifier: 'COURSE_A' }]);
+    await assert.rejects(new BrowserApi().courses(), error => error.code === 'INVALID_RESPONSE');
+    globalThis.fetch = async () => envelope([{ id: 42 }, { homework_id: '42' }]);
+    await assert.rejects(new BrowserApi().homeworks('COURSE_A'), error => error.code === 'INVALID_RESPONSE');
+  });
+  await t.test('known required progress rejects absent or invalid evidence and never manufactures zero or full completion', async () => {
+    const known = { id: 1, requiredProgressKnown: true, requiredChallengeCount: 2, finishedRequiredChallengeCount: 1 };
+    const invalid = [undefined, null, '', '0', false, -1, 0.5, Number.MAX_SAFE_INTEGER + 1];
+    for (const field of ['requiredChallengeCount', 'finishedRequiredChallengeCount']) {
+      for (const value of invalid) {
+        globalThis.fetch = async () => envelope([{ ...known, [field]: value }]);
+        await assert.rejects(new BrowserApi().homeworks('COURSE_A'), error => error.code === 'INVALID_RESPONSE', `${field}: ${JSON.stringify(value)}`);
+      }
+    }
+    globalThis.fetch = async () => envelope([{ ...known, requiredChallengeCount: 0, finishedRequiredChallengeCount: 1 }]);
+    await assert.rejects(new BrowserApi().homeworks('COURSE_A'), error => error.code === 'INVALID_RESPONSE');
+    globalThis.fetch = async () => envelope([{ ...known, requiredChallengeCount: 0, finishedRequiredChallengeCount: 0 }]);
+    const [emptyRequired] = await new BrowserApi().homeworks('COURSE_A');
+    assert.equal(emptyRequired.requiredProgressKnown, true);
+    assert.equal(emptyRequired.requiredChallengeCount, 0);
+    assert.equal(emptyRequired.finishedRequiredChallengeCount, 0);
+  });
+  await t.test('unknown progress remains unresolved and malformed optional counts do not become fabricated zeroes', async () => {
+    globalThis.fetch = async () => envelope([
+      { id: 1, requiredProgressKnown: false, challengeCount: 3, finishedChallengeCount: 3 },
+      { id: 2, requiredProgressKnown: false, challengeCount: null, finishedChallengeCount: '0', requiredChallengeCount: '', finishedRequiredChallengeCount: null },
+      { id: 3, challengeCount: 2, finishedChallengeCount: 3, requiredChallengeCount: 0, finishedRequiredChallengeCount: 1 },
+      { id: 4, challengeCount: 0, challenge_count: 5, finishedChallengeCount: 0, finished_challenge_count: 5 },
+    ]);
+    const rows = await new BrowserApi().homeworks('COURSE_A');
+    assert.ok(rows.every(row => row.requiredProgressKnown === false));
+    assert.equal(rows[0].challengeCount, 3);
+    assert.equal(rows[0].finishedChallengeCount, 3);
+    for (const row of [rows[1], rows[2]]) {
+      assert.equal(row.challengeCount, undefined);
+      assert.equal(row.finishedChallengeCount, undefined);
+      assert.equal(row.requiredChallengeCount, undefined);
+      assert.equal(row.finishedRequiredChallengeCount, undefined);
+    }
+    assert.equal(rows[3].challengeCount, 0);
+    assert.equal(rows[3].finishedChallengeCount, 0);
+  });
   await t.test('course metadata uses the exact student count including zero and never labels members as students', async () => {
     globalThis.fetch = async () => envelope([
       { identifier: 'COURSE_A', name: '课程一', teacherName: ' 示例老师 ', studentCount: 0, members_count: 5 },

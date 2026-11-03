@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.80 - 2026-11-03
+
+- Separate current course work from historical attempts and revalidate stale lists with strict metadata and terminal-version evidence
+
 ## 0.1.79 - 2026-11-03
 
 - Allow audited admin retries with the original user live session shared idempotency and clear pending controls

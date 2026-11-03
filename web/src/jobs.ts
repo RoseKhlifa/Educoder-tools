@@ -63,7 +63,7 @@ function serviceTarget(job: AnswerJob, index: number): string {
   if (!['submit', 'selftest', 'generate_only'].includes(request.mode) || !scope || !['all', 'course', 'homework', 'current', 'exercise'].includes(scope) || scope !== 'all' && !course || ['homework', 'current'].includes(scope) && (!Number.isSafeInteger(homework) || !homework || homework < 1) || scope === 'current' && !game || scope === 'exercise' && (!Number.isSafeInteger(exercise) || !exercise || exercise < 1)) return `record:${index}`;
   return JSON.stringify([request.mode, scope, scope === 'all' ? '' : course, ['homework', 'current'].includes(scope) ? homework : 0, scope === 'current' ? game : '', scope === 'exercise' ? exercise : 0]);
 }
-export function partitionServiceJobs(jobs: AnswerJob[]): { current: AnswerJob[]; history: AnswerJob[] } {
+export function partitionServiceJobs(jobs: AnswerJob[], historicalIds?: ReadonlySet<string>): { current: AnswerJob[]; history: AnswerJob[] } {
   const ordered = jobs.filter(serviceJob).map((job, index) => ({ job, index, target: serviceTarget(job, index) })).sort((a, b) => {
     const created = Date.parse(b.job.created_at) - Date.parse(a.job.created_at);
     return (Number.isFinite(created) ? created : 0) || a.index - b.index;
@@ -71,6 +71,9 @@ export function partitionServiceJobs(jobs: AnswerJob[]): { current: AnswerJob[];
   const activeTargets = new Set(ordered.filter(item => pendingJob(item.job)).map(item => item.target));
   const current: AnswerJob[] = [], history: AnswerJob[] = [], seen = new Set<string>();
   for (const { job, target } of ordered) {
+    if (historicalIds?.has(job.id) && !pendingJob(job) && job.request.scope !== 'exercise') {
+      history.push(job); seen.add(target); continue;
+    }
     const status = serviceStatus(job);
     // The current view is deliberately actionable: it contains work that is
     // still running, waiting for a result, or needs a user/service follow-up.
@@ -83,7 +86,7 @@ export function partitionServiceJobs(jobs: AnswerJob[]): { current: AnswerJob[];
   }
   return { current, history };
 }
-export const currentServiceJobs = (jobs: AnswerJob[]): AnswerJob[] => partitionServiceJobs(jobs).current;
+export const currentServiceJobs = (jobs: AnswerJob[], historicalIds?: ReadonlySet<string>): AnswerJob[] => partitionServiceJobs(jobs, historicalIds).current;
 export type ServiceStatus = 'waiting' | 'processing' | 'support' | 'completed' | 'stopped' | 'submitted' | 'awaiting_review' | 'graded';
 export function serviceStatus(job: AnswerJob): ServiceStatus {
   const publicStatus = record(job.result).service_status ?? record(job.progress).service_status;
@@ -141,8 +144,8 @@ export function renderServiceJob(job: AnswerJob, courses: Course[] = [], histori
   const submitted = job.request.scope === 'exercise' && ['submitted', 'awaiting_review', 'graded'].includes(status);
   return `<article class="service-job service-job-compact hw-card status-${status}${historical ? ' service-job-history' : ''}" data-service-record="${historical ? 'history' : 'current'}"><div class="hw-top job-heading"><div class="hw-title"><span class="job-symbol" aria-hidden="true">${status === 'completed' || submitted ? '✓' : status === 'support' ? '·' : '◌'}</span><div><h3>${e(jobTitle(job, courses))}</h3><p class="meta">${e(dateTime(job.created_at))} · ${historical ? '本次任务' : '开始时间'}</p></div></div><div class="hw-badges"><span class="badge ${historical ? 'stopped' : status}">${historical ? displayLabel(status, true) : serviceLabel(job)}</span></div></div><div class="hw-progress job-footer"><div class="job-progress">${submitted ? '' : `<div class="progress-track bar-wrap" aria-hidden="true"><span class="progress-fill" style="width:${progress.percent}%"></span></div>`}<span>${historical ? '本次进度 · ' : ''}${progressText(job)}</span></div>${!historical && recoveryMessage(job) ? `<p class="job-recovery-message" role="status">${e(recoveryNotice(job))}</p>` : ''}<button class="text-button" data-job-detail="${e(job.id)}"${historical ? ' data-job-history="true"' : ''}>${historical ? '查看记录' : '查看详情'}</button>${renderJobActions(job, historical, action)}</div></article>`;
 }
-export function renderJobs(jobs: AnswerJob[], courses: Course[] = [], historyOpen = false, actions: ReadonlyMap<string, JobActionState> = new Map()): string {
-  const { current, history } = partitionServiceJobs(jobs);
+export function renderJobs(jobs: AnswerJob[], courses: Course[] = [], historyOpen = false, actions: ReadonlyMap<string, JobActionState> = new Map(), historicalIds?: ReadonlySet<string>): string {
+  const { current, history } = partitionServiceJobs(jobs, historicalIds);
   if (!current.length && !history.length) return '<div class="empty"><span class="empty-circle">✓</span><h3>每一项任务，都会在这里记录</h3><p>先选择课程，接下来的事情交给我们。</p></div>';
   const submitted = current.filter(job => ['submitted', 'awaiting_review', 'graded'].includes(serviceStatus(job))).length;
   const retryable = current.filter(canRetryJob).length;
@@ -150,7 +153,7 @@ export function renderJobs(jobs: AnswerJob[], courses: Course[] = [], historyOpe
   const followUp = current.filter(job => serviceStatus(job) === 'support').length;
   const reconciling = current.filter(job => ['queued', 'reconciling', 'continuing'].includes(recoveryState(job))).length;
   const blocked = current.filter(job => recoveryState(job) === 'blocked').length;
-  return `<section class="service-progress-list panel-box" aria-label="完成进度"><div class="service-progress-summary panel-toolbar"><div><h2>当前任务 <span class="count">${current.length}</span></h2><p>${processing ? `<span>处理中 <b>${processing}</b></span>` : ''}${reconciling ? `<span>复核中 <b>${reconciling}</b></span>` : ''}${blocked ? `<span>复核未通过 <b>${blocked}</b></span>` : ''}${followUp ? `<span>待跟进 <b>${followUp}</b></span>` : ''}${submitted ? `<span>已交卷 <b>${submitted}</b></span>` : ''}${retryable ? `<span>可重新执行 <b>${retryable}</b></span>` : ''}</p></div></div>${current.length ? `<div class="service-jobs hw-list" data-service-current>${current.map(job => renderServiceJob(job, courses, false, actions.get(job.id))).join('')}</div>` : '<div class="progress-empty"><strong>当前没有需要处理的任务</strong><span>已完成的内容已收进历史记录。</span></div>'}${history.length ? `<details class="service-history" data-service-history${historyOpen ? ' open' : ''}><summary><span>历史记录 <span class="count">${history.length}</span></span><span class="service-history-hint">查看已完成和之前的任务</span></summary><p class="service-history-note">这里保留每次任务的结果，当前需要处理的内容会显示在上方。</p><div class="service-jobs hw-list" data-service-history-list>${history.map(job => renderServiceJob(job, courses, true)).join('')}</div></details>` : ''}</section>`;
+  return `<section class="service-progress-list panel-box" aria-label="完成进度"><div class="service-progress-summary panel-toolbar"><div><h2>当前任务 <span class="count">${current.length}</span></h2><p>${processing ? `<span>处理中 <b>${processing}</b></span>` : ''}${reconciling ? `<span>复核中 <b>${reconciling}</b></span>` : ''}${blocked ? `<span>复核未通过 <b>${blocked}</b></span>` : ''}${followUp ? `<span>待跟进 <b>${followUp}</b></span>` : ''}${submitted ? `<span>已交卷 <b>${submitted}</b></span>` : ''}${retryable ? `<span>可重新执行 <b>${retryable}</b></span>` : ''}</p></div></div>${current.length ? `<div class="service-jobs hw-list" data-service-current>${current.map(job => renderServiceJob(job, courses, false, actions.get(job.id))).join('')}</div>` : '<div class="progress-empty"><strong>当前没有需要处理的任务</strong><span>已结束的执行记录已收进历史记录。</span></div>'}${history.length ? `<details class="service-history" data-service-history${historyOpen ? ' open' : ''}><summary><span>历史记录 <span class="count">${history.length}</span></span><span class="service-history-hint">查看已完成和之前的任务</span></summary><p class="service-history-note">这里保留每次任务的结果，当前需要处理的内容会显示在上方。</p><div class="service-jobs hw-list" data-service-history-list>${history.map(job => renderServiceJob(job, courses, true)).join('')}</div></details>` : ''}</section>`;
 }
 export function renderServiceDetail(job: AnswerJob, courses: Course[] = [], historical = false, action?: JobActionState): string {
   const data = { ...record(job.progress), ...record(job.result) };

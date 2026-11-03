@@ -57,6 +57,32 @@ function count(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
 }
 
+function invalidCatalogResponse(): never {
+  throw new ApiRequestError('课程或作业数据暂时不可用，请刷新后重试', 200, 'INVALID_RESPONSE');
+}
+
+function catalogRows(value: unknown, key: 'courses' | 'homeworks'): unknown[] {
+  if (Array.isArray(value)) return value;
+  const item = asRecord(value);
+  const rows = Object.prototype.hasOwnProperty.call(item, key) ? item[key] : item.items;
+  // Only an explicit list proves an empty catalog. A missing list is not zero work.
+  return Array.isArray(rows) ? rows : invalidCatalogResponse();
+}
+
+function catalogRecord(value: unknown): Raw {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Raw : invalidCatalogResponse();
+}
+
+function uniqueCatalog<T>(rows: unknown[], normalize: (value: unknown) => T, identity: (value: T) => string | number): T[] {
+  const seen = new Set<string | number>();
+  return rows.map(row => {
+    const item = normalize(row), id = identity(item);
+    if (seen.has(id)) return invalidCatalogResponse();
+    seen.add(id);
+    return item;
+  });
+}
+
 function unwrap<T>(payload: unknown, status: number, requestId?: string): T {
   const root = asRecord(payload);
   const envelope = Object.prototype.hasOwnProperty.call(root, 'data') || Object.prototype.hasOwnProperty.call(root, 'error');
@@ -101,13 +127,17 @@ function normalizeUser(value: unknown): User {
 }
 
 function normalizeCourse(value: unknown): Course {
-  const item = asRecord(value);
+  const item = catalogRecord(value);
   const url = text(item.first_category_url || item.firstCategoryUrl);
   const urlIdentifier = url.match(/\/classrooms\/([^/]+)/)?.[1];
+  const identifierValue = item.identifier || item.course_identifier || urlIdentifier || item.id;
+  const identifier = typeof identifierValue === 'string' ? identifierValue
+    : identifierValue === item.id && typeof item.id === 'number' && Number.isSafeInteger(item.id) && item.id > 0 ? String(item.id) : '';
+  if (!/^[A-Za-z0-9_-]+$/.test(identifier)) return invalidCatalogResponse();
   return {
-    identifier: text(item.identifier || item.course_identifier || urlIdentifier || item.id),
+    identifier,
     name: text(item.name || item.course_name, '未命名课堂'),
-    homeworkCount: number(item.homeworkCount || item.homework_count || item.homework_commons_count),
+    homeworkCount: count(item.homeworkCount ?? item.homework_count ?? item.homework_commons_count),
     teacherName: typeof item.teacherName === 'string' ? item.teacherName.trim() || undefined : undefined,
     // members_count includes instructors upstream; it is not a student count.
     studentCount: count(item.studentCount),
@@ -199,21 +229,38 @@ function normalizeQuestionBankSummary(value: unknown): QuestionBankSummary {
 }
 
 function normalizeHomework(value: unknown): Homework {
-  const item = asRecord(value);
+  const item = catalogRecord(value);
+  const idValue = item.id || item.homework_id;
+  const id = typeof idValue === 'number' ? idValue : typeof idValue === 'string' && /^\d+$/.test(idValue) ? Number(idValue) : 0;
+  if (!Number.isSafeInteger(id) || id <= 0) return invalidCatalogResponse();
+  let challengeCount = count(item.challengeCount ?? item.challenge_count);
+  let finishedChallengeCount = count(item.finishedChallengeCount ?? item.finished_challenge_count);
+  let requiredChallengeCount = count(item.requiredChallengeCount);
+  let finishedRequiredChallengeCount = count(item.finishedRequiredChallengeCount);
+  const requiredProgressKnown = item.requiredProgressKnown === true;
+  if (requiredProgressKnown && (requiredChallengeCount === undefined || finishedRequiredChallengeCount === undefined
+    || finishedRequiredChallengeCount > requiredChallengeCount)) return invalidCatalogResponse();
+  if (challengeCount !== undefined && finishedChallengeCount !== undefined && finishedChallengeCount > challengeCount) {
+    challengeCount = finishedChallengeCount = undefined;
+  }
+  if (!requiredProgressKnown && requiredChallengeCount !== undefined && finishedRequiredChallengeCount !== undefined
+    && finishedRequiredChallengeCount > requiredChallengeCount) {
+    requiredChallengeCount = finishedRequiredChallengeCount = undefined;
+  }
   const statusValue = item.status;
   const status = Array.isArray(statusValue)
     ? statusValue.map(value => text(value)).filter(Boolean).join('、')
     : text(statusValue, text(item.status_text));
   return {
-    id: number(item.id || item.homework_id) ?? 0,
+    id,
     name: text(item.name || item.homework_name, '未命名任务'),
     shixunIdentifier: text(item.shixunIdentifier || item.shixun_identifier) || undefined,
     status,
-    challengeCount: number(item.challengeCount || item.challenge_count),
-    finishedChallengeCount: number(item.finishedChallengeCount || item.finished_challenge_count),
-    requiredChallengeCount: number(item.requiredChallengeCount),
-    finishedRequiredChallengeCount: number(item.finishedRequiredChallengeCount),
-    requiredProgressKnown: item.requiredProgressKnown === true,
+    challengeCount,
+    finishedChallengeCount,
+    requiredChallengeCount,
+    finishedRequiredChallengeCount,
+    requiredProgressKnown,
     deadline: text(item.deadline || item.end_time) || undefined,
     canEnter: item.canEnter === undefined && item.is_enter_shixun === undefined
       ? undefined
@@ -373,9 +420,7 @@ export class BrowserApi implements EducoderApi {
 
   async courses(): Promise<Course[]> {
     const raw = await this.request<unknown>('/api/courses');
-    const payload = asRecord(raw);
-    const rows = Array.isArray(raw) ? raw : (Array.isArray(payload.courses) ? payload.courses : Array.isArray(payload.items) ? payload.items : []);
-    return rows.map(normalizeCourse).filter(course => course.identifier);
+    return uniqueCatalog(catalogRows(raw, 'courses'), normalizeCourse, course => course.identifier);
   }
 
   async questionBankSummary(): Promise<QuestionBankSummary> {
@@ -388,9 +433,7 @@ export class BrowserApi implements EducoderApi {
 
   async homeworks(courseIdentifier: string): Promise<Homework[]> {
     const raw = await this.request<unknown>(`/api/courses/${encodeURIComponent(courseIdentifier)}/homeworks`);
-    const payload = asRecord(raw);
-    const rows = Array.isArray(raw) ? raw : (Array.isArray(payload.homeworks) ? payload.homeworks : Array.isArray(payload.items) ? payload.items : []);
-    return rows.map(normalizeHomework).filter(homework => homework.id > 0);
+    return uniqueCatalog(catalogRows(raw, 'homeworks'), normalizeHomework, homework => homework.id);
   }
 
   async exercises(courseIdentifier: string): Promise<{ items: Exercise[]; courseIdentifier?: string }> {

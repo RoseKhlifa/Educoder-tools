@@ -21,6 +21,7 @@ export interface CourseCacheEvent {
 
 export interface CachedCourseDetails<T> {
   data: T[];
+  requestedAt: number;
   updatedAt: number;
   stale: boolean;
 }
@@ -39,7 +40,13 @@ type Lane = 'background' | 'foreground';
 
 interface Entry {
   data: Data;
+  requestedAt: number;
   updatedAt: number;
+}
+
+interface BackgroundRetry {
+  failures: number;
+  retryAt: number;
 }
 
 interface Task {
@@ -59,12 +66,13 @@ interface Session {
   pending: Map<string, Task>;
   foreground: Task[];
   background: Task[];
+  backgroundRetries: Map<string, BackgroundRetry>;
   active: number;
   activeBackground: number;
 }
 
 const newSession = (): Session => ({
-  entries: new Map(), pending: new Map(), foreground: [], background: [],
+  entries: new Map(), pending: new Map(), foreground: [], background: [], backgroundRetries: new Map(),
   active: 0, activeBackground: 0,
 });
 
@@ -106,16 +114,31 @@ export class CourseDetailsCache {
     for (const identifier of new Set(identifiers)) {
       if (!identifier) continue;
       for (const kind of ['homeworks', 'exercises'] as const) {
-        // A failed background read leaves the entry absent (or the old data intact).
-        void this.get(kind, identifier, false, 'background').catch(() => {});
+        this.scheduleBackground(kind, identifier);
       }
     }
+  }
+
+  /** Refresh visible homework metadata without automatically refetching exams. */
+  revalidateHomeworks(identifiers: string[]): void {
+    for (const identifier of new Set(identifiers)) {
+      if (identifier) this.scheduleBackground('homeworks', identifier);
+    }
+  }
+
+  private scheduleBackground(kind: Kind, identifier: string): void {
+    const retry = this.session.backgroundRetries.get(`${kind}:${identifier}`);
+    if (retry && this.clock() < retry.retryAt) return;
+    // Failures preserve previous data; a cooldown prevents polling from turning
+    // an absent or stale entry into a continuous stream of failed reads.
+    void this.get(kind, identifier, false, 'background').catch(() => {});
   }
 
   clear(): void {
     const previous = this.session;
     this.session = newSession();
     previous.entries.clear();
+    previous.backgroundRetries.clear();
     previous.foreground.length = 0;
     previous.background.length = 0;
     for (const task of previous.pending.values()) {
@@ -194,16 +217,21 @@ export class CourseDetailsCache {
     task.status = 'running';
     session.active++;
     if (task.lane === 'background') session.activeBackground++;
+    let requestedAt = 0;
     void Promise.resolve(undefined).then((): Promise<Data> => {
       if (session !== this.session) throw new CourseCacheClearedError();
       const loader = task.kind === 'homeworks' ? this.loaders.homeworks : this.loaders.exercises;
+      // A queued request may start much later than its enqueue time. Completion
+      // time also cannot prove whether this read preceded a job's final result.
+      requestedAt = this.clock();
       return loader(task.identifier);
     }).then(
       data => {
         const current = session === this.session;
         const updatedAt = this.clock();
         if (current) {
-          session.entries.set(task.key, { data, updatedAt });
+          session.entries.set(task.key, { data, requestedAt, updatedAt });
+          session.backgroundRetries.delete(task.key);
           this.onChange?.({ kind: task.kind, identifier: task.identifier, state: 'success', updatedAt, hasPreviousData: true });
         }
         this.finish(session, task);
@@ -211,7 +239,12 @@ export class CourseDetailsCache {
       },
       error => {
         const current = session === this.session;
-        if (current) this.onChange?.({ kind: task.kind, identifier: task.identifier, state: 'error', hasPreviousData: Boolean(session.entries.get(task.key)) });
+        if (current) {
+          const failures = (session.backgroundRetries.get(task.key)?.failures ?? 0) + 1;
+          const delay = Math.min(300_000, 30_000 * 2 ** Math.min(failures - 1, 4));
+          session.backgroundRetries.set(task.key, { failures, retryAt: this.clock() + delay });
+          this.onChange?.({ kind: task.kind, identifier: task.identifier, state: 'error', hasPreviousData: Boolean(session.entries.get(task.key)) });
+        }
         this.finish(session, task);
         if (current) task.reject(error);
       },

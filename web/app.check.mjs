@@ -16,7 +16,7 @@ class Element {
 }
 class Input extends Element {}
 class Document {
-  items = []; html = ''; listeners = new Map(); activeElement = null; assetRevision = '';
+  items = []; html = ''; listeners = new Map(); activeElement = null; assetRevision = ''; visibilityState = 'visible';
   constructor() { const document = this; this.root = { get innerHTML() { return document.html; }, set innerHTML(value) {
     document.html = value; document.items.forEach(item => { item.isConnected = false; });
     const modalStart = value.indexOf('role="dialog"');
@@ -54,8 +54,8 @@ const supportList=(items,next_cursor='')=>({items,next_cursor,limit:30});
 const fillSupport=(page,subject='测试问题',body='测试反馈内容',category='task')=>{page.get('#ticket-subject').value=subject;page.get('#ticket-category').value=category;page.get('#ticket-body').value=body;};
 let version=0;
 async function app(overrides={}, options={}) {
-  const document=new Document(),requests=[],timers=new Map();let timerId=0,reloadCount=0;document.assetRevision=options.assetRevision||'';
-  globalThis.HTMLInputElement=Input;globalThis.document=document;globalThis.window={location:{reload(){reloadCount++;}}};
+  const document=new Document(),requests=[],timers=new Map(),windowListeners=new Map();let timerId=0,reloadCount=0;document.assetRevision=options.assetRevision||'';
+  globalThis.HTMLInputElement=Input;globalThis.document=document;globalThis.window={location:{reload(){reloadCount++;}},addEventListener(name,handler){windowListeners.set(name,handler);}};
   globalThis.setTimeout=(handler,delay)=>{const id=++timerId;timers.set(id,{handler,delay});return id;};globalThis.clearTimeout=id=>timers.delete(id);
   globalThis.localStorage=globalThis.sessionStorage={setItem(){throw new Error('no browser persistence');}};
   globalThis.fetch=async(url,options)=>{
@@ -73,7 +73,7 @@ async function app(overrides={}, options={}) {
     throw new Error(`Unexpected URL ${url}`);
   };
   await import(`./dist/app.js?test=${++version}`);await settle();
-  return {requests,timers,document,html:()=>document.html,reloads:()=>reloadCount,get(selector){const element=document.querySelector(selector);assert.ok(element,`Missing ${selector}`);return element;},async tick(){const tasks=[...timers.entries()];for(const[id,timer]of tasks){timers.delete(id);timer.handler();}await settle();}};
+  return {requests,timers,document,windowListeners,html:()=>document.html,reloads:()=>reloadCount,get(selector){const element=document.querySelector(selector);assert.ok(element,`Missing ${selector}`);return element;},async tick(){const tasks=[...timers.entries()];for(const[id,timer]of tasks){timers.delete(id);timer.handler();}await settle();}};
 }
 await test('consumer course service and administrator boundary',async t=>{
   await t.test('real support envelopes update recovery notice from active read to blocked without announcing a retry', async () => {
@@ -308,7 +308,7 @@ await test('consumer course service and administrator boundary',async t=>{
       job({id:'older-running',request:first,status:'running',can_retry:false,result:{service_status:'processing'}}),
       job({id:'global-support',request:{scope:'all',mode:'submit'},status:'support',can_retry:false,result:{service_status:'support'}}),
     ]) {
-      const page=await app({'/api/jobs':()=>ok({jobs:[newer,prior]})});
+      const page=await app({'/api/jobs':()=>ok({jobs:[newer,prior]}),'/api/courses/COURSE_A/homeworks':()=>ok([11,12].map(id=>({id,name:`未完成作业 ${id}`,requiredProgressKnown:true,requiredChallengeCount:2,finishedRequiredChallengeCount:0})))});
       assert.equal(page.get('[data-select-course="COURSE_A"]').disabled,true,prior.id);
       assert.equal(page.get('[data-action="start-all"]').disabled,true,prior.id);
       assert.equal(page.get('[data-select-course="COURSE_B"]').disabled,prior.request.scope==='all',prior.id);
@@ -414,13 +414,13 @@ await test('consumer course service and administrator boundary',async t=>{
     assert.match(row, /可处理/); assert.doesNotMatch(row, /3 份/);
     assert.match(page.html(), /<th>未完成作业<\/th>/); assert.doesNotMatch(page.html(), /<th>作业<\/th>/);
   });
-  await t.test('empty successful required list is an authoritative completed course and disables scheduling', async () => {
+  await t.test('an explicit empty actionable list means no current work and disables scheduling without claiming historic success', async () => {
     const page = await app({
       '/api/courses/COURSE_A/homeworks': () => ok([]),
       '/api/courses/COURSE_B/homeworks': () => ok([]),
     });
     const row = page.html().match(/<tr class="course-row[\s\S]*?data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '';
-    assert.match(row, /homework-count"[^>]*>0<\/span>/); assert.match(row, /已完成/);
+    assert.match(row, /homework-count"[^>]*>0<\/span>/); assert.match(row, /暂无待办/); assert.doesNotMatch(row, />已完成</);
     assert.equal(page.get('[data-select-course="COURSE_A"]').disabled, true);
     assert.equal(page.get('[data-action="start-all"]').disabled, true);
   });
@@ -436,12 +436,62 @@ await test('consumer course service and administrator boundary',async t=>{
       const page = await app({ '/api/jobs': () => ok({ jobs: [source] }), '/api/courses/COURSE_A/homeworks': () => ok([]), '/api/courses/COURSE_B/homeworks': () => ok([]) });
       const row = page.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '';
       assert.match(row, /homework-count"[^>]*>0<\/span>/);
-      assert.match(row, /badge completed[^>]*>已完成</); assert.doesNotMatch(row, /服务处理中|待跟进/);
+      assert.match(row, /badge completed[^>]*>暂无待办</); assert.doesNotMatch(row, /服务处理中|待跟进/);
       assert.equal(page.get('[data-select-course="COURSE_A"]').disabled, true);
       page.get('[data-nav="progress"]').dispatch('click'); await settle();
-      assert.match(page.html(), /13 \/ 19 份作业/); assert.match(page.html(), /待跟进/);
+      const history = page.html().split('data-service-history-list')[1] || '';
+      assert.match(history, /13 \/ 19 份作业/); assert.match(history, /当次未完成/);
+      assert.match(page.html(), /当前没有需要处理的任务/); assert.doesNotMatch(page.html(), /待跟进 <b>1<\/b>/);
       assert.doesNotMatch(page.html(), /服务处理中|处理中 <b>1<\/b>/);
     }
+  });
+  await t.test('zero current course work retires redacted old support while the recent summary shows the newer completed service', async () => {
+    const old = job({ id: 'old-course-support', status: 'failed', request: { scope: 'course', course: 'COURSE_A', mode: 'submit' }, created_at: '2026-11-02T12:00:00Z', updated_at: '2026-11-02T13:00:00Z', result: { service_status: 'support', total_homeworks: 10, completed_homeworks: 6, homeworks: [{ title: '当时未完成的作业', status: 'needs_service' }] } });
+    const latest = job({ id: 'newer-completed-course', status: 'completed', request: { scope: 'course', course: 'COURSE_B', mode: 'submit' }, created_at: '2026-11-03T10:00:00Z', result: { service_status: 'completed', total_homeworks: 19, completed_homeworks: 19 } });
+    const page = await app({ '/api/jobs': () => ok({ jobs: [old, latest] }), '/api/courses/COURSE_A/homeworks': () => ok([]), '/api/courses/COURSE_B/homeworks': () => ok([]) });
+    const oldCourse = page.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '';
+    assert.match(oldCourse, /homework-count"[^>]*>0<\/span>/); assert.match(oldCourse, /暂无待办/); assert.doesNotMatch(oldCourse, /待跟进/);
+    assert.match(page.html(), /<span class="l">待跟进<\/span><span class="n">0<\/span>/);
+    assert.match(page.html(), /最近任务进度<\/div><div class="v">100%/); assert.doesNotMatch(page.html(), /<div class="v">60%/);
+    page.get('[data-nav="progress"]').dispatch('click'); await settle();
+    assert.match(page.html(), /当前没有需要处理的任务/);
+    const history = page.html().split('data-service-history-list')[1] || '';
+    assert.match(history, /6 \/ 10 份作业/); assert.match(history, /当次未完成/); assert.match(history, /19 \/ 19 份作业/);
+    page.get('[data-job-detail="old-course-support"]').dispatch('click');
+    const dialog = page.html().slice(page.html().indexOf('role="dialog"'));
+    assert.match(dialog, /历史记录：以下为本次任务/); assert.match(dialog, /当时未完成的作业|当次未完成/); assert.doesNotMatch(dialog, /本次服务已经完成/);
+    assert.equal(old.status, 'failed'); assert.equal(old.result.completed_homeworks, 6);
+    assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
+  });
+  await t.test('the latest historical failed service is labelled as history in the rail without changing its partial progress', async () => {
+    const source = job({ id: 'latest-old-support', status: 'failed', result: { service_status: 'support', total_homeworks: 10, completed_homeworks: 6, homeworks: [{ title: '旧作业记录', status: 'needs_service' }] } });
+    const page = await app({ '/api/jobs': () => ok({ jobs: [source] }), '/api/courses/COURSE_A/homeworks': () => ok([]), '/api/courses/COURSE_B/homeworks': () => ok([]) });
+    const rail = page.html().split('class="current-service"')[1]?.split('</section>')[0] || '';
+    assert.match(rail, /<h2>历史执行记录<\/h2>/);
+    assert.match(rail, /当前课程已无对应待办，这里保留当次执行进度。/);
+    assert.match(rail, /<strong>6<\/strong><span>\/ 10 份作业<\/span>/);
+    assert.doesNotMatch(rail, /待跟进|已完成|任务已完成/);
+    assert.match(page.html(), /最近任务进度<\/div><div class="v">60%<\/div><div class="h">历史执行记录/);
+    assert.equal(source.status, 'failed'); assert.equal(source.result.completed_homeworks, 6);
+    assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
+  });
+  await t.test('a homework read started before observing a terminal job cannot archive that job even when it completes later', async () => {
+    const jobs = deferred(), earlier = deferred(), afterObservation = deferred(); let reads = 0;
+    const source = job({ id: 'terminal-after-read-start', status: 'failed', result: { service_status: 'support', total_homeworks: 10, completed_homeworks: 6, homeworks: [{ title: '旧作业记录', status: 'needs_service' }] } });
+    const page = await app({ '/api/jobs': () => jobs.promise, '/api/courses/COURSE_A/homeworks': () => ++reads === 1 ? earlier.promise : afterObservation.promise, '/api/courses/COURSE_B/homeworks': () => ok([]) });
+    assert.equal(reads, 1);
+    jobs.resolve(ok({ jobs: [source] })); await settle();
+    assert.match(page.html(), /<span class="l">待跟进<\/span><span class="n">1<\/span>/);
+    earlier.resolve(ok([])); await settle();
+    assert.equal(reads, 2, 'observing a new terminal version requires a read started afterwards');
+    assert.match(page.html(), /<span class="l">待跟进<\/span><span class="n">1<\/span>/);
+    const pendingRow = page.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '';
+    assert.match(pendingRow, /正在更新/); assert.doesNotMatch(pendingRow, /badge completed|>暂无待办</);
+    afterObservation.resolve(ok([])); await settle();
+    assert.match(page.html(), /<span class="l">待跟进<\/span><span class="n">0<\/span>/);
+    assert.match(page.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '', /暂无待办/);
+    assert.match(page.html(), /历史执行记录/); assert.equal(source.result.completed_homeworks, 6);
+    assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
   });
   await t.test('zero cannot claim completion while reads are absent, failed or execution remains active', async () => {
     const source = job({ status: 'support', result: { service_status: 'support' } });
@@ -463,11 +513,11 @@ await test('consumer course service and administrator boundary',async t=>{
       '/api/courses/COURSE_A/homeworks': () => ++reads === 1 ? ok([]) : refresh.promise,
     });
     const row = () => page.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '';
-    assert.match(row(), /badge completed[^>]*>已完成</);
+    assert.match(row(), /badge completed[^>]*>暂无待办</);
     page.get('[data-action="refresh"]').dispatch('click'); await settle();
     assert.match(row(), /正在更新/); assert.doesNotMatch(row(), /badge completed|>可安排</);
     refresh.resolve(failure(503, 'UPSTREAM', 'private error')); await settle();
-    assert.match(row(), /homework-count stale"[^>]*>0<\/span>/); assert.match(row(), /待跟进/);
+    assert.match(row(), /homework-count stale"[^>]*>0<\/span>/); assert.match(row(), /更新未完成/);
     assert.doesNotMatch(row(), /badge completed|>已完成<|private error/);
   });
   await t.test('running to support updates course, list, detail and idle polling with progress preserved', async () => {
@@ -495,7 +545,7 @@ await test('consumer course service and administrator boundary',async t=>{
     });
     assert.match(page.html(), /homework-count"[^>]*>1<\/span>/);
     step = 1; page.get('[data-action="refresh"]').dispatch('click'); await settle();
-    assert.match(page.html(), /homework-count"[^>]*>0<\/span>/); assert.match(page.html(), /已完成/);
+    assert.match(page.html(), /homework-count"[^>]*>0<\/span>/); assert.match(page.html(), /暂无待办/);
   });
   await t.test('a terminal job transition forces a fresh homework list and updates the course row', async () => {
     let jobStep = 0, homeworkStep = 0;
@@ -508,7 +558,7 @@ await test('consumer course service and administrator boundary',async t=>{
     });
     assert.match(page.html(), /homework-count"[^>]*>1<\/span>/);
     jobStep = 1; homeworkStep = 1; await page.tick();
-    assert.match(page.html(), /homework-count"[^>]*>0<\/span>/); assert.match(page.html(), /已完成/);
+    assert.match(page.html(), /homework-count"[^>]*>0<\/span>/); assert.match(page.html(), /暂无待办/);
     assert.ok(page.requests.filter(item => item.url === '/api/courses/COURSE_A/homeworks').length >= 2);
   });
   await t.test('a terminal refresh updates an already open course dialog and keeps its active tab focused', async () => {
@@ -548,19 +598,61 @@ await test('consumer course service and administrator boundary',async t=>{
     assert.equal(page.get('[data-select-course="COURSE_A"]').disabled, true);
     failed = true; page.get('[data-action="refresh"]').dispatch('click'); await settle();
     const row = page.html().match(/<tr class="course-row[\s\S]*?data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '';
-    assert.match(row, /homework-count stale"[^>]*>0<\/span>/); assert.match(row, /待更新/); assert.doesNotMatch(row, /badge completed|>已完成</);
+    assert.match(row, /homework-count stale"[^>]*>0<\/span>/); assert.match(row, /更新未完成/); assert.doesNotMatch(row, /badge completed|>已完成</);
     assert.equal(page.get('[data-select-course="COURSE_A"]').disabled, false); assert.equal(page.get('[data-action="start-all"]').disabled, false);
     assert.doesNotMatch(page.html(), /private stale data/);
   });
-  await t.test('expiration of a verified zero exposes stale status and permits a new arrangement', async () => {
+  await t.test('idle polling renews expired course facts without reloading fresh lists, exams or submitting work', async () => {
     const actualNow = Date.now; let now = actualNow(); Date.now = () => now;
     try {
       const page = await app({ '/api/courses/COURSE_A/homeworks': () => ok([]), '/api/courses/COURSE_B/homeworks': () => ok([]) });
       assert.equal(page.get('[data-select-course="COURSE_A"]').disabled, true);
+      await page.tick();
+      assert.equal(page.requests.filter(item => item.url.endsWith('/homeworks')).length, 2, 'fresh homework lists are reused');
       now += 120_001; await page.tick();
       const row = page.html().match(/<tr class="course-row[\s\S]*?data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '';
-      assert.match(row, /homework-count stale"[^>]*>0<\/span>/); assert.match(row, /待更新/); assert.doesNotMatch(row, /badge completed|>已完成</);
-      assert.equal(page.get('[data-select-course="COURSE_A"]').disabled, false); assert.equal(page.get('[data-action="start-all"]').disabled, false);
+      assert.match(row, /homework-count"[^>]*>0<\/span>/); assert.match(row, /暂无待办/); assert.doesNotMatch(row, /stale|>已完成</);
+      assert.equal(page.get('[data-select-course="COURSE_A"]').disabled, true); assert.equal(page.get('[data-action="start-all"]').disabled, true);
+      assert.equal(page.requests.filter(item => item.url.endsWith('/homeworks')).length, 4);
+      assert.equal(page.requests.filter(item => item.url.endsWith('/exercises')).length, 2, 'background course status renewal must not prefetch exams again');
+      assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
+    } finally { Date.now = actualNow; }
+  });
+  await t.test('expired facts remain explicitly updating and failed automatic refreshes respect cooldown before recovery', async () => {
+    const actualNow = Date.now; let now = actualNow(); Date.now = () => now;
+    const refresh = deferred(); let reads = 0;
+    try {
+      const page = await app({ '/api/courses/COURSE_A/homeworks': () => ++reads === 1 ? ok([]) : reads === 2 ? refresh.promise : ok([]), '/api/courses/COURSE_B/homeworks': () => ok([]) });
+      now += 120_001; await page.tick();
+      const row = () => page.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '';
+      assert.equal(reads, 2); assert.match(row(), /正在更新/); assert.match(row(), /homework-count stale"[^>]*>0<\/span>/);
+      assert.doesNotMatch(row(), /badge completed|>暂无待办<|>已完成</);
+      refresh.resolve(failure(503, 'UPSTREAM', 'private refresh trace')); await settle();
+      assert.match(row(), /更新未完成/); assert.doesNotMatch(row(), /badge completed|private refresh trace/);
+      await page.tick(); assert.equal(reads, 2, 'an unchanged poll must not repeat a failed metadata read');
+      now += 29_999; await page.tick(); assert.equal(reads, 2);
+      now += 1; await page.tick(); assert.equal(reads, 3);
+      assert.match(row(), /暂无待办/); assert.doesNotMatch(row(), /stale|更新未完成/);
+      assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
+    } finally { Date.now = actualNow; }
+  });
+  await t.test('hidden pages pause network polling and visible or focused pages resume stale metadata reads once', async () => {
+    const actualNow = Date.now; let now = actualNow(); Date.now = () => now;
+    try {
+      const page = await app({ '/api/courses/COURSE_A/homeworks': () => ok([]), '/api/courses/COURSE_B/homeworks': () => ok([]) });
+      page.document.visibilityState = 'hidden'; now += 120_001;
+      const beforeHidden = page.requests.length; await page.tick();
+      assert.equal(page.requests.length, beforeHidden, 'a hidden tab must not poll APIs');
+      page.document.listeners.get('visibilitychange')(); await settle();
+      page.windowListeners.get('focus')(); await settle(); assert.equal(page.requests.length, beforeHidden);
+      page.document.visibilityState = 'visible'; page.document.listeners.get('visibilitychange')(); await settle();
+      assert.equal(page.requests.filter(item => item.url.endsWith('/homeworks')).length, 4);
+      assert.equal(page.requests.filter(item => item.url.endsWith('/exercises')).length, 2);
+      assert.match(page.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '', /暂无待办/);
+      now += 120_001; page.windowListeners.get('focus')(); await settle();
+      assert.equal(page.requests.filter(item => item.url.endsWith('/homeworks')).length, 6);
+      assert.equal(page.requests.filter(item => item.url.endsWith('/exercises')).length, 2);
+      assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
     } finally { Date.now = actualNow; }
   });
   await t.test('login prefetches both lists and opening cached details does not wait or request again', async () => {
