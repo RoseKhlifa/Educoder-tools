@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { canRetryJob, canCancelJob, currentServiceJobs, jobProgress, partitionServiceJobs, renderJobs, renderServiceDetail, renderServiceJob, serviceStatus } from './dist/jobs.js';
+import { canRetryJob, canCancelJob, currentServiceJobs, jobProgress, partitionServiceJobs, renderJobs, renderServiceDetail, renderServiceJob, serviceLabel, serviceStatus } from './dist/jobs.js';
 
 const job = (id, day, extra = {}) => ({ id, status: 'failed', phase: 'completed', kind: 'answer', request: { mode: 'submit', scope: 'course', course: 'COURSE_A' }, created_at: `2026-01-${String(day).padStart(2, '0')}T00:00:00Z`, updated_at: `2026-01-${String(day).padStart(2, '0')}T00:00:00Z`, ...extra });
 const ids = rows => rows.map(row => row.id);
@@ -75,6 +75,15 @@ await test('consumer completion progress shows one current arrangement per origi
     assert.match(html, /detail-progress-card/);
     assert.match(html, /正在处理第 4 关/);
     assert.match(html, /3 \/ 8 关/);
+  });
+  await t.test('recovery status is visible and preserves the original progress while a follow-up is blocked', () => {
+    const blocked = job('recovery-child', 1, { status: 'failed', can_recover: true, result: { service_status: 'support', total_homeworks: 19, completed_homeworks: 13 }, recovery: { original_id: 'source', state: 'blocked', message: '复核未通过，未发送新的提交；可再次复核' } });
+    assert.equal(serviceLabel(blocked), '复核未通过');
+    const html = renderServiceJob(blocked) + renderServiceDetail(blocked);
+    assert.match(html, /再次复核并继续/); assert.match(html, /复核未通过/); assert.match(html, /复核未通过，未发送新的提交/); assert.match(html, /13 \/ 19 份作业/);
+    assert.doesNotMatch(html, /服务处理中/);
+    const running = { ...blocked, status: 'running', recovery: { original_id: 'source', state: 'reconciling', message: '正在只读复核上次提交结果，尚未开始新的提交' } };
+    assert.equal(serviceLabel(running), '正在复核'); assert.match(renderServiceDetail(running), /正在只读复核/);
   });
   await t.test('exams have separate targets from homework IDs and from one another', () => {
     const exercise = exercise_id => ({ scope: 'exercise', course: 'COURSE_A', exercise_id, mode: 'submit' });

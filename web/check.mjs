@@ -29,7 +29,7 @@ assert.doesNotMatch(admin, /AccessCard|卡密|create-card|revoke-card|page === '
 assert.doesNotMatch(types, /AccessCard/, 'retired access-card DTO must not remain');
 
 assert.equal(/localStorage|sessionStorage|console\.(log|debug|info)\s*\(/.test(`${source}\n${api}`), false, 'sensitive browser persistence/logging found');
-assert.equal(/error_code|\.message|model_calls|cost_micro_usd|diagnostics|attempts|budget/.test(jobs), false, 'consumer task renderer contains technical details');
+assert.equal(/error_code|job\.message|model_calls|cost_micro_usd|diagnostics|attempts|budget/.test(jobs), false, 'consumer task renderer contains technical details');
 assert.match(css, /@media \(max-width: 620px\)/);
 assert.match(css, /\.topbar/);
 assert.equal(/https?:\/\/|@import|url\(/.test(`${html}\n${css}`), false, 'shell should not download external fonts or media');

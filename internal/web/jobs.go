@@ -373,6 +373,10 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, requestID st
 			s.writeError(w, requestID, http.StatusBadRequest, "INVALID_REQUEST", "任务参数无效")
 			return
 		}
+		if req.RecoveryOf != "" {
+			s.writeError(w, requestID, http.StatusBadRequest, "INVALID_REQUEST", "复核任务只能从原任务操作入口创建")
+			return
+		}
 		if !s.jobs.modelConfigured && req.Scope != "exercise" {
 			s.writeError(w, requestID, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "服务暂时不可用，管理员正在处理，请稍后再试")
 			return

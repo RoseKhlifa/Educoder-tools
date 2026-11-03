@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.67 - 2026-11-03
+
+- Expose recovery reconciliation state and preserve source progress while fixing Docker build allowlist
+
 ## 0.1.66 - 2026-11-03
 
 - Clarify current task progress, move completed records to history, improve live details and unify user-facing copy

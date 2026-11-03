@@ -293,9 +293,10 @@ func (s *Server) submitJobRecovery(w http.ResponseWriter, r *http.Request, reque
 	owner := sessionJobOwner(session)
 	req := original.Request
 	req.IdempotencyKey = "recover-job:" + original.ID
+	req.RecoveryOf = original.ID
 	job, reused, err := s.jobs.manager.Submit(r.Context(), owner, req, func(ctx context.Context, request jobs.Request, report func(jobs.Event)) (jobs.Outcome, error) {
 		return s.runAuthorized(ctx, owner, func(ctx context.Context) (jobs.Outcome, error) {
-			report(jobs.Event{Phase: "reconciling", Message: "正在只读复核上次提交结果，尚未开始新的提交"})
+			report(jobs.Event{Phase: "reconciling", Message: "正在只读复核上次提交结果，尚未开始新的提交", Progress: recoverySeedProgress(original)})
 			if !session.ExpiresAt.After(s.store.now()) {
 				return recoveryBlocked(original, errors.New("用户登录已过期，请重新登录后再次复核")), nil
 			}
@@ -322,4 +323,25 @@ func (s *Server) submitJobRecovery(w http.ResponseWriter, r *http.Request, reque
 		w.Header().Set("X-Job-Reused", "true")
 	}
 	s.writeJSON(w, requestID, http.StatusAccepted, toConsumerJob(job))
+}
+
+func recoverySeedProgress(original jobs.Job) *jobs.BatchProgress {
+	if original.Progress != nil {
+		copy := *original.Progress
+		return &copy
+	}
+	var result struct {
+		TotalHomeworks     int    `json:"total_homeworks"`
+		CompletedHomeworks int    `json:"completed_homeworks"`
+		TotalLevels        int    `json:"total_levels"`
+		CompletedLevels    int    `json:"completed_levels"`
+		CurrentTitle       string `json:"current_title"`
+	}
+	if json.Unmarshal(original.Result, &result) != nil {
+		return nil
+	}
+	if result.TotalHomeworks == 0 && result.TotalLevels == 0 && result.CurrentTitle == "" {
+		return nil
+	}
+	return &jobs.BatchProgress{TotalHomeworks: result.TotalHomeworks, CompletedHomeworks: result.CompletedHomeworks, TotalLevels: result.TotalLevels, CompletedLevels: result.CompletedLevels, CurrentTitle: result.CurrentTitle}
 }

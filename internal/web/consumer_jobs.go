@@ -24,6 +24,12 @@ type consumerJob struct {
 	CanCancel  bool              `json:"can_cancel"`
 	Result     consumerResult    `json:"result"`
 	Progress   *consumerProgress `json:"progress,omitempty"`
+	Recovery   *consumerRecovery `json:"recovery,omitempty"`
+}
+type consumerRecovery struct {
+	OriginalID string `json:"original_id"`
+	State      string `json:"state"`
+	Message    string `json:"message"`
 }
 type consumerResult struct {
 	Title              string         `json:"title,omitempty"`
@@ -101,6 +107,13 @@ func toConsumerJob(j jobs.Job) consumerJob {
 	req := j.Request
 	req.IdempotencyKey = ""
 	out := consumerJob{ID: j.ID, Status: status, Phase: status, Kind: "service", Request: req, CreatedAt: j.CreatedAt, UpdatedAt: j.UpdatedAt, Message: message, CanRetry: canRetryJob(j), CanRecover: canRecoverJob(j), CanCancel: isRestartableRequest(req) && (j.Status == jobs.Queued || j.Status == jobs.Running)}
+	if j.Request.RecoveryOf != "" {
+		recovery := publicRecovery(j)
+		out.Recovery = &recovery
+		out.Message = recovery.Message
+		req.RecoveryOf = ""
+		out.Request = req
+	}
 	if req.Mode == "collect_verified" {
 		out.Kind = "collection"
 	}
@@ -174,4 +187,32 @@ func toConsumerJob(j jobs.Job) consumerJob {
 		}
 	}
 	return out
+}
+
+func publicRecovery(j jobs.Job) consumerRecovery {
+	state, message := "failed", "复核后仍未完成，已保留进度，可再次复核"
+	if j.Status == jobs.Queued {
+		state, message = "queued", "复核任务已排队，尚未开始新的提交"
+	} else if j.Status == jobs.Running {
+		switch j.Phase {
+		case "reconciling":
+			state, message = "reconciling", "正在只读复核上次提交结果，尚未开始新的提交"
+		case "loading", "starting":
+			state, message = "continuing", "复核已通过，正在继续剩余内容"
+		default:
+			state, message = "continuing", "复核已通过，正在继续剩余内容"
+		}
+	} else if j.Status == jobs.Succeeded {
+		state, message = "completed", "复核完成，剩余内容已继续处理"
+	} else if j.Status == jobs.Canceled {
+		state, message = "stopped", "复核任务已停止，已完成进度保留"
+	} else {
+		var result struct {
+			ReasonCode string `json:"reason_code"`
+		}
+		if json.Unmarshal(j.Result, &result) == nil && result.ReasonCode == "recovery_recheck_required" {
+			state, message = "blocked", "复核未通过，未发送新的提交；可再次复核"
+		}
+	}
+	return consumerRecovery{OriginalID: j.Request.RecoveryOf, State: state, Message: message}
 }

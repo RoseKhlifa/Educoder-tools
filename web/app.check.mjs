@@ -87,6 +87,12 @@ await test('consumer course service and administrator boundary',async t=>{
     assert.equal(page.requests.filter(item=>item.url==='/api/jobs/job-1/recover').length,1);
     assert.equal(page.requests.some(item=>item.url==='/api/jobs'&&item.options.method==='POST'),false);
   });
+  await t.test('recovery child keeps the visible source progress and reports blocked reconciliation', async () => {
+    const source=job({status:'support',can_retry:false,can_recover:true,result:{service_status:'support',total_homeworks:19,completed_homeworks:13}});
+    const child=job({id:'recovery-blocked',status:'failed',can_recover:true,result:{service_status:'support',total_homeworks:19,completed_homeworks:13},recovery:{original_id:'job-1',state:'blocked',message:'复核未通过，未发送新的提交；可再次复核'}});
+    const page=await app({'/api/jobs':()=>ok({jobs:[child,source]})});page.get('[data-nav="progress"]').dispatch('click');await settle();
+    assert.match(page.html(),/复核未通过/);assert.match(page.html(),/13 \/ 19 份作业/);assert.match(page.html(),/再次复核并继续/);assert.doesNotMatch(page.html(),/服务处理中/);
+  });
   await t.test('administrator recovery uses its dedicated endpoint and explains when the owner must log in', async () => {
     const source=job({id:'admin-recovery',status:'failed',can_recover:true,owner_id:'platform:synthetic'});
     const page=await app({'/api/auth/me':()=>ok({user,platform:{role:'admin',status:'active'}}),'/api/admin/jobs':()=>ok({items:[source]}),'/api/admin/jobs/admin-recovery/recover':()=>failure(409,'OWNER_LOGIN_REQUIRED','PRIVATE_SECRET')});

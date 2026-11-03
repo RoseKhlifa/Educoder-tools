@@ -33,3 +33,5 @@
 **/*.pid
 **/*.pem
 **/*.key
+!cmd/bankimport/
+!cmd/bankimport/**

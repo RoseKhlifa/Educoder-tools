@@ -181,6 +181,7 @@ export interface AnswerJob {
   can_retry?: boolean;
   can_cancel?: boolean;
   can_recover?: boolean;
+  recovery?: { original_id: string; state: string; message: string };
   error_code?: string;
   message?: string;
   progress?: HomeworkProgress;

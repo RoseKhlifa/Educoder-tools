@@ -120,6 +120,27 @@ func TestConsumerTerminalProjectionRetainsProgressWithoutActiveChildren(t *testi
 	}
 }
 
+func TestConsumerRecoveryProjectionExplainsReconciliationAndPreservesProgress(t *testing.T) {
+	base := jobs.Job{ID: "recovery-child", Request: jobs.Request{Mode: "submit", Scope: "course", Course: "C", RecoveryOf: "source"}, Result: json.RawMessage(`{"status":"verification_unconfirmed","reason_code":"recovery_recheck_required","total_homeworks":19,"completed_homeworks":13}`), Progress: &jobs.BatchProgress{TotalHomeworks: 19, CompletedHomeworks: 13}}
+	for _, tc := range []struct{ status, phase, wantState, wantMessage string }{
+		{jobs.Queued, jobs.Queued, "queued", "复核任务已排队"},
+		{jobs.Running, "reconciling", "reconciling", "正在只读复核"},
+		{jobs.Running, "loading", "continuing", "复核已通过"},
+		{jobs.Failed, "reconciling", "blocked", "复核未通过"},
+		{jobs.Succeeded, "completed", "completed", "复核完成"},
+	} {
+		job := base
+		job.Status, job.Phase = tc.status, tc.phase
+		public := toConsumerJob(job)
+		if public.Recovery == nil || public.Recovery.State != tc.wantState || !strings.Contains(public.Recovery.Message, tc.wantMessage) {
+			t.Fatalf("%s/%s recovery=%+v", tc.status, tc.phase, public.Recovery)
+		}
+		if public.Result.TotalHomeworks != 19 || public.Result.CompletedHomeworks != 13 || public.Request.RecoveryOf != "" {
+			t.Fatalf("recovery lost public progress or leaked internal request: %+v", public)
+		}
+	}
+}
+
 func TestConsumerProjectionNeverCopiesArbitraryExecutorFields(t *testing.T) {
 	for _, status := range []string{jobs.Failed, jobs.Uncertain, jobs.Interrupted} {
 		public := toConsumerJob(jobs.Job{ID: "fixture", Status: status, ErrorCode: "model_error", Message: "operator-message-marker", Events: []jobs.Event{{Message: "operator-event-marker"}}, Result: json.RawMessage(`{"total_levels":2,"completed_levels":1,"model_calls":999,"cost_micro_usd":99999,"nested":{"diagnostics":["operator-diagnostic-marker"]},"answers":["private candidate"]}`)})

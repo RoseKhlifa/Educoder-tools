@@ -39,6 +39,10 @@ type Request struct {
 	Mode           string `json:"mode"`
 	Scope          string `json:"scope,omitempty"`
 	IdempotencyKey string `json:"idempotency_key,omitempty"`
+	// RecoveryOf is server-assigned for a read-before-write continuation. It
+	// lets the consumer UI distinguish the reconciliation child from the
+	// historical source job without exposing a caller-controlled target.
+	RecoveryOf string `json:"recovery_of,omitempty"`
 }
 
 type Event struct {
