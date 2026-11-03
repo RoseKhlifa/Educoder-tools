@@ -65,7 +65,7 @@ func (c *Client) HomeworkRoster(ctx context.Context, course string, hw Homework)
 	var response struct {
 		Data collectionHeader `json:"data"`
 	}
-	if err := c.request(ctx, http.MethodGet, "/api/shixun_homeworks/"+strconv.FormatInt(hw.ID, 10)+"/header_info.json", nil, nil, ref, &response); err != nil {
+	if err := c.readMetadata(ctx, metadataHeader, "/api/shixun_homeworks/"+strconv.FormatInt(hw.ID, 10)+"/header_info.json", nil, ref, &response, nil); err != nil {
 		return nil, err
 	}
 	h := response.Data
@@ -116,7 +116,7 @@ func (c *Client) HomeworkRoster(ctx context.Context, course string, hw Homework)
 	}
 	var games []collectionGame
 	q := url.Values{"homework_common_id": {strconv.FormatInt(hw.ID, 10)}}
-	if err := c.request(ctx, http.MethodGet, "/api/myshixuns/"+h.MyShixun+"/challenges.json", q, nil, ref, &games); err != nil {
+	if err := c.readMetadata(ctx, metadataRoster, "/api/myshixuns/"+h.MyShixun+"/challenges.json", q, ref, &games, func() bool { return games != nil }); err != nil {
 		return nil, err
 	}
 	if len(games) > 500 {

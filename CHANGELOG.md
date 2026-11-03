@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.77 - 2026-11-03
+
+- Retry explicit read-only course and roster metadata without multiplying collection attempts or treating missing pages as empty work
+
 ## 0.1.76 - 2026-11-03
 
 - Preserve exact relative HTML references and inspect target-effect examples during source-bound repair

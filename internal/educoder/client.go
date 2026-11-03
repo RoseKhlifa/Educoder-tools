@@ -207,8 +207,8 @@ func (c *Client) requestWithStatuses(ctx context.Context, method, path string, q
 	return c.requestWithReadDiagnostics(ctx, method, path, query, body, ref, out, false, statuses...)
 }
 
-// Only the exact homework-progress read opts into fixed error metadata. Other
-// protocol operations retain their existing errors and retry behavior.
+// Explicitly selected metadata reads opt into fixed error metadata. Other
+// operations retain their existing errors and retry behavior.
 func (c *Client) requestWithReadDiagnostics(ctx context.Context, method, path string, query url.Values, body any, ref string, out any, progressRead bool, statuses ...int) (err error) {
 	stage, category, status := "prepare", "invalid_request", 0
 	var diagnosticCause error
@@ -437,7 +437,20 @@ func (c *Client) Courses(ctx context.Context, status string) ([]Course, error) {
 			Count   int      `json:"count"`
 			Courses []Course `json:"courses"`
 		}
-		if err := c.request(ctx, http.MethodGet, "/api/users/"+url.PathEscape(c.LoginName)+"/courses.json", q, nil, "/users/"+c.LoginName+"/classrooms", &data); err != nil {
+		if err := c.readMetadata(ctx, metadataCourses, "/api/users/"+url.PathEscape(c.LoginName)+"/courses.json", q, "/users/"+c.LoginName+"/classrooms", &data, func() bool {
+			if data.Courses == nil || data.Count < 0 {
+				return false
+			}
+			if data.Count > len(result) {
+				for _, course := range data.Courses {
+					if !seen[course.ID] {
+						return true
+					}
+				}
+				return false
+			}
+			return true
+		}); err != nil {
 			return nil, err
 		}
 		added := 0
@@ -474,7 +487,20 @@ func (c *Client) Homeworks(ctx context.Context, course, category string) ([]Home
 			Total     *int       `json:"query_total_count"`
 			Homeworks []Homework `json:"homeworks"`
 		}
-		if err := c.request(ctx, http.MethodGet, "/api/courses/"+course+"/homework_commons.json", q, nil, "/classrooms/"+course+"/shixun_homework", &data); err != nil {
+		if err := c.readMetadata(ctx, metadataHomeworks, "/api/courses/"+course+"/homework_commons.json", q, "/classrooms/"+course+"/shixun_homework", &data, func() bool {
+			if data.Homeworks == nil || data.Total != nil && *data.Total < 0 {
+				return false
+			}
+			if data.Total != nil && *data.Total > len(result) {
+				for _, homework := range data.Homeworks {
+					if !seen[homework.ID] {
+						return true
+					}
+				}
+				return false
+			}
+			return true
+		}); err != nil {
 			return nil, err
 		}
 		added := 0

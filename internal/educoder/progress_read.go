@@ -12,9 +12,10 @@ import (
 
 const homeworkProgressReadAttempts = 3
 
-// HomeworkProgressReadError contains fixed diagnostic metadata only. It never
+// MetadataReadError contains fixed diagnostic metadata only. It never
 // retains an upstream URL, request query, response text, cookie or raw error.
-type HomeworkProgressReadError struct {
+type MetadataReadError struct {
+	Operation  string
 	Stage      string
 	Category   string
 	HTTPStatus int
@@ -22,8 +23,12 @@ type HomeworkProgressReadError struct {
 	canceled   error
 }
 
-func (e *HomeworkProgressReadError) Error() string {
-	return fmt.Sprintf("homework_progress stage=%s category=%s status=%d attempts=%d", e.Stage, e.Category, e.HTTPStatus, e.Attempts)
+// Preserve the progress API's existing error contract for callers using As.
+type HomeworkProgressReadError = MetadataReadError
+
+func (e *MetadataReadError) Error() string {
+	operation := metadataOperationLabel(e.Operation)
+	return fmt.Sprintf("%s stage=%s category=%s status=%d attempts=%d", operation, e.Stage, e.Category, e.HTTPStatus, e.Attempts)
 }
 
 // Unwrap preserves parent cancellation without exposing transport errors that
