@@ -51,3 +51,29 @@ func TestRepairPromptRejectsHistorySourceHashMismatch(t *testing.T) {
 		t.Fatalf("mismatched source was accepted as bound history: %v", err)
 	}
 }
+
+func TestHTMLRepairKeepsConflictingRequirementsAndBoundPassingAttributeFeedback(t *testing.T) {
+	snapshot := testSnapshot()
+	snapshot.StatementMarkdown = "Task src=\"https://example.invalid/a\". Programming requirement src=\"https://example.invalid/b\"."
+	snapshot.Files = []problem.File{{Path: "step/test.html", Filename: "test.html", Extension: ".html", Language: "html", CurrentContent: "<body></body>", StarterProvenance: "unknown"}}
+	previous := Candidate{Kind: "programming", Language: "html", Files: []problem.SolutionFile{{Path: "step/test.html", Content: `<body><img src="https://example.invalid/a" alt="sample"/></body>`}}}
+	hash, _ := problem.HashFiles(previous.Files)
+	feedback := []Feedback{{Kind: "selftest", ExpectedStdout: "alt passed\nsrc passed\n", ActualStdout: "alt passed\n"}}
+	wire, err := buildRequest(Request{Problem: snapshot, Previous: &previous, Feedback: feedback, RepairHistory: []RepairAttempt{{FilesHash: hash, Candidate: &previous, Feedback: feedback}}, Profile: DefaultProfile()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Statement string          `json:"statement_markdown"`
+		History   []RepairAttempt `json:"repair_history"`
+	}
+	if err := json.Unmarshal([]byte(wire.Messages[1].Content.textOnly()), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Statement != snapshot.StatementMarkdown || len(payload.History) != 1 || payload.History[0].Candidate.Files[0] != previous.Files[0] || payload.History[0].Feedback[0].ActualStdout != "alt passed\n" {
+		t.Fatal("conflicting literals or passing attribute evidence lost")
+	}
+	if !strings.Contains(wire.Messages[0].Content.textOnly(), "Do not alternate between attribute values already disproved") {
+		t.Fatal("HTML repair failed to use source-bound evidence")
+	}
+}

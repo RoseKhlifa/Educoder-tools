@@ -786,7 +786,14 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 					result.Diagnostics = append(result.Diagnostics, "模型连续返回无法使用的输出；已使用完整输出额度并关闭额外推理，停止重复付费，保留候选及全部用量")
 					return result, ge
 				}
-				if retryableGenerationError(ge) && attempt+1 < req.MaxEvaluations && result.ModelCalls < req.MaxModelCalls && ctx.Err() == nil {
+				fallback := false
+				if ctx.Err() == nil {
+					fallback = state.GenerationRecovery.fallbackAfterProBodyDeadline(s.cfg, profile, ge)
+					if fallback {
+						result.Diagnostics = append(result.Diagnostics, "增强模型正文读取超时，保留未确认用量；本次任务已切换为常规模型及完整输出额度")
+					}
+				}
+				if (fallback || retryableGenerationError(ge)) && attempt+1 < req.MaxEvaluations && result.ModelCalls < req.MaxModelCalls && ctx.Err() == nil {
 					feedback = append([]answer.Feedback(nil), state.Feedback...)
 					if len(gen.Candidate.Files) > 0 {
 						previous = &gen.Candidate
@@ -796,7 +803,11 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 						result.Status = "checkpoint_persistence_failed"
 						return result, persistErr
 					}
-					stage(req, "generating", "模型输出未完成，正在自动重试生成")
+					if fallback {
+						stage(req, "generating", "增强模型响应超时，正在切换模型继续生成")
+					} else {
+						stage(req, "generating", "模型输出未完成，正在自动重试生成")
+					}
 					continue
 				}
 				result.Status = "model_error"

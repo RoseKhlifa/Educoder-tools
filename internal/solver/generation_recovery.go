@@ -19,9 +19,10 @@ const maxUnproductiveGenerations = 3
 // hashes. Continuation grants more capacity without resetting an ineffective
 // profile or endlessly repeating an identical failed answer.
 type generationRecovery struct {
-	CompactOutput      bool `json:"compact_output,omitempty"`
-	RepeatedCandidates int  `json:"repeated_candidates,omitempty"`
-	OutputFailures     int  `json:"output_failures,omitempty"`
+	CompactOutput               bool `json:"compact_output,omitempty"`
+	RepeatedCandidates          int  `json:"repeated_candidates,omitempty"`
+	OutputFailures              int  `json:"output_failures,omitempty"`
+	ProBodyDeadlineFallbackUsed bool `json:"pro_body_deadline_fallback_used,omitempty"`
 }
 
 func (g *generationRecovery) restore(feedback []answer.Feedback) {
@@ -45,7 +46,29 @@ func (g generationRecovery) profile(cfg Config, calls int) answer.Profile {
 		// Once a response is cut off, reserve that window for complete JSON.
 		p.Thinking, p.ReasoningEffort, p.MaxTokens = "disabled", "", 8192
 	}
+	if g.ProBodyDeadlineFallbackUsed {
+		// A complete PRO response did not arrive within its body deadline.
+		// Keep this run on the distinct baseline model after the one-way switch;
+		// call count or repeated code must not select that same stalled PRO again.
+		p = cfg.Profile
+		p.Thinking, p.ReasoningEffort, p.MaxTokens = "disabled", "", 8192
+	}
 	return p
+}
+
+func (g *generationRecovery) fallbackAfterProBodyDeadline(cfg Config, profile answer.Profile, err error) bool {
+	if g.ProBodyDeadlineFallbackUsed || profile.Model != cfg.ProProfile.Model || strings.TrimSpace(cfg.Profile.Model) == "" || cfg.Profile.Model == cfg.ProProfile.Model {
+		return false
+	}
+	var providerErr *answer.Error
+	if !errors.As(err, &providerErr) || providerErr.Kind != "response_read_failed" || providerErr.HTTPStatus != 200 || providerErr.ResponsePhase != "body" || providerErr.ReadCause != "deadline" || !providerErr.BilledUnknown {
+		return false
+	}
+	// This changes model selection only. The solver retains the unknown usage
+	// reservation and enforces its original call, evaluation, and cost limits
+	// before another dispatch. Other transport errors stay non-retryable.
+	g.ProBodyDeadlineFallbackUsed = true
+	return true
 }
 
 func (g *generationRecovery) failedOutput(err error) bool {

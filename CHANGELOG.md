@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.71 - 2026-11-03
+
+- Fall back once from a stalled enhanced model within existing budgets and preserve HTML attribute repair evidence
+
 ## 0.1.70 - 2026-11-03
 
 - Distinguish interrupted model response bodies and allow four minutes without replaying unknown billed calls
