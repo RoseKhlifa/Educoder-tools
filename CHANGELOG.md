@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.75 - 2026-11-03
+
+- Evaluate explicit operator proposals through fresh selftest and formal gates without promoting unresolved or unmarked candidates
+
 ## 0.1.74 - 2026-11-03
 
 - Bind each selftest observation to its actual candidate and source hash and report recovery model behavior accurately

@@ -598,7 +598,17 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 	}
 	if len(candidates) == 0 && snap.EditMode != "terminal" {
 		for _, c := range allCandidates {
+			if operatorProposalEligible(c) {
+				candidates = append(candidates, c)
+			}
+		}
+	}
+	if len(candidates) == 0 && snap.EditMode != "terminal" {
+		for _, c := range allCandidates {
 			if c.Status != "candidate" && c.Status != "selftest_passed" {
+				continue
+			}
+			if c.Source == "manual_public_statement" && !operatorProposalEligible(c) {
 				continue
 			}
 			imported, lookupErr := s.isExternalCandidate(ctx, c.ID)
@@ -1233,6 +1243,20 @@ func formalRuntimeStartupFeedback(feedback string) bool {
 		const format = "Public test: input=%q expected=%q actual=%q"
 		n, err := fmt.Sscanf(line, format, &input, &expected, &actual)
 		if err != nil || n != 3 || line != fmt.Sprintf(format, input, expected, actual) || actual != "编译失败，请在测试结果中查看具体的错误信息" {
+			return false
+		}
+	}
+	return true
+}
+
+func operatorProposalEligible(c questionbank.Candidate) bool {
+	if c.Source != "manual_public_statement" || c.Status != "candidate" && c.Status != "selftest_passed" {
+		return false
+	}
+	// The source label permits a fresh evaluation, never a trust promotion or
+	// replay of an unresolved operation. Existing pass evidence is also rerun.
+	for _, validation := range c.Validations {
+		if validation.Result != "passed" {
 			return false
 		}
 	}
