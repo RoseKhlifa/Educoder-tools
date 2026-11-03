@@ -240,6 +240,7 @@ export interface AdminJobContext {
   scope_label?: string;
   summary?: { stop_reason?: string; pending_homeworks?: number; reason?: string; reason_code?: string; message?: string; diagnostics?: string[]; progress_label?: string; attention_homeworks?: Array<{ id?: number; name?: string; course_identifier?: string; course_name?: string; reason?: string; reason_code?: string; diagnostics?: string[]; level_title?: string; level_position?: number }> };
 }
+export type AdminJobAction = 'retry' | 'recover' | 'cancel';
 export interface AdminJob extends AnswerJob { owner_id?: string | number; owner?: string; context?: AdminJobContext }
 export type AdminOverview = Record<string, unknown>;
 

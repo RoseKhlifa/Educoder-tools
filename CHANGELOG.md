@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.79 - 2026-11-03
+
+- Allow audited admin retries with the original user live session shared idempotency and clear pending controls
+
 ## 0.1.78 - 2026-11-03
 
 - Back off transient model failures with cancellable jitter and bounded Retry-After across programming objective and exercise generation

@@ -39,6 +39,11 @@ function asRecord(value: unknown): Raw {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Raw : {};
 }
 
+function normalizeAdminJob(value: unknown): AdminJob {
+  const job = asRecord(value);
+  return { ...job, can_retry: job.can_retry === true, can_recover: job.can_recover === true } as unknown as AdminJob;
+}
+
 function text(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : value == null ? fallback : String(value);
 }
@@ -292,6 +297,7 @@ export interface EducoderApi {
   adminUserStatus(id: string | number, status: 'active' | 'disabled'): Promise<void>;
   adminCancelJob(id: string): Promise<void>;
   adminRecoverJob(id: string): Promise<AnswerJob>;
+  adminRetryJob(id: string): Promise<AdminJob>;
   tickets(options?: TicketListOptions): Promise<TicketList>;
   ticket(id: string): Promise<SupportTicketDetail>;
   createTicket(input: TicketCreateRequest): Promise<SupportTicketDetail>;
@@ -410,7 +416,10 @@ export class BrowserApi implements EducoderApi {
     return this.request<AnswerJob>(`/api/jobs/${encodeURIComponent(id)}/recover`, { method: 'POST', body: '{}' });
   }
   async adminRecoverJob(id: string): Promise<AnswerJob> {
-    return this.request<AnswerJob>(`/api/admin/jobs/${encodeURIComponent(id)}/recover`, { method: 'POST', body: '{}' });
+    return normalizeAdminJob(await this.request<unknown>(`/api/admin/jobs/${encodeURIComponent(id)}/recover`, { method: 'POST', body: '{}' }));
+  }
+  async adminRetryJob(id: string): Promise<AdminJob> {
+    return normalizeAdminJob(await this.request<unknown>(`/api/admin/jobs/${encodeURIComponent(id)}/retry`, { method: 'POST', body: '{}' }));
   }
   async cancelJob(id: string): Promise<AnswerJob> {
     return this.request<AnswerJob>(`/api/jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
@@ -423,7 +432,8 @@ export class BrowserApi implements EducoderApi {
   }
   async adminJobs(): Promise<AdminJob[]> {
     const value = await this.request<unknown>('/api/admin/jobs');
-    const row = asRecord(value); return (Array.isArray(value) ? value : row.jobs ?? row.items ?? []) as AdminJob[];
+    const row = asRecord(value), items = Array.isArray(value) ? value : row.jobs ?? row.items ?? [];
+    return (Array.isArray(items) ? items : []).map(normalizeAdminJob);
   }
   async adminAudit(): Promise<AdminAudit[]> {
     const value = await this.request<unknown>('/api/admin/audit');

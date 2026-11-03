@@ -130,11 +130,83 @@ func (s *Server) handleJobRetry(w http.ResponseWriter, r *http.Request, requestI
 }
 
 func (s *Server) submitConsumerJob(w http.ResponseWriter, r *http.Request, requestID string, session Session, req jobs.Request) {
+	job, reused, err := s.submitSessionJob(r.Context(), session, req)
+	if err != nil {
+		s.jobError(w, requestID, err)
+		return
+	}
+	w.Header().Set("Location", "/api/jobs/"+job.ID)
+	if reused {
+		w.Header().Set("X-Job-Reused", "true")
+	}
+	s.writeJSON(w, requestID, http.StatusAccepted, toConsumerJob(job))
+}
+
+// Both retry entry points submit the same owner-scoped request and durable key.
+// The administrator authorizes the action; only the owner's live client runs it.
+func (s *Server) handleAdminJobRetry(w http.ResponseWriter, r *http.Request, requestID, actor, id string) {
+	if s.jobs == nil {
+		s.writeError(w, requestID, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "后台任务服务尚未启动")
+		return
+	}
+	original, err := s.jobs.manager.AdminGet(r.Context(), id)
+	if err != nil {
+		s.jobError(w, requestID, err)
+		return
+	}
+	if emptyRetryBody(r) != nil {
+		s.writeError(w, requestID, http.StatusBadRequest, "INVALID_REQUEST", "重新执行时无需提供任务参数")
+		return
+	}
+	if !canRetryJob(original.Job) {
+		s.writeError(w, requestID, http.StatusConflict, "JOB_NOT_RETRYABLE", "当前任务不支持重新执行，请刷新任务记录")
+		return
+	}
+	if !s.ownerCanRun(r.Context(), original.OwnerID) {
+		s.writeError(w, requestID, http.StatusConflict, "OWNER_ACCESS_REVOKED", "该用户当前服务未开放，请先检查账号状态")
+		return
+	}
+	session, ok := s.store.sessionForOwner(original.OwnerID)
+	if !ok || sessionJobOwner(session) != original.OwnerID {
+		s.writeError(w, requestID, http.StatusConflict, "OWNER_LOGIN_REQUIRED", "请该用户重新登录后再重新执行")
+		return
+	}
+	if !s.jobs.modelConfigured {
+		s.writeError(w, requestID, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "服务暂时不可用，请稍后再试")
+		return
+	}
+	if err := s.platform.RecordAudit(r.Context(), actor, "job.retry", original.ID, map[string]string{"status": "requested"}); err != nil {
+		s.adminError(w, requestID, err)
+		return
+	}
+	req := original.Request
+	req.IdempotencyKey = "retry-job:" + original.ID
+	job, reused, err := s.submitSessionJob(r.Context(), session, req)
+	if err != nil {
+		s.jobError(w, requestID, err)
+		return
+	}
+	views, err := s.adminJobResponses(r.Context(), []jobs.AdminRecord{{Job: job, OwnerID: original.OwnerID}})
+	if err != nil {
+		s.adminError(w, requestID, err)
+		return
+	}
+	w.Header().Set("Location", "/api/admin/jobs/"+job.ID)
+	if reused {
+		w.Header().Set("X-Job-Reused", "true")
+	}
+	s.writeJSON(w, requestID, http.StatusAccepted, views[0])
+}
+
+func (s *Server) submitSessionJob(ctx context.Context, session Session, req jobs.Request) (jobs.Job, bool, error) {
 	owner := sessionJobOwner(session)
 	// Capture only the current authenticated client. Retries never reuse an
 	// expired executor closure or deserialize account credentials from a job.
-	job, reused, err := s.jobs.manager.Submit(r.Context(), owner, req, func(ctx context.Context, request jobs.Request, report func(jobs.Event)) (jobs.Outcome, error) {
+	return s.jobs.manager.Submit(ctx, owner, req, func(ctx context.Context, request jobs.Request, report func(jobs.Event)) (jobs.Outcome, error) {
 		return s.runAuthorized(ctx, owner, func(ctx context.Context) (jobs.Outcome, error) {
+			if !session.ExpiresAt.After(s.store.now()) {
+				return jobs.Outcome{Status: jobs.Failed, ErrorCode: "OWNER_LOGIN_REQUIRED", Message: "用户登录已过期，请重新登录后再执行"}, nil
+			}
 			out, err := s.jobs.run(ctx, session.Client, owner, request, func(event jobs.Event) {
 				if p := event.Progress; p != nil && p.CurrentCourse != "" && p.CurrentHomeworkID > 0 && p.CurrentHomeworkTitle != "" {
 					s.rememberHomeworkLabels(ctx, p.CurrentCourse, []educoder.Homework{{ID: p.CurrentHomeworkID, Name: p.CurrentHomeworkTitle}})
@@ -145,13 +217,4 @@ func (s *Server) submitConsumerJob(w http.ResponseWriter, r *http.Request, reque
 			return out, err
 		})
 	})
-	if err != nil {
-		s.jobError(w, requestID, err)
-		return
-	}
-	w.Header().Set("Location", "/api/jobs/"+job.ID)
-	if reused {
-		w.Header().Set("X-Job-Reused", "true")
-	}
-	s.writeJSON(w, requestID, http.StatusAccepted, toConsumerJob(job))
 }

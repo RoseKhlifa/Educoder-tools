@@ -165,6 +165,72 @@ await test('consumer course service and administrator boundary',async t=>{
     assert.equal(page.requests.filter(item=>item.url==='/api/admin/jobs/admin-recovery/recover').length,1);
     assert.equal(page.requests.some(item=>item.url==='/api/jobs/admin-recovery/recover'),false);
   });
+  await t.test('admin retry confirms readable target, serializes each task action and reloads the server child', async () => {
+    const context={user:{name:'示例同学'},course:{name:'示例课堂'},homework:{name:'示例作业'}};
+    const source=job({id:'admin-source',status:'failed',can_retry:true,can_recover:false,owner_id:'platform:synthetic',context});
+    const child=job({id:'admin-child',status:'queued',can_retry:false,can_recover:false,owner_id:source.owner_id,context,created_at:'2026-11-03T12:00:00Z'}),pending=deferred();
+    let rows=[source];
+    const page=await app({'/api/auth/me':()=>ok({user,platform:{role:'admin',status:'active'}}),'/api/admin/jobs':()=>ok({items:rows}),'/api/admin/jobs/admin-source/retry':()=>pending.promise});
+    page.get('[data-nav="admin-overview"]').dispatch('click');await settle();
+    const original=page.get('[data-admin-retry="admin-source"]');original.dispatch('click');
+    assert.match(page.html(),/示例同学 · 示例课堂 · 示例作业/);
+    assert.match(page.html(),/已核验通过的关卡自动跳过，选做内容不会处理/);
+    assert.equal(page.requests.some(item=>item.options.method==='POST'),false);
+    const confirm=page.get('[data-action="modal-confirm"]');confirm.dispatch('click');confirm.dispatch('click');await settle();
+    assert.equal(page.get('[data-admin-retry="admin-source"]').disabled,true);
+    assert.match(page.html(),/正在重新执行/);assert.doesNotMatch(page.html(),/已重新安排该用户/);
+    original.dispatch('click');assert.doesNotMatch(page.html(),/确认重新执行<\/button>/);
+    page.get('[data-admin-job-detail="admin-source"]').dispatch('click');
+    const dialog=page.html().slice(page.html().indexOf('role="dialog"'));
+    assert.match(dialog,/data-admin-retry="admin-source" disabled>正在重新执行/);
+    page.get('[data-admin-retry="admin-source"]').dispatch('click');
+    const posted=page.requests.filter(item=>item.url==='/api/admin/jobs/admin-source/retry');
+    assert.equal(posted.length,1);assert.equal(posted[0].options.method,'POST');assert.equal(posted[0].options.body,'{}');
+    assert.equal(page.requests.some(item=>item.url==='/api/jobs/admin-source/retry'||item.url==='/api/admin/jobs/admin-source/recover'),false);
+    rows=[child,source];pending.resolve(ok(child));await settle();
+    assert.match(page.html(),/已重新安排该用户的任务/);assert.doesNotMatch(page.html(),/data-admin-retry="admin-source"/);
+    assert.match(page.html().slice(page.html().indexOf('role="dialog"')),/历史执行记录/);
+    assert.doesNotMatch(page.html(),/正在重新执行/);
+    assert.ok(page.requests.filter(item=>item.url==='/api/admin/jobs').length>=2);
+    page.get('[data-action="close-modal"]').dispatch('click');
+    page.get('[data-admin-show-jobs="service"]').dispatch('click');await settle();
+    assert.match(page.html(),/data-admin-job-detail="admin-child"/);
+    page.get('[data-admin-jobs-view="history"]').dispatch('click');
+    assert.match(page.html(),/data-admin-job-detail="admin-source"/);assert.doesNotMatch(page.html(),/data-admin-retry=/);
+  });
+  await t.test('admin retry failures never announce acceptance or leak raw errors and point to the required next action', async () => {
+    const source=job({id:'admin-failed',status:'failed',can_retry:true,can_recover:false,owner_id:'platform:synthetic'});
+    const cases=[
+      [()=>{throw new Error('PRIVATE_NETWORK_TRACE');},/暂未确认重新执行结果，请刷新任务记录后重试/],
+      [()=>failure(409,'OWNER_LOGIN_REQUIRED','PRIVATE_OWNER_COOKIE'),/请用户重新登录后再重新执行/],
+      [()=>failure(409,'OWNER_ACCESS_REVOKED','PRIVATE_ACCOUNT'),/请先恢复用户服务/],
+      [()=>failure(409,'JOB_NOT_RETRYABLE','PRIVATE_STATUS'),/暂未确认重新执行结果，请刷新任务记录后重试/],
+      [()=>ok({accepted:true}),/暂未确认重新执行结果，请刷新任务记录后重试/],
+    ];
+    for (const [fail,message] of cases) {
+      const page=await app({'/api/auth/me':()=>ok({user,platform:{role:'admin',status:'active'}}),'/api/admin/jobs':()=>ok({items:[source]}),'/api/admin/jobs/admin-failed/retry':fail});
+      page.get('[data-nav="admin-overview"]').dispatch('click');await settle();
+      page.get('[data-admin-retry="admin-failed"]').dispatch('click');page.get('[data-action="modal-confirm"]').dispatch('click');await settle();
+      assert.match(page.html(),message);assert.doesNotMatch(page.html(),/PRIVATE_|已重新安排该用户/);
+      assert.equal(page.get('[data-admin-retry="admin-failed"]').disabled,false);
+    }
+  });
+  await t.test('admin pending locks survive a concurrent capability change and block overlapping recover or stop actions', async () => {
+    const source=job({id:'admin-overlap',status:'failed',can_retry:true,can_recover:false,owner_id:'platform:synthetic'}),pending=deferred();
+    let rows=[source];
+    const page=await app({'/api/auth/me':()=>ok({user,platform:{role:'admin',status:'active'}}),'/api/admin/jobs':()=>ok({items:rows}),'/api/admin/jobs/admin-overlap/retry':()=>pending.promise});
+    page.get('[data-nav="admin-overview"]').dispatch('click');await settle();
+    page.get('[data-admin-retry="admin-overlap"]').dispatch('click');page.get('[data-action="modal-confirm"]').dispatch('click');await settle();
+    rows=[{...source,can_retry:false,can_recover:true}];page.get('[data-action="admin-refresh"]').dispatch('click');await settle();
+    const recover=page.get('[data-admin-recover="admin-overlap"]');assert.equal(recover.disabled,true);recover.dispatch('click');
+    assert.doesNotMatch(page.html(),/确认复核并继续<\/button>/);
+    rows=[{...source,status:'running',can_retry:false,can_recover:false}];page.get('[data-action="admin-refresh"]').dispatch('click');await settle();
+    page.get('[data-admin-show-jobs="service"]').dispatch('click');await settle();
+    const stop=page.get('[data-admin-cancel="admin-overlap"]');assert.equal(stop.disabled,true);stop.dispatch('click');
+    assert.doesNotMatch(page.html(),/确认停止<\/button>/);
+    assert.equal(page.requests.filter(item=>item.options.method==='POST').length,1);
+    pending.resolve(ok(job({id:'accepted-child',status:'queued'})));await settle();
+  });
   await t.test('retry keeps the original server scope, guards duplicate clicks and moves the old attempt into history', async () => {
     const source=job({id:'retry-source',status:'support',can_retry:true,can_cancel:false,result:{service_status:'support',total_homeworks:2,completed_homeworks:1}});
     const child=job({id:'retry-child',status:'queued',can_retry:false,can_cancel:true,created_at:'2026-11-02T12:00:00Z'}), pending=deferred();

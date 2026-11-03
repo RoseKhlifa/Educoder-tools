@@ -319,6 +319,26 @@ await test('browser API uses the Go workbench contract', async t => {
     assert.equal(request.options.method, 'POST'); assert.equal(request.options.credentials, 'include');
     assert.deepEqual(JSON.parse(request.options.body), {});
   });
+  await t.test('admin retry uses its own opaque source action and strictly normalizes server capabilities', async () => {
+    const requests = [], rows = [
+      { id: 'allowed', can_retry: true, can_recover: false },
+      { id: 'denied', can_retry: false, can_recover: true },
+      { id: 'missing' },
+      { id: 'coerced', can_retry: 'true', can_recover: 1 },
+    ];
+    globalThis.fetch = async (url, options) => {
+      requests.push({ url, options });
+      return envelope(options.method === 'POST' ? { id: 'admin-child', status: 'queued', can_retry: 'true' } : { items: rows }, options.method === 'POST' ? 202 : 200);
+    };
+    const api = new BrowserApi();
+    assert.deepEqual((await api.adminJobs()).map(({can_retry,can_recover}) => [can_retry,can_recover]), [[true,false],[false,true],[false,false],[false,false]]);
+    const child = await api.adminRetryJob('source/opaque ?#');
+    assert.equal(child.id, 'admin-child'); assert.equal(child.can_retry, false); assert.equal(child.can_recover, false);
+    assert.equal(requests[1].url, '/api/admin/jobs/source%2Fopaque%20%3F%23/retry');
+    assert.equal(requests[1].options.method, 'POST'); assert.equal(requests[1].options.credentials, 'include');
+    assert.equal(requests[1].options.body, '{}');
+    assert.equal(requests.some(({url}) => url.startsWith('/api/jobs/')), false);
+  });
   await t.test('foreign job errors remain errors rather than empty successful histories', async () => {
     globalThis.fetch = async () => new Response(JSON.stringify({ error: { code: 'JOB_NOT_FOUND', message: '任务不存在' } }), { status: 404 });
     await assert.rejects(new BrowserApi().job('foreign-job'), error => error.code === 'JOB_NOT_FOUND' && !error.isSessionExpired);

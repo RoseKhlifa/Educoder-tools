@@ -1,11 +1,11 @@
 import { ApiRequestError, BrowserApi } from './api.js';
-import { partitionAdminJobs, renderAdmin, renderAdminJobDetail, type AdminPage, type AdminState } from './admin.js';
+import { adminJobResumeAction, adminJobTarget, partitionAdminJobs, renderAdmin, renderAdminJobDetail, type AdminPage, type AdminState } from './admin.js';
 import { canCancelJob, canRetryJob, canRecoverJob, recoveryNotice, serviceLabel, type JobActionState, currentServiceJobs, jobProgress, jobTitle, pendingJob, renderJobs, renderServiceDetail, serviceJob, serviceStatus } from './jobs.js';
 import { count, escapeHtml as e, icon } from './ui.js';
 import { renderUserGuidelines } from './guidelines.js';
 import { CourseDetailsCache, type CourseCacheEvent } from './course-cache.js';
 import { renderTickets, renderTicketDetail, type TicketState } from './tickets.js';
-import type { AnswerJob, Course, Exercise, Homework, User, QuestionBankSummary, DailyServiceSummary, SupportTicketDetail, TicketCategory, TicketStatus } from './types.js';
+import type { AdminJob, AdminJobAction, AnswerJob, Course, Exercise, Homework, User, QuestionBankSummary, DailyServiceSummary, SupportTicketDetail, TicketCategory, TicketStatus } from './types.js';
 
 const root = document.querySelector<HTMLDivElement>('#app');
 if (!root) throw new Error('Missing application root');
@@ -30,7 +30,7 @@ const ticketFormDrafts = new Map<string, TicketFormDraft>();
 const state = {
   user: null as User | null, page: 'courses' as Page, courses: [] as Course[], jobs: [] as AnswerJob[],
   selected: [] as string[], loading: false, signingIn: false, creating: false, notice: '', loginError: '', search: '',
-  modal: '' as string, modalKind: '' as '' | 'guidelines' | 'ticket' | 'job' | 'course', modalAction: null as (() => Promise<void> | void) | null,
+  modal: '' as string, modalKind: '' as '' | 'guidelines' | 'ticket' | 'job' | 'admin-job' | 'course', modalAction: null as (() => Promise<void> | void) | null,
   progressHistoryOpen: false, questionBank: null as QuestionBankSummary | null, bankLoading: false, bankUnavailable: false, todaySummary: null as DailyServiceSummary | null, todayLoading: false, todayUnavailable: false,
   admin: { overview: {}, users: [], jobs: [], audit: [], loading: false, error: false, jobsView: 'current', jobsKind: 'service' } as AdminState,
 };
@@ -57,8 +57,9 @@ let courseDialog: CourseDialog | null = null;
 type HomeworkSync = { state: 'loading' | 'ready' | 'error'; hasPreviousData: boolean };
 const homeworkSync = new Map<string, HomeworkSync>();
 let jobDialog: { id: string; historical: boolean } | null = null;
+let adminJobDialog: { id: string; historical: boolean } | null = null;
 const jobActions = new Map<string, JobActionState>();
-const adminRecoveries = new Set<string>();
+const adminJobActions = new Map<string, AdminJobAction>();
 const courseCache = new CourseDetailsCache({
   homeworks: id => readCourseData(() => api.homeworks(id)),
   exercises: id => readCourseData(async () => (await api.exercises(id)).items),
@@ -98,7 +99,7 @@ const accessible = (): boolean => state.user?.service_access !== false && state.
 const activeJobs = (): AnswerJob[] => state.jobs.filter(job => serviceJob(job) && pendingJob(job));
 function stopPoll(): void { if (pollTimer !== undefined) clearTimeout(pollTimer); pollTimer = undefined; }
 function resetSession(message = ''): void {
-  jobActions.clear(); recoveryNoticeID = ''; adminRecoveries.clear(); jobDialog = null; homeworkSync.clear();
+  jobActions.clear(); recoveryNoticeID = ''; adminJobActions.clear(); jobDialog = null; adminJobDialog = null; homeworkSync.clear();
   userTickets = emptyTickets(); adminTickets = emptyTickets(); ticketDialog = null; ticketRetryKeys.clear(); ticketFormDrafts.clear();
   generation++; jobsRevision++; coursesRevision++; adminRevision++; modalRevision++; bankRevision++; bankLoadedAt = 0; todayRevision++; todayLoadedAt = 0; todayLoadedDate = ''; guidelinesSource = 'login'; stopPoll(); courseDialog = null; courseCache.clear();
   Object.assign(state, { user: null, page: 'courses', courses: [], jobs: [], selected: [], loading: false, signingIn: false, creating: false, notice: '', loginError: message, modal: '', modalKind: '', modalAction: null, search: '', progressHistoryOpen: false, questionBank: null, bankLoading: false, bankUnavailable: false, todaySummary: null, todayLoading: false, todayUnavailable: false, admin: { overview: {}, users: [], jobs: [], audit: [], loading: false, error: false, userSearch: '', userFilter: 'all' } });
@@ -157,7 +158,7 @@ function renderShell(): string {
   const active = current.filter(pendingJob).length;
   const followUp = current.filter(job => serviceStatus(job) === 'support').length;
   const completed = state.jobs.filter(job => serviceJob(job) && serviceStatus(job) === 'completed').length;
-  return `<div id="view-app" class="app-shell ${admin ? 'admin-app' : 'consumer-app'}"><header class="global-nav topbar ${admin ? 'admin-topbar' : ''}"><div class="top-left"><button class="nav-brand" type="button" data-nav="${admin ? 'admin-overview' : 'courses'}" aria-label="头歌妈妈首页">${brandLogo()}<span class="name">头歌妈妈</span><span class="domain">touge.mom</span></button>${admin ? '<span class="admin-chip">服务管理</span>' : ''}</div><nav class="nav-links" aria-label="${admin ? '管理员导航' : '主导航'}">${links}</nav><div class="nav-user">${avatar()}<span class="user-name">${e(state.user?.name || '同学')}</span><button class="icon-button" data-action="logout" aria-label="退出登录" title="退出登录">${icon('logout')}</button></div></header><div class="mobile-nav">${links}${isAdmin() ? navItem(admin ? 'courses' : 'admin-overview', admin ? '用户端' : '管理后台', admin ? 'courses' : 'overview') : ''}</div><div class="${admin ? 'shell admin-shell' : 'workspace consumer-workspace'}">${admin ? `<aside class="side admin-side" aria-label="管理员导航"><div class="side-label">服务管理</div><nav class="side-nav">${adminSideLinks}</nav><div class="side-foot"><p class="t">服务工作台</p><p>异常与执行记录只在管理端查看，用户端只展示完成进度。</p><button class="btn ghost text-button" data-nav="courses">${icon('courses')}返回用户端</button></div></aside>` : `<aside class="side consumer-side" aria-label="侧栏概况"><div class="side-card"><h3>当前概况</h3><div class="stat-row"><span class="l">我的课程</span><span class="n">${state.courses.length}</span></div><div class="stat-row"><span class="l">已选中</span><span class="n">${selectedCount}</span></div><div class="stat-row"><span class="l">处理中</span><span class="n">${active}</span></div><div class="stat-row"><span class="l">待跟进</span><span class="n">${followUp}</span></div><div class="stat-row"><span class="l">已完成任务</span><span class="n">${completed}</span></div></div>${renderTodaySummary()}<div class="consumer-side-bottom">${renderQuestionBank('sidebar')}</div></aside>`}<main class="main ${admin ? 'admin-main' : 'consumer-main'}">${state.notice ? `<div class="service-notice" role="status">${e(state.notice)}</div>` : ''}${state.page === 'admin-support' ? renderTickets(adminTickets, true) : admin ? renderAdmin(state.page.replace('admin-', '') as AdminPage, state.admin) : state.page === 'support' ? renderTickets(userTickets, false) : state.page === 'courses' ? renderCourses() : renderProgress()}${admin ? '' : `<div class="bank-mobile"><div class="mobile-service-summary">${renderTodaySummary()}</div>${renderQuestionBank('mobile')}</div>`}<footer class="page-footer">头歌妈妈 · 把任务交给我们</footer></main></div></div>`;
+  return `<div id="view-app" class="app-shell ${admin ? 'admin-app' : 'consumer-app'}"><header class="global-nav topbar ${admin ? 'admin-topbar' : ''}"><div class="top-left"><button class="nav-brand" type="button" data-nav="${admin ? 'admin-overview' : 'courses'}" aria-label="头歌妈妈首页">${brandLogo()}<span class="name">头歌妈妈</span><span class="domain">touge.mom</span></button>${admin ? '<span class="admin-chip">服务管理</span>' : ''}</div><nav class="nav-links" aria-label="${admin ? '管理员导航' : '主导航'}">${links}</nav><div class="nav-user">${avatar()}<span class="user-name">${e(state.user?.name || '同学')}</span><button class="icon-button" data-action="logout" aria-label="退出登录" title="退出登录">${icon('logout')}</button></div></header><div class="mobile-nav">${links}${isAdmin() ? navItem(admin ? 'courses' : 'admin-overview', admin ? '用户端' : '管理后台', admin ? 'courses' : 'overview') : ''}</div><div class="${admin ? 'shell admin-shell' : 'workspace consumer-workspace'}">${admin ? `<aside class="side admin-side" aria-label="管理员导航"><div class="side-label">服务管理</div><nav class="side-nav">${adminSideLinks}</nav><div class="side-foot"><p class="t">服务工作台</p><p>异常与执行记录只在管理端查看，用户端只展示完成进度。</p><button class="btn ghost text-button" data-nav="courses">${icon('courses')}返回用户端</button></div></aside>` : `<aside class="side consumer-side" aria-label="侧栏概况"><div class="side-card"><h3>当前概况</h3><div class="stat-row"><span class="l">我的课程</span><span class="n">${state.courses.length}</span></div><div class="stat-row"><span class="l">已选中</span><span class="n">${selectedCount}</span></div><div class="stat-row"><span class="l">处理中</span><span class="n">${active}</span></div><div class="stat-row"><span class="l">待跟进</span><span class="n">${followUp}</span></div><div class="stat-row"><span class="l">已完成任务</span><span class="n">${completed}</span></div></div>${renderTodaySummary()}<div class="consumer-side-bottom">${renderQuestionBank('sidebar')}</div></aside>`}<main class="main ${admin ? 'admin-main' : 'consumer-main'}">${state.notice ? `<div class="service-notice" role="status">${e(state.notice)}</div>` : ''}${state.page === 'admin-support' ? renderTickets(adminTickets, true) : admin ? renderAdmin(state.page.replace('admin-', '') as AdminPage, state.admin, adminJobActions) : state.page === 'support' ? renderTickets(userTickets, false) : state.page === 'courses' ? renderCourses() : renderProgress()}${admin ? '' : `<div class="bank-mobile"><div class="mobile-service-summary">${renderTodaySummary()}</div>${renderQuestionBank('mobile')}</div>`}<footer class="page-footer">头歌妈妈 · 把任务交给我们</footer></main></div></div>`;
 }
 function matchingCourseJobs(course: string): AnswerJob[] {
   return currentServiceJobs(state.jobs).filter(job => job.request.scope !== 'exercise' && (job.request.scope === 'all' || job.request.course === course));
@@ -284,6 +285,10 @@ function render(): void {
     const job = state.jobs.find(item => item.id === jobDialog?.id);
     if (job) state.modal = jobDetailContent(job, jobDialog.historical);
   }
+  if (adminJobDialog && state.modalKind === 'admin-job') {
+    const job = state.admin.jobs.find(item => item.id === adminJobDialog?.id);
+    if (job) state.modal = adminJobDetailContent(job, adminJobDialog.historical);
+  }
   // Draft values live only in the form controls. Preserve them across opening a
   // read-only dialog without serializing them into markup or persistent state.
   const draft = !state.user && !state.signingIn ? {
@@ -338,10 +343,11 @@ function restoreTicketForm(draft: TicketFormDraft | null): void {
     }
   }
 }
-function showModal(content: string, action: (() => Promise<void> | void) | null = null, kind: '' | 'guidelines' | 'ticket' | 'job' | 'course' = ''): void {
+function showModal(content: string, action: (() => Promise<void> | void) | null = null, kind: '' | 'guidelines' | 'ticket' | 'job' | 'admin-job' | 'course' = ''): void {
   if (kind !== 'course') courseDialog = null;
   if (kind !== 'ticket') ticketDialog = null;
   if (kind !== 'job') jobDialog = null;
+  if (kind !== 'admin-job') adminJobDialog = null;
   previousFocus = document.activeElement as HTMLElement | null; modalRevision++;
   state.modal = content; state.modalAction = action; state.modalKind = kind; render();
   document.querySelector<HTMLButtonElement>('[data-action="close-modal"]')?.focus();
@@ -349,7 +355,7 @@ function showModal(content: string, action: (() => Promise<void> | void) | null 
 function closeModal(): void {
   const guidelines = state.modalKind === 'guidelines';
   const closedTicket = ticketDialog?.id;
-  state.modal = ''; state.modalKind = ''; state.modalAction = null; modalRevision++; courseDialog = null; ticketDialog = null; jobDialog = null; render();
+  state.modal = ''; state.modalKind = ''; state.modalAction = null; modalRevision++; courseDialog = null; ticketDialog = null; jobDialog = null; adminJobDialog = null; render();
   if (guidelines) document.querySelector<HTMLButtonElement>(`[data-guidelines-source="${guidelinesSource}"]`)?.focus();
   else if (closedTicket) [...document.querySelectorAll<HTMLButtonElement>('[data-ticket-open]')].find(button => button.dataset.ticketOpen === closedTicket)?.focus();
   else if (previousFocus?.isConnected) previousFocus.focus();
@@ -517,23 +523,45 @@ function cachedCourseDialog(course: Course, tab: DetailTab): CourseDialog {
     loading: { homework: false, exercise: false }, failed: { homework: false, exercise: false },
     updatedAt: { homework: homeworks?.updatedAt ?? 0, exercise: exercises?.updatedAt ?? 0 } };
 }
-function confirmAdminRecovery(id: string): void {
+function currentAdminJob(id: string, action: AdminJobAction): AdminJob | undefined {
+  if (!isAdmin() || adminJobActions.has(id)) return undefined;
   const job = partitionAdminJobs(state.admin.jobs).current.find(value => value.id === id);
-  if (!isAdmin() || !job?.can_recover || adminRecoveries.has(id)) return;
-  showModal('<h2 id="modal-title">复核并继续该用户的任务？</h2><p class="detail-note">使用原用户当前有效的登录连接，先核对上次提交状态，再继续原范围内剩余内容。复核不通过时不会发送新的提交。此操作记录到管理审计。</p><div class="modal-actions"><button class="button" data-action="close-modal">取消</button><button class="button primary" data-action="modal-confirm">确认复核并继续</button></div>', async () => {
-    if (adminRecoveries.has(id)) return;
-    const session = generation;
-    adminRecoveries.add(id); closeModal();
-    try {
-      await api.adminRecoverJob(id);
-      if (session !== generation) return;
-      state.notice = '已复核，确认上次结果后继续剩余内容。';
-    } catch (error) {
-      if (session !== generation || handleError(error)) return;
-      state.notice = error instanceof ApiRequestError && error.code === 'OWNER_LOGIN_REQUIRED' ? '该用户的登录连接已过期，请用户重新登录后再复核继续。' : '暂未确认复核结果，请刷新任务记录后重试。';
-    } finally { if (session === generation) adminRecoveries.delete(id); }
-    if (session === generation) { render(); void loadAdmin(); }
-  });
+  if (!job || (action === 'cancel' ? !['queued', 'running'].includes(job.status) : adminJobResumeAction(job) !== action)) return undefined;
+  return job;
+}
+function adminJobDetailContent(job: AdminJob, historical: boolean): string {
+  const archived = historical || partitionAdminJobs(state.admin.jobs).history.some(item => item.id === job.id);
+  return `<div id="modal-title">${renderAdminJobDetail(job, archived, adminJobActions.get(job.id))}</div>`;
+}
+function confirmAdminJobAction(id: string, action: AdminJobAction): void {
+  const job = currentAdminJob(id, action);
+  if (!job) return;
+  const label = action === 'retry' ? '重新执行' : action === 'recover' ? '复核并继续' : '停止';
+  const note = action === 'retry' ? '使用原用户当前有效的登录连接，继续处理原任务范围内尚未完成的必做内容。已核验通过的关卡自动跳过，选做内容不会处理。' : action === 'recover' ? '使用原用户当前有效的登录连接，先核对上次提交状态，再继续原范围内剩余内容。复核不通过时不会发送新的提交。' : '会保留已完成的结果，停止后续处理。请等待任务确认停止后再重新执行。';
+  showModal(`<h2 id="modal-title">${label}该用户的任务？</h2><p class="subtext">${e(adminJobTarget(job))}</p><p class="detail-note">${note}此操作记录到管理审计。</p><div class="modal-actions"><button class="button" data-action="close-modal">取消</button><button class="button primary" data-action="modal-confirm">确认${label}</button></div>`, () => performAdminJobAction(id, action));
+}
+async function performAdminJobAction(id: string, action: AdminJobAction): Promise<void> {
+  if (!currentAdminJob(id, action)) { closeModal(); return; }
+  const session = generation;
+  adminJobActions.set(id, action); closeModal(); state.notice = ''; render();
+  try {
+    const result = action === 'retry' ? await api.adminRetryJob(id) : action === 'recover' ? await api.adminRecoverJob(id) : await api.adminCancelJob(id);
+    if (session !== generation) return;
+    if (action !== 'cancel' && (!result || typeof result.id !== 'string' || !result.id || typeof result.status !== 'string')) throw new Error('Invalid admin action response');
+    state.notice = action === 'retry' ? '已重新安排该用户的任务，已核验通过的关卡会自动跳过。' : action === 'recover' ? '已提交复核，确认上次结果后继续剩余内容。' : '已提交停止请求，请刷新确认停止状态。';
+  } catch (error) {
+    if (session !== generation || handleError(error)) return;
+    state.notice = error instanceof ApiRequestError && error.code === 'OWNER_LOGIN_REQUIRED'
+      ? `该用户的登录连接已过期，请用户重新登录后再${action === 'retry' ? '重新执行' : '复核继续'}。`
+      : error instanceof ApiRequestError && error.code === 'OWNER_ACCESS_REVOKED'
+        ? '该用户的服务已暂停，请先恢复用户服务，再刷新任务记录。'
+        : `暂未确认${action === 'retry' ? '重新执行' : action === 'recover' ? '复核' : '停止'}结果，请刷新任务记录后重试。`;
+  } finally {
+    if (session === generation) {
+      await loadAdmin();
+      if (session === generation) { adminJobActions.delete(id); render(); }
+    }
+  }
 }
 function renderCourseDialog(): void {
   if (!courseDialog || state.modalKind !== 'course') return;
@@ -809,7 +837,8 @@ function bindEvents(): void {
     }
   }));
   document.querySelectorAll<HTMLButtonElement>('[data-job-retry]').forEach(button => button.addEventListener('click', () => confirmJobAction(button.dataset.jobRetry!, 'retry')));
-  document.querySelectorAll<HTMLButtonElement>('[data-admin-recover]').forEach(button => button.addEventListener('click', () => confirmAdminRecovery(button.dataset.adminRecover!)));
+  document.querySelectorAll<HTMLButtonElement>('[data-admin-retry]').forEach(button => button.addEventListener('click', () => confirmAdminJobAction(button.dataset.adminRetry!, 'retry')));
+  document.querySelectorAll<HTMLButtonElement>('[data-admin-recover]').forEach(button => button.addEventListener('click', () => confirmAdminJobAction(button.dataset.adminRecover!, 'recover')));
   document.querySelectorAll<HTMLButtonElement>('[data-job-recover]').forEach(button => button.addEventListener('click', () => confirmJobAction(button.dataset.jobRecover!, 'recover')));
   document.querySelectorAll<HTMLButtonElement>('[data-job-cancel]').forEach(button => button.addEventListener('click', () => confirmJobAction(button.dataset.jobCancel!, 'cancel')));
   document.querySelector<HTMLDetailsElement>('[data-service-history]')?.addEventListener('toggle', event => {
@@ -818,7 +847,10 @@ function bindEvents(): void {
   document.querySelectorAll<HTMLButtonElement>('[data-admin-job-detail]').forEach(button => button.addEventListener('click', () => {
     if (!isAdmin()) return;
     const job = state.admin.jobs.find(item => item.id === button.dataset.adminJobDetail);
-    if (job) showModal(`<div id="modal-title">${renderAdminJobDetail(job, partitionAdminJobs(state.admin.jobs).history.some(item => item.id === job.id))}</div>`);
+    if (job) {
+      adminJobDialog = { id: job.id, historical: partitionAdminJobs(state.admin.jobs).history.some(item => item.id === job.id) };
+      showModal(adminJobDetailContent(job, adminJobDialog.historical), null, 'admin-job');
+    }
   }));
   document.querySelectorAll<HTMLButtonElement>('[data-admin-jobs-view]').forEach(button => button.addEventListener('click', () => {
     if (!isAdmin()) return;
@@ -851,8 +883,7 @@ function bindEvents(): void {
     showModal(`<h2 id="modal-title">${status === 'active' ? '恢复' : '暂停'}该用户的服务？</h2><p class="subtext">此操作会记录到管理审计。不会更改用户的头歌账号。</p><div class="modal-actions"><button class="button" data-action="close-modal">取消</button><button class="button primary" data-action="modal-confirm">确认${status === 'active' ? '恢复' : '暂停'}</button></div>`, async () => { await adminAction(() => api.adminUserStatus(id, status)); });
   }));
   document.querySelectorAll<HTMLButtonElement>('[data-admin-cancel]').forEach(button => button.addEventListener('click', () => {
-    if (!isAdmin()) return; const id = button.dataset.adminCancel!;
-    showModal('<h2 id="modal-title">停止该任务？</h2><p class="subtext">会保留已完成的结果，停止后续处理。此操作会记录到管理审计。</p><div class="modal-actions"><button class="button" data-action="close-modal">取消</button><button class="button primary" data-action="modal-confirm">确认停止</button></div>', async () => { await adminAction(() => api.adminCancelJob(id)); });
+    confirmAdminJobAction(button.dataset.adminCancel!, 'cancel');
   }));
   document.querySelectorAll<HTMLElement>('[data-action]').forEach(button => button.addEventListener(button instanceof HTMLInputElement ? 'change' : 'click', () => {
     switch (button.dataset.action) {

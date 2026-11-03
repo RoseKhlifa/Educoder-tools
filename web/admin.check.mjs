@@ -38,6 +38,30 @@ await test('collection capacity and exhaustive completion stay distinct from ans
   assert.match(failed, /需要处理/); assert.match(failed, /单次采集请求超时/); assert.doesNotMatch(failed, /完整扫描完成|达到采集上限/);
 });
 
+await test('admin task actions require explicit capabilities and keep retry separate from uncertain recovery', () => {
+  const source = job({can_retry:true,can_recover:false});
+  for (const html of [renderAdmin('overview',state([source])),renderAdminJobDetail(source)]) {
+    assert.match(html,/data-admin-retry=/); assert.doesNotMatch(html,/data-admin-recover=/);
+  }
+  for (const value of [undefined,false,'true',1]) {
+    const denied = job({can_retry:value,can_recover:false});
+    assert.doesNotMatch(renderAdmin('overview',state([denied]))+renderAdminJobDetail(denied),/data-admin-retry=|data-admin-recover=/);
+  }
+  const unknown = job({can_retry:true,can_recover:true});
+  const uncertain = renderAdmin('overview',state([unknown]))+renderAdminJobDetail(unknown);
+  assert.match(uncertain,/data-admin-recover=/); assert.doesNotMatch(uncertain,/data-admin-retry=/);
+  const active = job({status:'running',can_retry:true,can_recover:true});
+  const activeHTML = renderAdmin('operations',state([active]))+renderAdminJobDetail(active);
+  assert.match(activeHTML,/data-admin-cancel=/); assert.doesNotMatch(activeHTML,/data-admin-retry=|data-admin-recover=/);
+  assert.doesNotMatch(renderAdminJobDetail(source,true),/data-admin-retry=|data-admin-recover=/);
+  const history = {...state([source]),jobsView:'history'};
+  history.jobs=[{...source,id:'newer',created_at:'2026-11-03T12:00:00Z'},source];
+  assert.doesNotMatch(renderAdmin('operations',history),/data-admin-retry=|data-admin-recover=/);
+  const pending = new Map([[source.id,'retry']]);
+  assert.match(renderAdmin('overview',state([source]),pending),/data-admin-retry="[^"]+" disabled>正在重新执行/);
+  assert.match(renderAdminJobDetail(source,false,'retry'),/data-admin-retry="[^"]+" disabled>正在重新执行/);
+});
+
 await test('current operations keep live service targets clear and retain previous attempts in history', async t => {
   await t.test('a confirmed exam submission is not a follow-up alert when the outer worker expired after reconciliation', () => {
     const value = job({ status: 'uncertain', request: { scope: 'exercise', course: 'SAMPLE_COURSE', exercise_id: 12, mode: 'submit' }, result: { title: '示例考试', submitted: true, score_known: false, total_questions: 50, completed_questions: 0 } });
