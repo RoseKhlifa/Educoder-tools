@@ -779,7 +779,21 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 					}
 					cancel()
 				}
-				state.Feedback = boundedFeedback(feedback, answer.Feedback{Kind: "model", Message: ge.Error()})
+				availabilityFailure := providerAvailabilityFailure(gen, ge)
+				if availabilityFailure {
+					// Coalesced requests share a provider result without adding a
+					// model call. Discount only this run's own dispatched call from
+					// profile escalation, never from its actual usage or budgets.
+					if billed && dispatched {
+						state.GenerationRecovery.ProviderAvailabilityFailures++
+					}
+					// Transport diagnostics do not describe a source defect. Keep
+					// earlier repair evidence intact without teaching the model to
+					// change code in response to a provider outage.
+					state.Feedback = append([]answer.Feedback(nil), feedback...)
+				} else {
+					state.Feedback = boundedFeedback(feedback, answer.Feedback{Kind: "model", Message: ge.Error()})
+				}
 				result.Diagnostics = append(result.Diagnostics, ge.Error())
 				if state.GenerationRecovery.failedOutput(ge) {
 					result.Status = "generation_stalled"

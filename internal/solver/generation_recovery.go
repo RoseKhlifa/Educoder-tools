@@ -19,10 +19,11 @@ const maxUnproductiveGenerations = 3
 // hashes. Continuation grants more capacity without resetting an ineffective
 // profile or endlessly repeating an identical failed answer.
 type generationRecovery struct {
-	CompactOutput               bool `json:"compact_output,omitempty"`
-	RepeatedCandidates          int  `json:"repeated_candidates,omitempty"`
-	OutputFailures              int  `json:"output_failures,omitempty"`
-	ProBodyDeadlineFallbackUsed bool `json:"pro_body_deadline_fallback_used,omitempty"`
+	CompactOutput                bool `json:"compact_output,omitempty"`
+	RepeatedCandidates           int  `json:"repeated_candidates,omitempty"`
+	OutputFailures               int  `json:"output_failures,omitempty"`
+	ProviderAvailabilityFailures int  `json:"provider_availability_failures,omitempty"`
+	ProBodyDeadlineFallbackUsed  bool `json:"pro_body_deadline_fallback_used,omitempty"`
 }
 
 func (g *generationRecovery) restore(feedback []answer.Feedback) {
@@ -34,6 +35,16 @@ func (g *generationRecovery) restore(feedback []answer.Feedback) {
 }
 
 func (g generationRecovery) profile(cfg Config, calls int) answer.Profile {
+	// Availability failures still consume call and money budgets, but do not
+	// establish that the selected model generated ineffective source. Keep this
+	// distinction durable so an explicit continuation cannot mistake an outage
+	// for repeated unsuccessful code repairs.
+	if g.ProviderAvailabilityFailures > 0 {
+		calls -= g.ProviderAvailabilityFailures
+	}
+	if calls < 0 {
+		calls = 0
+	}
 	p := cfg.Profile
 	if calls > 0 {
 		p = cfg.RepairProfile
@@ -54,6 +65,31 @@ func (g generationRecovery) profile(cfg Config, calls int) answer.Profile {
 		p.Thinking, p.ReasoningEffort, p.MaxTokens = "disabled", "", 8192
 	}
 	return p
+}
+
+func providerAvailabilityFailure(result answer.Result, err error) bool {
+	// A partial parsed candidate must retain the output/repair path. The
+	// provider's availability branches return no candidate, and their billing
+	// uncertainty remains independent of model quality.
+	if len(result.Candidate.Files) > 0 {
+		return false
+	}
+	var providerErr *answer.Error
+	if !errors.As(err, &providerErr) || !providerErr.Retryable {
+		return false
+	}
+	switch providerErr.Kind {
+	case "upstream_error":
+		return providerErr.HTTPStatus == 429 || providerErr.HTTPStatus >= 500 && providerErr.HTTPStatus < 600
+	case "network_error", "timeout":
+		return providerErr.HTTPStatus == 0
+	case "response_read_failed":
+		// A 200 response whose body was interrupted has a separate, bounded
+		// recovery policy. Never broaden it through this classification.
+		return providerErr.HTTPStatus >= 500 && providerErr.HTTPStatus < 600 && providerErr.ReadCause != "canceled"
+	default:
+		return false
+	}
 }
 
 func (g *generationRecovery) fallbackAfterProBodyDeadline(cfg Config, profile answer.Profile, err error) bool {

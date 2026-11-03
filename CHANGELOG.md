@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.72 - 2026-11-03
+
+- Keep model service availability failures out of code-quality escalation while preserving charged calls and durable recovery budgets
+
 ## 0.1.71 - 2026-11-03
 
 - Fall back once from a stalled enhanced model within existing budgets and preserve HTML attribute repair evidence
