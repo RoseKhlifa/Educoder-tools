@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.76 - 2026-11-03
+
+- Preserve exact relative HTML references and inspect target-effect examples during source-bound repair
+
 ## 0.1.75 - 2026-11-03
 
 - Evaluate explicit operator proposals through fresh selftest and formal gates without promoting unresolved or unmarked candidates

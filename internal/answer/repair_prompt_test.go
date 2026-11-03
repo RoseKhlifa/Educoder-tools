@@ -54,8 +54,8 @@ func TestRepairPromptRejectsHistorySourceHashMismatch(t *testing.T) {
 
 func TestHTMLRepairKeepsConflictingRequirementsAndBoundPassingAttributeFeedback(t *testing.T) {
 	snapshot := testSnapshot()
-	snapshot.StatementMarkdown = "Task src=\"https://example.invalid/a\". Programming requirement src=\"https://example.invalid/b\"."
-	snapshot.Files = []problem.File{{Path: "step/test.html", Filename: "test.html", Extension: ".html", Language: "html", CurrentContent: "<body></body>", StarterProvenance: "unknown"}}
+	snapshot.StatementMarkdown = "## Task\nUse src=\"https://example.invalid/a\".\n## Programming requirement\nUse src=\"https://example.invalid/b\".\n## Target effect\n![Example](/attachments/sample/example.png)\n```html\n<img src=\"/attachments/sample/example.png\" alt=\"sample\">\n```"
+	snapshot.Files = []problem.File{{Path: "step/test.html", Filename: "test.html", Extension: ".html", Language: "html", CurrentContent: "<!DOCTYPE html>\n<body>\n<!-- Begin -->\n<!-- End -->\n</body>", StarterProvenance: "unknown"}}
 	previous := Candidate{Kind: "programming", Language: "html", Files: []problem.SolutionFile{{Path: "step/test.html", Content: `<body><img src="https://example.invalid/a" alt="sample"/></body>`}}}
 	hash, _ := problem.HashFiles(previous.Files)
 	feedback := []Feedback{{Kind: "selftest", ExpectedStdout: "alt passed\nsrc passed\n", ActualStdout: "alt passed\n"}}
@@ -65,15 +65,45 @@ func TestHTMLRepairKeepsConflictingRequirementsAndBoundPassingAttributeFeedback(
 	}
 	var payload struct {
 		Statement string          `json:"statement_markdown"`
+		Files     []problem.File  `json:"files"`
+		Previous  *Candidate      `json:"previous_candidate"`
+		Feedback  []Feedback      `json:"feedback"`
 		History   []RepairAttempt `json:"repair_history"`
 	}
 	if err := json.Unmarshal([]byte(wire.Messages[1].Content.textOnly()), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Statement != snapshot.StatementMarkdown || len(payload.History) != 1 || payload.History[0].Candidate.Files[0] != previous.Files[0] || payload.History[0].Feedback[0].ActualStdout != "alt passed\n" {
-		t.Fatal("conflicting literals or passing attribute evidence lost")
+	if payload.Statement != snapshot.StatementMarkdown || len(payload.Files) != 1 || payload.Files[0].CurrentContent != snapshot.Files[0].CurrentContent || payload.Previous == nil || payload.Previous.Files[0] != previous.Files[0] || len(payload.History) != 1 || payload.History[0].FilesHash != hash || payload.History[0].Candidate.Files[0] != previous.Files[0] || payload.History[0].Feedback[0] != feedback[0] || len(payload.Feedback) != 1 || payload.Feedback[0] != feedback[0] {
+		t.Fatal("conflicting literals, current source or source-bound attribute feedback lost")
 	}
-	if !strings.Contains(wire.Messages[0].Content.textOnly(), "Do not alternate between attribute values already disproved") {
-		t.Fatal("HTML repair failed to use source-bound evidence")
+	for _, reference := range []string{`src="https://example.invalid/a"`, `src="https://example.invalid/b"`, `src="/attachments/sample/example.png"`} {
+		if !strings.Contains(payload.Statement, reference) {
+			t.Errorf("supplied reference was normalized or removed: %s", reference)
+		}
+	}
+	system := wire.Messages[0].Content.textOnly()
+	for _, instruction := range []string{"task prose, programming requirements, existing allowed-file content, target-effect examples, and code samples together", "Preserve exact supplied relative or absolute literal forms", "do not silently resolve relative URLs, change schemes, hosts or routes", "Keep attributes whose checks already passed", "source-bound repair_history", "Do not alternate between attribute values already disproved"} {
+		if !strings.Contains(system, instruction) {
+			t.Errorf("HTML repair guidance missing: %s", instruction)
+		}
+	}
+	if wire.ResponseFormat.Type != "json_object" || !strings.Contains(system, "The object fields must be kind, language, and files only.") {
+		t.Fatal("HTML evidence guidance changed the JSON output contract")
+	}
+}
+
+func TestHTMLAttributeGuidanceDoesNotChangeNonHTMLPrompt(t *testing.T) {
+	snapshot := testSnapshot()
+	baseline, err := buildRequest(Request{Problem: snapshot, Profile: DefaultProfile()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.StatementMarkdown += "\nA quoted example contains <img src=\"/attachments/sample/example.png\">."
+	withExample, err := buildRequest(Request{Problem: snapshot, Profile: DefaultProfile()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if baseline.Messages[0].Content.textOnly() != withExample.Messages[0].Content.textOnly() || strings.Contains(withExample.Messages[0].Content.textOnly(), "For HTML attribute tasks") || baseline.ResponseFormat != withExample.ResponseFormat {
+		t.Fatal("HTML example text changed a non-HTML system prompt or output contract")
 	}
 }
