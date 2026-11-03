@@ -104,6 +104,8 @@ type LoadedProblem struct {
 type snapshotBinder interface{ bindSnapshot(LoadedProblem) }
 
 type SelfTest struct {
+	CandidateID         int64  `json:"candidate_id,omitempty"`
+	FilesHash           string `json:"files_hash,omitempty"`
 	Completed           bool
 	Output              string
 	Matches             bool
@@ -891,10 +893,10 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			result.CandidateID = rejected.ID
 			state.GenerationRecovery.RepeatedCandidates++
 			state.GenerationRecovery.CompactOutput = true
-			result.Diagnostics = append(result.Diagnostics, "已拦截重复失败代码，使用增强模型及完整输出额度继续修复")
+			result.Diagnostics = append(result.Diagnostics, "已拦截重复失败代码；后续修复保留完整输出额度")
 			if state.GenerationRecovery.RepeatedCandidates >= maxUnproductiveGenerations {
 				result.Status = "generation_stalled"
-				result.Diagnostics = append(result.Diagnostics, "增强修复后仍连续返回已失败的代码，停止重复付费；需要补充题目证据或新的候选答案")
+				result.Diagnostics = append(result.Diagnostics, "调整生成策略后仍连续返回已失败的代码，停止重复付费；需要补充题目证据或新的候选答案")
 				return result, nil
 			}
 			continue
@@ -933,6 +935,11 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			}
 			for runtimeAttempt := 0; ; runtimeAttempt++ {
 				st, se := adapter.SelfTest(ctx, target, candidate.Files[0], test.Stdin, test.ExpectedStdout)
+				// Bind each observation to the candidate actually evaluated. A
+				// later generation may be rejected before selftest and change the
+				// result's candidate without replacing these observations. Keep
+				// the adapter's saved/readback hash as independent evidence.
+				st.CandidateID, st.FilesHash = bankID, result.CodeHash
 				result.SelfTests = append(result.SelfTests, st)
 				// Terminal output is not a stdout oracle. A script may already have
 				// changed the workspace before emitting any text, so never infer a

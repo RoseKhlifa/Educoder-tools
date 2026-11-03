@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.74 - 2026-11-03
+
+- Bind each selftest observation to its actual candidate and source hash and report recovery model behavior accurately
+
 ## 0.1.73 - 2026-11-03
 
 - Retry only transient homework progress reads with bounded attempts and private operator diagnostics while retaining fresh-score requirements
