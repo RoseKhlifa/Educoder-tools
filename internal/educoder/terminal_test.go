@@ -32,6 +32,20 @@ func terminalTaskFixture() *Task {
 	return task
 }
 
+func hadoopEditorTerminalTaskFixture() *Task {
+	zero, yes := 0, true
+	task := &Task{ST: &zero, HomeworkID: 123, CourseIdentifier: "COURSE1", Environments: []ProgrammingEnvironment{
+		{EnvironmentID: 42, TabType: 1}, {EnvironmentID: 42, TabType: 4},
+	}}
+	task.CodeEditor.EnvironmentID, task.CodeEditor.Name = 42, "Hadoop"
+	task.Game.ID, task.Game.Identifier, task.Game.MyShixunID = 11, "GAME1", 80
+	task.MyShixun.ID, task.MyShixun.Identifier = 80, "MY1"
+	task.Challenge.ID, task.Challenge.ST, task.Challenge.WithCodeFile = 9, &zero, &yes
+	task.Challenge.Path = "main.cpp"
+	task.User.UserID = 99
+	return task
+}
+
 func TestIsTerminalTaskRequiresObservedLayout(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -59,6 +73,99 @@ func TestIsTerminalTaskRequiresObservedLayout(t *testing.T) {
 				t.Fatalf("IsTerminalTask = %v", got)
 			}
 		})
+	}
+}
+
+func TestHadoopStartUsesSameEnvironmentTab4AndFixedBootstrap(t *testing.T) {
+	task := hadoopEditorTerminalTaskFixture()
+	if task.IsTerminalTask() {
+		t.Fatal("editor plus terminal layout changed IsTerminalTask semantics")
+	}
+	const script = "set -eu\ncommand -v start-dfs.sh >/dev/null\nif ! hdfs dfs -test -d / >/dev/null 2>&1; then\n  start-dfs.sh\nfi\nfor attempt in 1 2 3 4 5 6 7 8 9 10; do\n  if hdfs dfs -test -d / >/dev/null 2>&1; then exit 0; fi\n  sleep 1\ndone\nexit 1\n"
+	expectedHash := sha256.Sum256([]byte(script))
+	var starts, commands atomic.Int32
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/myshixuns/MY1/start.json":
+			starts.Add(1)
+			q := r.URL.Query()
+			if q.Get("tab_type") != "4" || q.Get("shixun_environment_id") != "42" || q.Get("game_id") != "11" || q.Get("coursesId") != "COURSE1" || q.Get("homework_common_id") != "123" {
+				t.Errorf("Hadoop terminal start query lost binding: %v", q)
+			}
+			endpoint := strings.Replace(server.URL, "http://", "ws://", 1) + "/ws"
+			json.NewEncoder(w).Encode(map[string]any{"status": 0, "data": map[string]any{"host": "runtime", "port": "2222", "link_url": endpoint, "username": "root", "password": "secret", "myshixun_id": 80}})
+		case "/ws":
+			conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+			if err != nil {
+				return
+			}
+			defer conn.CloseNow()
+			ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+			defer cancel()
+			if _, _, err := conn.Read(ctx); err != nil {
+				return
+			}
+			write := func(text string) error {
+				return conn.Write(ctx, websocket.MessageBinary, []byte(base64.RawStdEncoding.EncodeToString([]byte(text))))
+			}
+			if err := write("fixture shell banner\r\n$ "); err != nil {
+				return
+			}
+			_, payload, err := conn.Read(ctx)
+			if err != nil {
+				return
+			}
+			var client struct {
+				TP   string `json:"tp"`
+				Data string `json:"data"`
+			}
+			if json.Unmarshal(payload, &client) != nil || client.TP != "client" {
+				t.Error("expected Hadoop bootstrap command")
+				return
+			}
+			commands.Add(1)
+			chunks := regexp.MustCompile(`'([A-Za-z0-9+/=]+)'`).FindAllStringSubmatch(client.Data, -1)
+			var decoded strings.Builder
+			for _, chunk := range chunks {
+				if data, decodeErr := base64.StdEncoding.DecodeString(chunk[1]); decodeErr == nil {
+					decoded.Write(data)
+				}
+			}
+			if !strings.Contains(decoded.String(), "start-dfs.sh") || !strings.Contains(decoded.String(), "hdfs dfs -test -d /") {
+				t.Errorf("bootstrap command omitted fixed Hadoop readiness flow: %q", decoded.String())
+			}
+			hashMatch := regexp.MustCompile(`__educoder_hash" = '([a-f0-9]{64})'`).FindStringSubmatch(client.Data)
+			if len(hashMatch) != 2 || hashMatch[1] != hex.EncodeToString(expectedHash[:]) {
+				t.Errorf("bootstrap script hash=%v want=%s", hashMatch, hex.EncodeToString(expectedHash[:]))
+			}
+			nonce := regexp.MustCompile(`__EDUCODER_START_' '([a-f0-9]{32})__`).FindStringSubmatch(client.Data)
+			if len(nonce) != 2 {
+				t.Error("bootstrap command omitted execution boundary")
+				return
+			}
+			start, finish := "__EDUCODER_START_"+nonce[1]+"__", "__EDUCODER_FINISH_"+nonce[1]+"__"
+			if err := write(client.Data + "\r\n"); err != nil {
+				return
+			}
+			body := "\r\n" + start + "\r\n\r\n" + finish + ":" + hex.EncodeToString(expectedHash[:]) + ":0\r\n$ "
+			for i := 0; i < len(body); i += 7 {
+				if err := write(body[i:min(i+7, len(body))]); err != nil {
+					return
+				}
+			}
+			_, _, _ = conn.Read(ctx)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client := New(server.URL)
+	if err := client.StartHadoop(context.Background(), task); err != nil {
+		t.Fatalf("StartHadoop err=%v", err)
+	}
+	if starts.Load() != 1 || commands.Load() != 1 {
+		t.Fatalf("Hadoop bootstrap replayed starts=%d commands=%d", starts.Load(), commands.Load())
 	}
 }
 

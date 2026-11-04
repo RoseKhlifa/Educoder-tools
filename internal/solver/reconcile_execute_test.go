@@ -106,6 +106,14 @@ func TestRunReconcilesUnknownFormalEvaluationReadOnly(t *testing.T) {
 	if len(store.validations) < 2 || store.validations[len(store.validations)-1].Result != "passed" {
 		t.Fatalf("missing reconciled formal evidence: %+v", store.validations)
 	}
+	recorded, loadErr := store.GetRun(context.Background(), result.RunID)
+	if loadErr != nil || recorded.Status != "passed" {
+		t.Fatalf("execution defer overwrote reconciliation: status=%s err=%v", recorded.Status, loadErr)
+	}
+	var persisted runState
+	if err := json.Unmarshal(recorded.Data, &persisted); err != nil || persisted.Result.Status != "passed" || persisted.Result.Evaluation == nil || !persisted.Result.Evaluation.Passed {
+		t.Fatalf("reconciled proof did not survive checkpoint: %+v err=%v", persisted.Result, err)
+	}
 }
 
 // countingProvider makes the no-extra-model assertion explicit without

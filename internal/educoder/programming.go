@@ -531,6 +531,36 @@ type PollOptions struct {
 	Interval time.Duration
 }
 
+// EvaluationUncertainError means polling ended without an observed terminal
+// verdict. It deliberately carries only local lifecycle context and never
+// exposes signed query values or upstream response bodies.
+type EvaluationUncertainError struct {
+	Reason string
+	Cause  error
+}
+
+func (e *EvaluationUncertainError) Error() string {
+	if e == nil || e.Reason == "" {
+		return "评测结果不确定"
+	}
+	return "评测结果不确定：" + e.Reason
+}
+
+func (e *EvaluationUncertainError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Cause
+}
+
+func evaluationUncertain(ctx context.Context) error {
+	cause := ctx.Err()
+	if cause == nil {
+		cause = context.DeadlineExceeded
+	}
+	return &EvaluationUncertainError{Reason: "轮询超时前未观察到明确终态", Cause: cause}
+}
+
 func (c *Client) WaitEvaluation(ctx context.Context, t *Task, saved *SavedCode, options PollOptions) (*EvaluationResult, error) {
 	if err := validateSaved(t, saved, true); err != nil {
 		return nil, err
@@ -549,12 +579,13 @@ func (c *Client) WaitEvaluation(ctx context.Context, t *Task, saved *SavedCode, 
 		var response EvaluationResult
 		err := c.requestWithStatuses(ctx, http.MethodGet, "/api/tasks/"+t.Game.Identifier+"/game_status.json", query, nil, taskRef(t), &response, 0, 2)
 		if err != nil && !errors.Is(err, errResponseNotModified) {
+			if ctx.Err() != nil {
+				return nil, evaluationUncertain(ctx)
+			}
 			return nil, err
 		}
 		if err == nil {
-			if response.RunningCodeStatus != nil && (*response.RunningCodeStatus == 1 || *response.RunningCodeStatus == 2) {
-				// Both are intermediate states in the recording.
-			} else if response.Status != nil && *response.Status == 0 && evaluationHasFailure(response) {
+			if response.Status != nil && *response.Status == 0 && evaluationHasFailure(response) {
 				// This endpoint uses 0 for an unsuccessful completed evaluation,
 				// including tasks whose test contents are hidden. Keep its feedback
 				// available for a subsequent repair instead of treating it as an API
@@ -572,15 +603,21 @@ func (c *Client) WaitEvaluation(ctx context.Context, t *Task, saved *SavedCode, 
 					}
 				}
 				return &response, nil
+			} else if response.RunningCodeStatus != nil && *response.RunningCodeStatus >= 1 && *response.RunningCodeStatus <= 4 {
+				// Hadoop recordings include preparation, compilation, execution
+				// and result-processing stages 1 through 4. None is a verdict.
 			} else {
-				return nil, errors.New("评测返回未观察到的状态组合")
+				// A zero status without a concrete failing test is a common
+				// in-flight snapshot. Likewise an empty body can arrive while the
+				// platform is committing the evaluation. Keep polling; neither
+				// counts alone nor optimistic metadata establishes a terminal pass.
 			}
 		}
 		timer := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, fmt.Errorf("评测轮询结束: %w", ctx.Err())
+			return nil, evaluationUncertain(ctx)
 		case <-timer.C:
 		}
 	}

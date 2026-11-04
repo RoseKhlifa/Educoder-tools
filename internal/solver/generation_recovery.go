@@ -112,6 +112,57 @@ func (g *generationRecovery) failedOutput(err error) bool {
 
 const runtimeStartupFailureMessage = "启动环境失败，请稍后重试，如问题持续存在，请联系平台人员解决。"
 
+const runtimeStartRequiredMessage = "请先启动Hadoop再点击评测！"
+
+func runtimeStartRequired(output, expected string) bool {
+	return strings.TrimSpace(output) == runtimeStartRequiredMessage && strings.TrimSpace(expected) != runtimeStartRequiredMessage
+}
+
+// Old runners rejected source before Hadoop was started. Permit a new full
+// validation of only this complete, source-bound prerequisite observation,
+// including an unknown result from a later failed bootstrap. Any formal or
+// unrelated unknown evidence still prevents reuse.
+func hadoopPrerequisiteOnlyRejection(c questionbank.Candidate) bool {
+	if c.Status != "rejected" || c.FilesHash == "" {
+		return false
+	}
+	hash, err := problem.HashFiles(c.Files)
+	if err != nil || hash != c.FilesHash {
+		return false
+	}
+	found := false
+	for _, v := range c.Validations {
+		// A prior passed self-test is compatible only when it is bound to the
+		// same source and problem contract; formal pass evidence never bypasses
+		// current Hadoop environment validation.
+		if v.Result == "passed" && v.Kind == "selftest" && v.FilesHash == c.FilesHash && v.SavedFilesHash == c.FilesHash && v.RevisionHash == c.RevisionHash && v.ContractHash == c.ContractHash {
+			continue
+		}
+		if (v.Result != "failed" && v.Result != "unknown") || v.Kind != "selftest" || !v.Complete || v.TestCount != 1 || v.PassedCount != 0 || v.FilesHash != c.FilesHash || v.SavedFilesHash != c.FilesHash || v.RevisionHash != c.RevisionHash || v.ContractHash != c.ContractHash || v.Result == "failed" && !v.Terminal {
+			return false
+		}
+		var feedback []answer.Feedback
+		if json.Unmarshal([]byte(v.Feedback), &feedback) != nil || len(feedback) == 0 {
+			return false
+		}
+		marker := false
+		for _, f := range feedback {
+			if f.Kind == "selftest" && runtimeStartRequired(f.ActualStdout, f.ExpectedStdout) && (strings.TrimSpace(f.Message) == runtimeStartRequiredMessage || f.Message == "上游运行环境要求先启动 Hadoop") {
+				marker = true
+				continue
+			}
+			if f.Kind != "selftest_passed" || !educoder.PublicOutputMatches(f.ActualStdout, f.ExpectedStdout) {
+				return false
+			}
+		}
+		if !marker {
+			return false
+		}
+		found = true
+	}
+	return found
+}
+
 func runtimeStartupFailure(output, expected string) bool {
 	// Match only the observed complete runner response, never an arbitrary
 	// program output containing the same words or a sample expecting this text.
@@ -119,7 +170,13 @@ func runtimeStartupFailure(output, expected string) bool {
 }
 
 func legacyRuntimeFeedback(f answer.Feedback) bool {
-	return f.Kind == "selftest" && strings.TrimSpace(f.Message) == runtimeStartupFailureMessage && runtimeStartupFailure(f.ActualStdout, f.ExpectedStdout)
+	if f.Kind != "selftest" {
+		return false
+	}
+	if strings.TrimSpace(f.Message) == runtimeStartupFailureMessage && runtimeStartupFailure(f.ActualStdout, f.ExpectedStdout) {
+		return true
+	}
+	return runtimeStartRequired(f.ActualStdout, f.ExpectedStdout) && strings.TrimSpace(f.Message) == runtimeStartRequiredMessage
 }
 
 func codeRepairFeedback(feedback []answer.Feedback) []answer.Feedback {

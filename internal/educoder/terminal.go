@@ -191,6 +191,10 @@ func (c *Client) RunTerminalCommand(ctx context.Context, t *Task, script string,
 	if err != nil {
 		return nil, err
 	}
+	return c.runBoundTerminalCommand(ctx, t, env, script, options)
+}
+
+func (c *Client) runBoundTerminalCommand(ctx context.Context, t *Task, env ProgrammingEnvironment, script string, options TerminalOptions) (*TerminalResult, error) {
 	if c == nil || c.HTTP == nil || validIdentifier(t.Game.Identifier) != nil || validIdentifier(t.MyShixun.Identifier) != nil || validIdentifier(t.CourseIdentifier) != nil || t.Game.ID <= 0 || t.MyShixun.ID <= 0 || t.Game.MyShixunID != t.MyShixun.ID || t.HomeworkID <= 0 || t.User.UserID <= 0 || t.Challenge.ID <= 0 {
 		return nil, errors.New("终端任务缺少完整且一致的运行实例绑定")
 	}
@@ -344,4 +348,34 @@ func (c *Client) RunTerminalCommand(ctx context.Context, t *Task, script string,
 			return result, nil
 		}
 	}
+}
+
+// StartHadoop implements the bootstrap observed in the user's Hadoop HAR.
+// Mixed editor tasks retain their editor contract; only this fixed preparation
+// script runs in the attached terminal. Its receipt is not submission evidence.
+func (c *Client) StartHadoop(ctx context.Context, t *Task) error {
+	editor, err := programmingEnvironment(t)
+	if err != nil || !strings.EqualFold(strings.TrimSpace(t.CodeEditor.Name), "Hadoop") {
+		return errors.New("当前任务没有匹配的 Hadoop 编程环境")
+	}
+	var terminal ProgrammingEnvironment
+	count := 0
+	for _, environment := range t.Environments {
+		if environment.EnvironmentID == editor.EnvironmentID && environment.TabType == 4 && !bool(environment.VNCURL) {
+			terminal = environment
+			count++
+		}
+	}
+	if count != 1 || bool(t.VNCURL) {
+		return errors.New("Hadoop 环境没有唯一匹配的命令行")
+	}
+	const script = "set -eu\ncommand -v start-dfs.sh >/dev/null\nif ! hdfs dfs -test -d / >/dev/null 2>&1; then\n  start-dfs.sh\nfi\nfor attempt in 1 2 3 4 5 6 7 8 9 10; do\n  if hdfs dfs -test -d / >/dev/null 2>&1; then exit 0; fi\n  sleep 1\ndone\nexit 1\n"
+	result, err := c.runBoundTerminalCommand(ctx, t, terminal, script, TerminalOptions{Timeout: 90 * time.Second})
+	if err != nil {
+		return err
+	}
+	if result == nil || !result.Completed || result.ExitCode == nil || *result.ExitCode != 0 {
+		return errors.New("Hadoop 启动后未确认 HDFS 可用")
+	}
+	return nil
 }

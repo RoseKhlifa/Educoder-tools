@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.82 - 2026-11-04
+
+- Start Hadoop through bound terminal readiness checks and wait for complete evaluation lifecycle without repeated model repairs
+
 ## 0.1.81 - 2026-11-04
 
 - Reconcile uncertain formal results with read-only platform evidence and classify provider payment gates

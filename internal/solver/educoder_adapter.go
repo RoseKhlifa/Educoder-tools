@@ -185,6 +185,14 @@ func (a *EducoderAdapter) task(ctx context.Context, target Target) (*educoder.Ta
 	return a.Client.LoadTask(ctx, target.Course, target.HomeworkID, target.Game)
 }
 
+func (a *EducoderAdapter) StartHadoop(ctx context.Context, target Target) error {
+	task, err := a.task(ctx, target)
+	if err != nil {
+		return err
+	}
+	return a.Client.StartHadoop(ctx, task)
+}
+
 func (a *EducoderAdapter) SelfTest(ctx context.Context, target Target, file problem.SolutionFile, input, expected string) (SelfTest, error) {
 	t, err := a.task(ctx, target)
 	if err != nil {

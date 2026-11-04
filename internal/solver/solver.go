@@ -89,6 +89,10 @@ type protocolClientAdapter interface {
 	ProtocolClient() *educoder.Client
 }
 
+type hadoopStarter interface {
+	StartHadoop(context.Context, Target) error
+}
+
 type Target struct {
 	Course     string
 	HomeworkID int64
@@ -569,7 +573,7 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 	state.RepairHistory = history
 	runtimeOnlyRejected := make(map[string]bool)
 	for _, c := range allCandidates {
-		if legacyRuntimeOnlyRejection(c) || snap.EditMode == "single_file" && legacyFormalRuntimeOnlyRejection(c) {
+		if hadoopPrerequisiteOnlyRejection(c) || legacyRuntimeOnlyRejection(c) || snap.EditMode == "single_file" && legacyFormalRuntimeOnlyRejection(c) {
 			runtimeOnlyRejected[c.FilesHash] = true
 		}
 	}
@@ -668,6 +672,7 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 		seed := answer.Candidate{Kind: "programming", Language: languageOf(snap), Files: candidates[0].Files}
 		previous = &seed
 	}
+	hadoopStartAttempted := false
 	for attempt := state.Attempts; attempt < req.MaxEvaluations; attempt++ {
 		if err := ctx.Err(); err != nil {
 			result.Status = "interrupted"
@@ -971,6 +976,10 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				// changed the workspace before emitting any text, so never infer a
 				// replayable pre-execution failure from that text.
 				startupFailure := snap.EditMode != "terminal" && se == nil && (st.SavedFilesHash == "" || st.SavedFilesHash == result.CodeHash) && runtimeStartupFailure(st.Output, test.ExpectedStdout)
+				startRequired := snap.EditMode == "single_file" && se == nil && st.Completed && st.ProcessFinishedSeen && st.SavedFilesHash == result.CodeHash && runtimeStartRequired(st.Output, test.ExpectedStdout)
+				if startRequired {
+					se = errors.New("上游运行环境要求先启动 Hadoop")
+				}
 				if startupFailure {
 					se = errors.New("upstream runtime environment failed to start before selftest")
 				}
@@ -1010,6 +1019,22 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 					return result, errors.Join(se, ve)
 				}
 				if se != nil {
+					if startRequired {
+						if starter, ok := adapter.(hadoopStarter); ok && !hadoopStartAttempted {
+							hadoopStartAttempted = true
+							stage(req, "environment_retry", "正在启动 Hadoop 并核对 HDFS 就绪状态")
+							if startErr := starter.StartHadoop(ctx, target); startErr == nil {
+								continue
+							}
+						}
+						result.SelfTestStatus = "unknown"
+						result.Status = "uncertain"
+						result.Diagnostics = append(result.Diagnostics, "Hadoop 环境准备未确认完成，已保留候选并停止模型修复")
+						state.Feedback = codeRepairFeedback(feedback)
+						state.Result = *result
+						_ = s.persist(ctx, result.RunID, state, result.Status, created)
+						return result, errors.New("头歌要求先启动 Hadoop 运行环境")
+					}
 					if (startupFailure || emptyConflict) && runtimeAttempt == 0 && ctx.Err() == nil {
 						message := "上游自测环境未启动，稍后使用相同代码重试一次"
 						if emptyConflict {
@@ -1219,7 +1244,12 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 					reconciled, reconcileErr := s.reconcileClient(reconcileCtx, protocolAdapter.ProtocolClient(), req.Owner, result.RunID, false)
 					cancel()
 					if reconcileErr == nil && reconciled != nil && reconciled.Status == "passed" {
-						return reconciled, nil
+						// The execution defer persists this original pointer. Keep the
+						// confirmed result there so it cannot overwrite the fresh proof
+						// with the earlier uncertain checkpoint.
+						*result = *reconciled
+						state.Result = *result
+						return result, nil
 					}
 					// Keep the original unknown result and validation. The proof is
 					// deliberately fail-closed when any fresh read is incomplete.
