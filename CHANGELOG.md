@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.81 - 2026-11-04
+
+- Reconcile uncertain formal results with read-only platform evidence and classify provider payment gates
+
 ## 0.1.80 - 2026-11-03
 
 - Separate current course work from historical attempts and revalidate stale lists with strict metadata and terminal-version evidence

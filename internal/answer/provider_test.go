@@ -119,6 +119,26 @@ func TestTruncatedAndHTTPFailures(t *testing.T) {
 	}
 }
 
+func TestPaymentRequiredIsStableNonRetryableAndOpaque(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "private provider balance details", http.StatusPaymentRequired)
+	}))
+	p, err := NewDeepSeek(Config{APIKey: "secret", BaseURL: server.URL})
+	if err != nil {
+		server.Close()
+		t.Fatal(err)
+	}
+	_, err = p.Generate(context.Background(), Request{Problem: testSnapshot(), Profile: DefaultProfile()})
+	server.Close()
+	pe, ok := err.(*Error)
+	if !ok || pe.Kind != "provider_payment_required" || pe.HTTPStatus != http.StatusPaymentRequired || pe.Retryable || !pe.BilledUnknown || IsRetryableError(err) || IsAvailabilityError(err) {
+		t.Fatalf("payment-required classification: %#v", err)
+	}
+	if strings.Contains(err.Error(), "private") || strings.Contains(err.Error(), "balance") {
+		t.Fatalf("provider response body escaped: %v", err)
+	}
+}
+
 func TestTimeoutIsClassifiedWithoutResponseDetails(t *testing.T) {
 	rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		<-r.Context().Done()

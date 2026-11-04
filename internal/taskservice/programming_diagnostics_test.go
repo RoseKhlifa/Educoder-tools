@@ -69,6 +69,11 @@ func TestProgrammingFailureReasonDistinguishesSelfTestFromFormalEvaluation(t *te
 			err:  errors.New("submission response unavailable"),
 			want: "submission_uncertain",
 		},
+		{
+			name: "provider payment gate is distinct from local budget",
+			err:  &answer.Error{Kind: "provider_payment_required", HTTPStatus: http.StatusPaymentRequired, BilledUnknown: true},
+			want: "model_provider_payment_required",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			result := &Result{Status: "uncertain", Programming: tc.programming, Diagnostics: tc.diagnostics}

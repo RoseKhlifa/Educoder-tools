@@ -119,5 +119,12 @@ func retryAfterSeconds(raw string, now time.Time) int {
 }
 
 func providerHTTPError(status int, header http.Header) *Error {
-	return &Error{Kind: "upstream_error", HTTPStatus: status, Retryable: status == 429 || status >= 500, BilledUnknown: true, RetryAfterSeconds: retryAfterSeconds(header.Get("Retry-After"), time.Now())}
+	// HTTP 402 is a provider account/payment or quota gate. Keep it separate
+	// from transient upstream failures: retrying cannot restore provider access,
+	// and callers must not mistake it for the service's own per-task budget.
+	kind := "upstream_error"
+	if status == http.StatusPaymentRequired {
+		kind = "provider_payment_required"
+	}
+	return &Error{Kind: kind, HTTPStatus: status, Retryable: status == 429 || status >= 500, BilledUnknown: true, RetryAfterSeconds: retryAfterSeconds(header.Get("Retry-After"), time.Now())}
 }

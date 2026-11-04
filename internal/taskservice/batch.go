@@ -431,6 +431,8 @@ func batchFailureReason(r *Result, err error) string {
 	var providerErr *answer.Error
 	if errors.As(err, &providerErr) {
 		switch providerErr.Kind {
+		case "provider_payment_required":
+			return "model_provider_payment_required"
 		case "truncated_output":
 			return "model_output_truncated"
 		case "invalid_output_json", "candidate_contract", "objective_candidate_contract":

@@ -76,7 +76,7 @@ func TestAvailabilityRetryWaitCancellationAndResets(t *testing.T) {
 	if err := r.Wait(ctx, func(context.Context, time.Duration) error { t.Fatal("wait entered after cancellation"); return nil }); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled wait=%v", err)
 	}
-	for _, err := range []error{nil, &Error{Kind: "truncated_output"}, &Error{Kind: "invalid_output_json"}, &Error{Kind: "upstream_error", HTTPStatus: 401}, &Error{Kind: "response_read_failed", HTTPStatus: 200, Retryable: true}} {
+	for _, err := range []error{nil, &Error{Kind: "truncated_output"}, &Error{Kind: "invalid_output_json"}, &Error{Kind: "provider_payment_required", HTTPStatus: http.StatusPaymentRequired, BilledUnknown: true}, &Error{Kind: "upstream_error", HTTPStatus: 401}, &Error{Kind: "response_read_failed", HTTPStatus: 200, Retryable: true}} {
 		r = AvailabilityRetry{Streak: 4, RetryAfterSeconds: 60}
 		if r.Observe(err) || r.Streak != 0 || r.RetryAfterSeconds != 0 {
 			t.Fatalf("nonavailability error retained retry state: err=%v retry=%+v", err, r)

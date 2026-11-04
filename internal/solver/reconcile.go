@@ -16,6 +16,14 @@ import (
 // uncertain. All upstream operations are reads. It never starts a build, saves
 // code or invokes the model, and it preserves the original unknown evidence.
 func (s *Service) ReconcileClient(ctx context.Context, client *educoder.Client, owner, runID string) (*Result, error) {
+	return s.reconcileClient(ctx, client, owner, runID, true)
+}
+
+// reconcileClient performs the same read-only proof as ReconcileClient. When
+// lockRuntime is false, the caller already owns the runtime lock (the normal
+// solver path); this avoids self-deadlocking while preserving the lock for
+// external/manual reconciliation callers.
+func (s *Service) reconcileClient(ctx context.Context, client *educoder.Client, owner, runID string, lockRuntime bool) (*Result, error) {
 	if s == nil || s.store == nil || client == nil {
 		return nil, errors.New("reconciliation requires a store and authenticated client")
 	}
@@ -76,11 +84,14 @@ func (s *Service) ReconcileClient(ctx context.Context, client *educoder.Client, 
 	if err != nil {
 		return result, err
 	}
-	unlock, err := s.lock(ctx, discovery.Key)
-	if err != nil {
-		return result, err
+	unlock := func() {}
+	if lockRuntime {
+		unlock, err = s.lock(ctx, discovery.Key)
+		if err != nil {
+			return result, err
+		}
+		defer unlock()
 	}
-	defer unlock()
 	loaded, err := adapter.Load(ctx, state.Target)
 	if err != nil {
 		return result, err

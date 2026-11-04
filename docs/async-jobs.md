@@ -42,7 +42,7 @@ Web 请求只负责校验会话、入队和返回任务 ID。`cmd/web` 启动 `i
 
 模型输出截断或 JSON 无效会在剩余次数、费用和时间预算内自动重新生成；截断后的请求关闭可选推理并使用 8192 输出 token，防止反复占满额度。未知计费预留仍计入整份作业预算。自测比较规范 CRLF/LF，并忽略一次终止换行；内部空格、换行和答案内容仍须相同。仅被旧换行规则误拒绝的候选可重新完整自测，再进行正式评测，不直接标记通过。
 
-批处理保留子运行的真实状态，`selftest_failed`、`attempts_exhausted`、`model_error` 不再统称为平台待复核。管理员结果每关包含 `reason_code`、`model_calls`、`max_model_calls`，用于排查停止位置和尝试次数。普通用户接口使用专门 DTO，展示处理进度和服务状态，不返回内部原因、模型调用次数、费用或原始事件；这些与早期调试工作台的公开结果不同。模型原始响应和自测原始内容不作为用户内容。保存、执行流或正式提交结果未知时仍停止自动写入，避免重复操作。
+批处理保留子运行的真实状态，`selftest_failed`、`attempts_exhausted`、`model_error` 不再统称为平台待复核。模型供应商返回 HTTP 402 时使用稳定的 `model_provider_payment_required` 原因码，表示供应商账户余额或额度门槛；该状态不进入瞬时故障重试，也不等同于平台自己的 `budget_exhausted`。管理员结果每关包含 `reason_code`、`model_calls`、`max_model_calls`，用于排查停止位置和尝试次数。普通用户接口使用专门 DTO，展示处理进度和服务状态，不返回内部原因、模型调用次数、费用或原始事件；这些与早期调试工作台的公开结果不同。模型原始响应和自测原始内容不作为用户内容。保存、执行流或正式提交结果未知时仍停止自动写入，避免重复操作。
 
 代码自测帧解码失败与正式提交未知使用不同原因。自测仅进行 `evaluate=0` 保存和运行流；当 `self_test_status=unknown` 且还没有正式 `evaluation` 时，原因码为 `selftest_stream_unconfirmed`，明确的 WebSocket 连接失败仍用 `selftest_connection_failed`。已有正式 `evaluation` 的未知结果保持 `submission_uncertain`，残留的自测消息不会把它误标成自测故障。两种情况都保留未核验状态，而不是把协议异常当成错误答案交给模型反复生成。批处理同时保留失败子任务实际提供的非空诊断，过滤空白并去重；不会再用 nil error 生成 `diagnostics:[""]` 而丢失子任务原因。
 

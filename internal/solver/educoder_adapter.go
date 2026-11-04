@@ -34,6 +34,18 @@ func NewEducoderAdapter(client *educoder.Client) (*EducoderAdapter, error) {
 	return &EducoderAdapter{Client: client, graphic: educoder.NewGraphicProtocol(client, nil)}, nil
 }
 
+// ProtocolClient exposes the already-authenticated protocol client to the
+// solver's read-only reconciliation gate. It returns the same client and does
+// not grant adapters any additional mutation capability. Keeping this narrow
+// accessor also lets task-service wrappers embed EducoderAdapter without
+// disabling the reconciliation proof.
+func (a *EducoderAdapter) ProtocolClient() *educoder.Client {
+	if a == nil {
+		return nil
+	}
+	return a.Client
+}
+
 // RunClient is a convenience for callers that already own an authenticated
 // protocol client and do not need to customize the execution adapter.
 func (s *Service) RunClient(ctx context.Context, client *educoder.Client, req Request) (*Result, error) {

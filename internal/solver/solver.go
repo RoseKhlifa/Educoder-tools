@@ -85,6 +85,10 @@ type Adapter interface {
 	Progress(ctx context.Context, target Target) (Progress, error)
 }
 
+type protocolClientAdapter interface {
+	ProtocolClient() *educoder.Client
+}
+
 type Target struct {
 	Course     string
 	HomeworkID int64
@@ -1203,6 +1207,31 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			result.Status = "uncertain"
 			state.Result = *result
 			_ = s.persist(ctx, result.RunID, state, result.Status, created)
+			// A successful SaveCode + BuildCode followed by an unknown polling
+			// response has an ambiguous delivery state. EducoderAdapter exposes
+			// the authenticated client, so perform one bounded, read-only proof
+			// while this run still owns the runtime lock. This never replays a
+			// mutation or invokes the model; any mismatch remains uncertain.
+			if eval.Status == "error" && eval.SavedFilesHash == result.CodeHash {
+				if protocolAdapter, ok := adapter.(protocolClientAdapter); ok && protocolAdapter.ProtocolClient() != nil {
+					stage(req, "reconciling", "正式评测响应不确定，正在只读核验最新平台状态")
+					reconcileCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+					reconciled, reconcileErr := s.reconcileClient(reconcileCtx, protocolAdapter.ProtocolClient(), req.Owner, result.RunID, false)
+					cancel()
+					if reconcileErr == nil && reconciled != nil && reconciled.Status == "passed" {
+						return reconciled, nil
+					}
+					// Keep the original unknown result and validation. The proof is
+					// deliberately fail-closed when any fresh read is incomplete.
+					if reconcileErr != nil {
+						result.Diagnostics = append(result.Diagnostics, "只读复核未获得完整的评测、满分和源码一致性证据，任务保持待核验: "+publicText(reconcileErr.Error()))
+					} else {
+						result.Diagnostics = append(result.Diagnostics, "只读复核未获得完整的评测、满分和源码一致性证据，任务保持待核验")
+					}
+					state.Result = *result
+					_ = s.persist(ctx, result.RunID, state, result.Status, created)
+				}
+			}
 			return result, ee
 		}
 		formalFeedback := []answer.Feedback{{Kind: "formal", Message: eval.Feedback}}
