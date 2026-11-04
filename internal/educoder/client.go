@@ -98,15 +98,22 @@ type Course struct {
 }
 
 type Homework struct {
-	ID               int64    `json:"homework_id"`
-	Name             string   `json:"name"`
-	Status           []string `json:"status"`
-	ShixunIdentifier string   `json:"shixun_identifier"`
-	IsShixun         bool     `json:"is_shixun"`
-	EnterStatus      int      `json:"shixun_enter_status"`
-	Category         string   `json:"upper_category_name,omitempty"`
-	ChallengeCount   int      `json:"challenge_count"`
-	FinishedCount    int      `json:"finished_challenge_count"`
+	ID               int64           `json:"homework_id"`
+	Name             string          `json:"name"`
+	Status           []string        `json:"status"`
+	ShixunIdentifier string          `json:"shixun_identifier"`
+	IsShixun         bool            `json:"is_shixun"`
+	EnterStatus      int             `json:"shixun_enter_status"`
+	Category         string          `json:"upper_category_name,omitempty"`
+	ChallengeCount   int             `json:"challenge_count"`
+	Type             json.RawMessage `json:"type,omitempty"`
+	Kind             string          `json:"homework_kind,omitempty"`
+	// Common homework personal submission metadata is separate from the
+	// generic availability status. Keep its original JSON representation.
+	WorkStatus    json.RawMessage `json:"work_status,omitempty"`
+	Uncommitted   *bool           `json:"un_commit_work,omitempty"`
+	WorkID        int64           `json:"work_id,omitempty"`
+	FinishedCount int             `json:"finished_challenge_count"`
 	// Educoder has returned deadline values under several names and as either
 	// strings or Unix timestamps. Keep the raw JSON value until the web DTO
 	// normalizes it so one unexpected type cannot discard the whole task list.
@@ -125,6 +132,19 @@ type Homework struct {
 	// resolves it through the observed read-only myshixun challenges endpoint.
 	MyShixunIdentifier string `json:"myshixun_identifier,omitempty"`
 	StudentWorkID      int64  `json:"student_work_id,omitempty"`
+}
+
+// CommonSubmissionStatus uses only the explicit personal un_commit_work flag
+// from a common-homework tab. Work IDs, availability statuses and action labels
+// do not prove whether a work has been submitted.
+func (h Homework) CommonSubmissionStatus() string {
+	if h.Kind != "common" || h.Uncommitted == nil {
+		return "unknown"
+	}
+	if *h.Uncommitted {
+		return "not_submitted"
+	}
+	return "submitted"
 }
 
 type Task struct {
@@ -472,14 +492,60 @@ func (c *Client) Courses(ctx context.Context, status string) ([]Course, error) {
 	return nil, errors.New("课堂分页超过 1000 页")
 }
 
+// Homeworks retains the type=4 execution catalog. Common text/image homework
+// has a separate display route and must not enter the shixun execution flow.
 func (c *Client) Homeworks(ctx context.Context, course, category string) ([]Homework, error) {
+	return c.homeworksByTypeMode(ctx, course, category, "4", true, false)
+}
+
+// HomeworksForDisplay reads both observed homework tabs in stable order:
+// shixun first, then common text/image homework. The first occurrence of an ID
+// wins, so a row also returned in the common tab retains its shixun contract.
+// A failed or incomplete tab invalidates the whole catalog.
+func (c *Client) HomeworksForDisplay(ctx context.Context, course, category string) ([]Homework, error) {
+	result := []Homework{}
+	seen := map[int64]bool{}
+	for _, homeworkType := range []string{"4", "1"} {
+		homeworks, err := c.homeworksByTypeMode(ctx, course, category, homeworkType, true, true)
+		if err != nil {
+			return nil, err
+		}
+		for _, homework := range homeworks {
+			if !seen[homework.ID] {
+				seen[homework.ID] = true
+				result = append(result, homework)
+			}
+		}
+	}
+	return result, nil
+}
+
+// HomeworksByType reads the upstream common-homework catalog for a specific
+// tab type. Empty type follows the upstream all-tabs endpoint. Only the two
+// observed tab types assign Kind; the is_shixun flag alone is not a classifier.
+func (c *Client) HomeworksByType(ctx context.Context, course, category, homeworkType string) ([]Homework, error) {
+	return c.homeworksByTypeMode(ctx, course, category, homeworkType, true, true)
+}
+
+func (c *Client) homeworksByTypeMode(ctx context.Context, course, category, homeworkType string, strict, rejectNoTotalRepeat bool) ([]Homework, error) {
 	if err := validIdentifier(course); err != nil {
 		return nil, err
 	}
+	kind := ""
+	switch homeworkType {
+	case "4":
+		kind = "shixun"
+	case "1":
+		kind = "common"
+	}
 	result := []Homework{}
 	seen := map[int64]bool{}
+	advertisedTotal := -1
 	for page := 1; page <= 1000; page++ {
-		q := url.Values{"id": {course}, "limit": {"20"}, "page": {strconv.Itoa(page)}, "status": {"0"}, "type": {"4"}, "order": {"0"}}
+		q := url.Values{"id": {course}, "limit": {"20"}, "page": {strconv.Itoa(page)}, "status": {"0"}, "order": {"0"}}
+		if homeworkType != "" {
+			q.Set("type", homeworkType)
+		}
 		if category != "" {
 			q.Set("category", category)
 		}
@@ -491,27 +557,38 @@ func (c *Client) Homeworks(ctx context.Context, course, category string) ([]Home
 			if data.Homeworks == nil || data.Total != nil && *data.Total < 0 {
 				return false
 			}
-			if data.Total != nil && *data.Total > len(result) {
-				for _, homework := range data.Homeworks {
-					if !seen[homework.ID] {
-						return true
-					}
-				}
-				return false
+			total := advertisedTotal
+			if data.Total != nil && *data.Total > total {
+				total = *data.Total
 			}
-			return true
+			if len(data.Homeworks) == 0 {
+				return total <= len(result)
+			}
+			for _, homework := range data.Homeworks {
+				if !seen[homework.ID] {
+					return true
+				}
+			}
+			if !rejectNoTotalRepeat && advertisedTotal < 0 && data.Total == nil {
+				return true
+			}
+			return false
 		}); err != nil {
 			return nil, err
+		}
+		if data.Total != nil && *data.Total > advertisedTotal {
+			advertisedTotal = *data.Total
 		}
 		added := 0
 		for _, homework := range data.Homeworks {
 			if !seen[homework.ID] {
 				seen[homework.ID] = true
+				homework.Kind = kind
 				result = append(result, homework)
 				added++
 			}
 		}
-		if len(data.Homeworks) == 0 || added == 0 || (data.Total != nil && len(result) >= *data.Total) {
+		if len(data.Homeworks) == 0 || added == 0 || advertisedTotal >= 0 && len(result) >= advertisedTotal {
 			return result, nil
 		}
 	}

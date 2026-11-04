@@ -800,6 +800,18 @@ await test('consumer course service and administrator boundary',async t=>{
   await t.test('read-only course detail does not enter or submit an upstream task',async()=>{
     const page=await app();page.get('[data-course-detail="COURSE_A"]').dispatch('click');await settle();assert.match(page.html(),/测试作业/);assert.match(page.html(),/1 \/ 2 必做关卡/);assert.equal(page.requests.some(item=>item.url.endsWith('/enter')||item.options.method==='POST'),false);page.get('[data-action="close-modal"]').dispatch('click');assert.doesNotMatch(page.html(),/role="dialog"/);
   });
+  await t.test('common homework stays visible as a separate pending tab without automatic actions', async () => {
+    const page = await app({'/api/courses/COURSE_A/homeworks': () => ok([
+      { id: 1, name: '实验已完成', homeworkKind: 'shixun', requiredProgressKnown: true, requiredChallengeCount: 1, finishedRequiredChallengeCount: 1 },
+      { id: 3968749, name: '图文作业', homeworkKind: 'common', automaticSupported: false, submissionStatus: 'not_submitted', status: ['提交中'], deadline: '2026-11-11T00:00:00Z' },
+    ])});
+    const row = page.html().match(/<tr class="course-row[\s\S]*?data-course-row="COURSE_A"[\s\S]*?<\/tr>/)?.[0] || '';
+    assert.match(row, /homework-count[^>]*>0<\/span>/); assert.match(row, /common-count[^>]*>1<\/span>/); assert.match(row, /图文作业待处理/); assert.doesNotMatch(row, /暂无待办|已完成/);
+    page.get('[data-course-detail="COURSE_A"]').dispatch('click'); await settle(); page.get('[data-detail-tab="common"]').dispatch('click'); await settle();
+    const modal = page.html().slice(page.html().indexOf('role="dialog"'));
+    assert.match(modal, /图文作业/); assert.match(modal, /待提交/); assert.match(modal, /不支持自动提交/); assert.match(modal, /在头歌查看详情/); assert.doesNotMatch(modal, /data-action="modal-confirm"|开始处理/);
+    assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
+  });
   await t.test('course detail counts only required levels and never presents optional levels as unfinished', async () => {
     const page = await app({'/api/courses/COURSE_A/homeworks': () => ok([{id:1,name:'必做已全部完成',challengeCount:10,finishedChallengeCount:5,requiredProgressKnown:true,requiredChallengeCount:5,finishedRequiredChallengeCount:5}])});
     page.get('[data-course-detail="COURSE_A"]').dispatch('click'); await settle();

@@ -24,8 +24,11 @@ test('current course evidence archives an old attempt without changing its recor
 test('empty actionable catalog proves no current work, not historic grade completion', () => {
   const source = job();
   assert.equal(courseRecordIsHistorical(source, proofs([])), true);
-  assert.deepEqual(summarizeCourseWork([]), { pending: 0, hasRequired: false });
-  assert.deepEqual(summarizeCourseWork([full]), { pending: 0, hasRequired: true });
+  assert.deepEqual(summarizeCourseWork([]), { pending: 0, shixunPending: 0, commonPending: 0, commonSubmitted: 0, commonTotal: 0, hasRequired: false });
+  assert.deepEqual(summarizeCourseWork([full]), { pending: 0, shixunPending: 0, commonPending: 0, commonSubmitted: 0, commonTotal: 0, hasRequired: true });
+  assert.equal(summarizeCourseWork([{ id: 3968749, name: '图文作业', homeworkKind: 'common', submissionStatus: 'submitted' }]).pending, 0);
+  assert.equal(summarizeCourseWork([{ id: 3968749, name: '图文作业', homeworkKind: 'common', submissionStatus: 'not_submitted' }]).pending, 1);
+  assert.equal(summarizeCourseWork([{ id: 3968749, name: '图文作业', homeworkKind: 'common', submissionStatus: 'unknown' }]).pending, 1);
   assert.equal(source.status, 'failed'); assert.equal(source.result.completed_homeworks, 6);
 });
 

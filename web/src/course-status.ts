@@ -18,14 +18,35 @@ export function courseTerminalVersion(job: AnswerJob): string {
 
 function knownRequired(homework: Homework): boolean {
   const total = homework.requiredChallengeCount, finished = homework.finishedRequiredChallengeCount;
-  return homework.requiredProgressKnown === true && Number.isSafeInteger(total) && Number.isSafeInteger(finished)
+  return homework.homeworkKind !== 'common' && homework.requiredProgressKnown === true && Number.isSafeInteger(total) && Number.isSafeInteger(finished)
     && (total as number) >= 0 && (finished as number) >= 0 && (finished as number) <= (total as number);
 }
 
-export function summarizeCourseWork(homeworks: Homework[]): { pending: number; hasRequired: boolean } {
+function commonPending(homework: Homework): boolean {
+  return homework.homeworkKind === 'common' && homework.submissionStatus !== 'submitted';
+}
+
+export interface CourseWorkSummary {
+  pending: number;
+  shixunPending: number;
+  commonPending: number;
+  commonSubmitted: number;
+  commonTotal: number;
+  hasRequired: boolean;
+}
+
+export function summarizeCourseWork(homeworks: Homework[]): CourseWorkSummary {
+  const shixun = homeworks.filter(homework => homework.homeworkKind !== 'common');
+  const common = homeworks.filter(homework => homework.homeworkKind === 'common');
+  const shixunPending = shixun.filter(homework => !knownRequired(homework) || homework.finishedRequiredChallengeCount! < homework.requiredChallengeCount!).length;
+  const commonPendingCount = common.filter(commonPending).length;
   return {
-    pending: homeworks.filter(homework => !knownRequired(homework) || homework.finishedRequiredChallengeCount! < homework.requiredChallengeCount!).length,
-    hasRequired: homeworks.some(homework => knownRequired(homework) && homework.requiredChallengeCount! > 0),
+    pending: shixunPending + commonPendingCount,
+    shixunPending,
+    commonPending: commonPendingCount,
+    commonSubmitted: common.filter(homework => homework.submissionStatus === 'submitted').length,
+    commonTotal: common.length,
+    hasRequired: shixun.some(homework => knownRequired(homework) && homework.requiredChallengeCount! > 0),
   };
 }
 
@@ -51,7 +72,9 @@ export function courseRecordIsHistorical(job: AnswerJob, evidence: ReadonlyMap<s
     const value = proof(course);
     if (!value) return false;
     const homework = value.data.find(item => item.id === homeworkId);
-    return !homework || knownRequired(homework) && homework.finishedRequiredChallengeCount === homework.requiredChallengeCount;
+    if (!homework) return true;
+    if (homework.homeworkKind === 'common') return homework.submissionStatus === 'submitted';
+    return knownRequired(homework) && homework.finishedRequiredChallengeCount === homework.requiredChallengeCount;
   };
   const scope = job.request.scope;
   const course = job.request.course ?? '';

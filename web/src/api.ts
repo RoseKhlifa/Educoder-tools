@@ -251,9 +251,25 @@ function normalizeHomework(value: unknown): Homework {
   const status = Array.isArray(statusValue)
     ? statusValue.map(value => text(value)).filter(Boolean).join('、')
     : text(statusValue, text(item.status_text));
+  const kindValue = item.homeworkKind ?? item.homework_kind;
+  const homeworkKind = kindValue === 'common' ? 'common' : 'shixun';
+  const automaticSupported = typeof item.automaticSupported === 'boolean'
+    ? item.automaticSupported
+    : homeworkKind === 'shixun';
+  const submissionValue = item.submissionStatus ?? item.submission_status;
+  const submissionStatus = homeworkKind === 'common'
+    ? submissionValue === 'submitted' || submissionValue === 'not_submitted' || submissionValue === 'unknown'
+      ? submissionValue
+      : 'unknown'
+    : undefined;
+  const detailUrl = text(item.detailUrl ?? item.detail_url ?? item.url ?? item.categoryUrl ?? item.category_url) || undefined;
   return {
     id,
     name: text(item.name || item.homework_name, '未命名任务'),
+    homeworkKind,
+    automaticSupported,
+    submissionStatus,
+    detailUrl,
     shixunIdentifier: text(item.shixunIdentifier || item.shixun_identifier) || undefined,
     status,
     challengeCount,

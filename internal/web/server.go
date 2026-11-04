@@ -453,7 +453,13 @@ func (s *Server) handleHomeworks(w http.ResponseWriter, r *http.Request, request
 		s.writeError(w, requestID, http.StatusBadRequest, "INVALID_COURSE", "课堂标识无效")
 		return
 	}
-	homeworks, err := session.Client.Homeworks(r.Context(), course, r.URL.Query().Get("category"))
+	var homeworks []educoder.Homework
+	var err error
+	if catalog, ok := session.Client.(homeworkCatalogReader); ok {
+		homeworks, err = catalog.HomeworksForDisplay(r.Context(), course, r.URL.Query().Get("category"))
+	} else {
+		homeworks, err = session.Client.Homeworks(r.Context(), course, r.URL.Query().Get("category"))
+	}
 	if err != nil {
 		s.upstreamError(w, requestID)
 		return

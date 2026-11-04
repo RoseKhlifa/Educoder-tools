@@ -49,7 +49,7 @@ let todayLoadedDate = '';
 let guidelinesSource = 'login';
 let pollTimer: ReturnType<typeof setTimeout> | undefined;
 let previousFocus: HTMLElement | null = null;
-type DetailTab = 'homework' | 'exercise';
+type DetailTab = 'homework' | 'common' | 'exercise';
 interface CourseDialog {
   course: Course; homeworks: Homework[] | null; exercises: Exercise[] | null; tab: DetailTab;
   loading: Record<DetailTab, boolean>; failed: Record<DetailTab, boolean>; updatedAt: Record<DetailTab, number>;
@@ -83,7 +83,7 @@ function handleCourseCacheChange(event: CourseCacheEvent): void {
   }
   const dialog = courseDialog;
   if (dialog && state.modalKind === 'course' && dialog.course.identifier === event.identifier) {
-    const tab: DetailTab = event.kind === 'homeworks' ? 'homework' : 'exercise';
+    const tab: DetailTab = event.kind === 'homeworks' ? (courseDialog?.tab === 'common' ? 'common' : 'homework') : 'exercise';
     if (event.kind === 'homeworks') {
       const cached = courseCache.peekHomeworks(event.identifier);
       if (cached) { dialog.homeworks = cached.data; dialog.updatedAt.homework = cached.updatedAt; }
@@ -192,6 +192,10 @@ function blocksCourseScheduling(job: AnswerJob): boolean {
 interface HomeworkSummary {
   ready: boolean;
   count: number;
+  runnableCount: number;
+  commonPending: number;
+  commonSubmitted: number;
+  commonTotal: number;
   sync: 'loading' | 'ready' | 'error';
   stale: boolean;
   hasRequired: boolean;
@@ -199,15 +203,17 @@ interface HomeworkSummary {
 function homeworkSummary(course: Course): HomeworkSummary {
   const cached = courseCache.peekHomeworks(course.identifier);
   const sync = homeworkSync.get(course.identifier);
-  if (!cached) return { ready: false, count: 0, sync: sync?.state ?? 'loading', stale: false, hasRequired: false };
+  if (!cached) return { ready: false, count: 0, runnableCount: 0, commonPending: 0, commonSubmitted: 0, commonTotal: 0, sync: sync?.state ?? 'loading', stale: false, hasRequired: false };
   const summary = summarizeCourseWork(cached.data);
-  return { ready: true, count: summary.pending, hasRequired: summary.hasRequired, sync: sync?.state ?? 'ready', stale: sync?.state === 'error' || cached.stale };
+  return { ready: true, count: summary.pending, runnableCount: summary.shixunPending, commonPending: summary.commonPending, commonSubmitted: summary.commonSubmitted, commonTotal: summary.commonTotal, hasRequired: summary.hasRequired, sync: sync?.state ?? 'ready', stale: sync?.state === 'error' || cached.stale };
 }
 function courseSelectable(course: string): boolean {
   const item = state.courses.find(value => value.identifier === course);
   if (!item || coursePending(course)) return false;
   const summary = homeworkSummary(item);
-  return !summary.ready || summary.stale || summary.count > 0;
+  // Common homework is display-only until the server exposes a supported
+  // mutation. It must keep the course visibly pending without creating a job.
+  return !summary.ready || summary.stale || summary.runnableCount > 0;
 }
 function coursePending(course: string): boolean {
   return currentServiceJobs(state.jobs).filter(job => job.request.scope !== 'exercise' && (job.request.scope === 'all' || job.request.course === course)).some(blocksCourseScheduling);
@@ -217,6 +223,7 @@ function courseDisplayStatus(course: Course, summary: HomeworkSummary): { label:
   const active = matching.find(pendingJob);
   if (active) return { label: serviceLabel(active), tone: serviceStatus(active) };
   if (matching.some(job => jobActions.has(job.id))) return { label: '正在更新任务状态', tone: 'waiting' };
+  if (summary.ready && !summary.stale && summary.sync === 'ready' && summary.commonPending > 0 && summary.runnableCount === 0) return { label: '图文作业待处理', tone: 'waiting' };
   if (summary.ready && !summary.stale && summary.sync === 'ready' && summary.count === 0) return { label: summary.hasRequired ? '已完成' : '暂无待办', tone: 'completed' };
   if (summary.sync === 'loading') return { label: summary.ready ? '正在更新' : '同步中', tone: 'waiting' };
   if (summary.ready && summary.stale) return { label: summary.sync === 'error' ? '更新未完成' : '待更新', tone: 'waiting' };
@@ -255,7 +262,7 @@ function renderCourses(): string {
   const selectedAll = selectable.length > 0 && selectable.every(course => state.selected.includes(course.identifier));
   const actionableCourses = state.courses.filter(course => courseSelectable(course.identifier));
   const latestProgress = latest ? jobProgress(latest) : null;
-  return `<div class="page-head page-heading"><div><span class="eyebrow">我的学习</span><h1>今天，也轻松一点。</h1><p>${e(state.user?.name || '同学')}，选好课程，我们来完成。</p></div><div class="head-actions"><button class="btn button" data-action="refresh" ${state.loading ? 'disabled' : ''}>${icon('refresh')}刷新课程</button><button class="btn accent button primary" data-action="start-all" ${state.loading || state.creating || !state.courses.length || !actionableCourses.length || !accessible() || allServicePending() ? 'disabled' : ''}>一键完成全部未完成作业 ${icon('arrow')}</button></div></div>${!accessible() ? '<div class="service-notice">你的服务暂未开通，请联系服务人员。已有完成进度仍可查看。</div>' : ''}<section class="strip" aria-label="课程摘要"><div class="strip-item"><div class="k">我的课程</div><div class="v">${state.courses.length}</div><div class="h">头歌平台同步</div></div><div class="strip-item"><div class="k">正在处理</div><div class="v">${active.length}</div><div class="h">仅统计排队与执行中的任务</div></div><div class="strip-item"><div class="k">已选中</div><div class="v">${selectedCount(state.selected)}</div><div class="h">选中后开始处理</div></div><div class="strip-item"><div class="k">${active.length ? '当前任务进度' : '最近任务进度'}</div><div class="v">${latestProgress?.percent ?? (completed ? 100 : 0)}%</div><div class="h">${latestHistorical ? '历史执行记录' : '当前服务记录'}</div></div></section><div class="content-grid"><section class="panel-box course-panel"><div class="panel-toolbar"><div><h2>我的课程 <span class="count">${state.courses.length}</span></h2><p class="muted">选择课程，处理其中尚未完成的必做作业。</p></div><div class="toolbar-row"><label class="search-input"><span class="sr-only">搜索课程</span><input data-search placeholder="搜索课程" value="${e(state.search)}"></label><button class="btn button" data-action="select-all" ${state.creating || !accessible() ? 'disabled' : ''}>${selectedAll ? '清空选择' : '全选可处理'}</button></div></div>${state.loading ? '<div class="loading" role="status"><span class="spinner"></span>正在同步你的课程…</div>' : visible.length ? `<div class="course-table-wrap"><table class="course-table" aria-label="我的课程列表"><thead><tr><th class="select-col">选</th><th>课程</th><th>未完成作业</th><th>状态</th><th></th></tr></thead><tbody>${visible.map((course, index) => { const summary = homeworkSummary(course); const displayStatus = courseDisplayStatus(course, summary); const selectableCourse = courseSelectable(course.identifier); const selected = state.selected.includes(course.identifier); const countLabel = summary.ready ? String(summary.count) : summary.sync === 'error' ? '未同步' : '同步中…'; const countTitle = summary.stale ? (summary.sync === 'error' ? '更新未完成，显示上次同步结果' : '显示上次同步结果，正在核对') : summary.ready ? summary.count === 0 ? '已核验没有未完成的必做作业' : '未完成的必做作业' : summary.sync === 'error' ? '作业列表同步失败，请刷新重试' : '正在同步作业列表'; return `<tr class="course-row ${selected ? 'selected' : ''}" data-course-row="${e(course.identifier)}"><td class="select-col"><label class="course-select"><input type="checkbox" data-select-course="${e(course.identifier)}" ${selected ? 'checked' : ''} ${!selectableCourse || state.creating || !accessible() ? 'disabled' : ''}><span class="sr-only">选择${e(course.name)}</span></label></td><td><div class="course-name"><span class="course-index">${String(index + 1).padStart(2, '0')}</span><div><strong>${e(course.name)}</strong>${renderCourseMeta(course)}</div></div></td><td><span class="table-number homework-count${summary.stale ? ' stale' : ''}" title="${e(countTitle)}">${e(countLabel)}</span></td><td><span class="badge ${displayStatus.tone}" title="${e(countTitle)}">${displayStatus.label}</span></td><td><button class="text-button" data-course-detail="${e(course.identifier)}">查看详情 ${icon('arrow')}</button></td></tr>`; }).join('')}</tbody></table></div>` : `<div class="panel empty"><h3>${state.search ? '没有找到这门课程' : '还没有课程'}</h3><p>${state.search ? '试试其他课程名称。' : '加入头歌课堂后，刷新这里即可同步。'}</p></div>`}<div class="selection-bar"><span class="selection-summary">已选 ${selectedCount(state.selected)} 门课程</span><button class="button primary" data-action="start-selected" ${!state.selected.length || state.creating || !accessible() ? 'disabled' : ''}>${state.creating ? '正在创建任务…' : '完成所选课程'}</button></div></section><aside class="status-rail side-card"><section class="current-service"><div class="rail-label"><i></i> 我的完成进度</div><h2>${latestHistorical ? '历史执行记录' : latest ? serviceLabel(latest) : completed ? '任务已完成' : '一切准备就绪'}</h2><p>${latest ? e(jobTitle(latest, state.courses)) : '选好课程后，我们会在这里跟进。'}</p>${latest && examSubmitted ? `<p class="rail-exam-status">已交卷${jobProgress(latest).total ? ` · 共 ${jobProgress(latest).total} 道题` : ''}</p>` : latest ? `<div class="large-progress"><strong>${jobProgress(latest).completed}</strong><span>/ ${jobProgress(latest).total || '—'} ${jobProgress(latest).unit}</span></div><div class="rail-track"><span style="width:${jobProgress(latest).percent}%"></span></div>` : '<div class="ready-mark" aria-hidden="true">✓</div>'}<p class="rail-note">${latestHistorical ? '当前课程已无对应待办，这里保留当次执行进度。' : latest && canRetryJob(latest) ? '本次任务已停止处理，可在完成进度中重新执行。' : latest && serviceStatus(latest) === 'support' ? '本次处理已暂停，已完成进度保留，剩余内容待跟进。课程状态以最新同步结果为准。' : '关闭页面也没关系，进度会为你保留。'}</p><button class="text-button" data-nav="progress">查看全部进度 ${icon('arrow')}</button></section><section class="panel reassurance"><h3>只需要三步</h3><ol><li><b>选择课程</b><p>按需要选择，或一键处理全部。</p></li><li><b>交给我们</b><p>处理过程中无需守候。</p></li><li><b>查看进度</b><p>完成后，结果清楚可见。</p></li></ol></section></aside></div>`;
+  return `<div class="page-head page-heading"><div><span class="eyebrow">我的学习</span><h1>今天，也轻松一点。</h1><p>${e(state.user?.name || '同学')}，选好课程，我们来完成。</p></div><div class="head-actions"><button class="btn button" data-action="refresh" ${state.loading ? 'disabled' : ''}>${icon('refresh')}刷新课程</button><button class="btn accent button primary" data-action="start-all" ${state.loading || state.creating || !state.courses.length || !actionableCourses.length || !accessible() || allServicePending() ? 'disabled' : ''}>一键完成全部未完成作业 ${icon('arrow')}</button></div></div>${!accessible() ? '<div class="service-notice">你的服务暂未开通，请联系服务人员。已有完成进度仍可查看。</div>' : ''}<section class="strip" aria-label="课程摘要"><div class="strip-item"><div class="k">我的课程</div><div class="v">${state.courses.length}</div><div class="h">头歌平台同步</div></div><div class="strip-item"><div class="k">正在处理</div><div class="v">${active.length}</div><div class="h">仅统计排队与执行中的任务</div></div><div class="strip-item"><div class="k">已选中</div><div class="v">${selectedCount(state.selected)}</div><div class="h">选中后开始处理</div></div><div class="strip-item"><div class="k">${active.length ? '当前任务进度' : '最近任务进度'}</div><div class="v">${latestProgress?.percent ?? (completed ? 100 : 0)}%</div><div class="h">${latestHistorical ? '历史执行记录' : '当前服务记录'}</div></div></section><div class="content-grid"><section class="panel-box course-panel"><div class="panel-toolbar"><div><h2>我的课程 <span class="count">${state.courses.length}</span></h2><p class="muted">选择课程，处理其中尚未完成的必做作业。</p></div><div class="toolbar-row"><label class="search-input"><span class="sr-only">搜索课程</span><input data-search placeholder="搜索课程" value="${e(state.search)}"></label><button class="btn button" data-action="select-all" ${state.creating || !accessible() ? 'disabled' : ''}>${selectedAll ? '清空选择' : '全选可处理'}</button></div></div>${state.loading ? '<div class="loading" role="status"><span class="spinner"></span>正在同步你的课程…</div>' : visible.length ? `<div class="course-table-wrap"><table class="course-table" aria-label="我的课程列表"><thead><tr><th class="select-col">选</th><th>课程</th><th>未完成作业</th><th>图文作业</th><th>状态</th><th></th></tr></thead><tbody>${visible.map((course, index) => { const summary = homeworkSummary(course); const displayStatus = courseDisplayStatus(course, summary); const selectableCourse = courseSelectable(course.identifier); const selected = state.selected.includes(course.identifier); const countLabel = summary.ready ? String(summary.runnableCount) : summary.sync === 'error' ? '未同步' : '同步中…'; const commonLabel = summary.ready ? String(summary.commonPending) : summary.sync === 'error' ? '未同步' : '同步中…'; const countTitle = summary.stale ? (summary.sync === 'error' ? '更新未完成，显示上次同步结果' : '显示上次同步结果，正在核对') : summary.ready ? summary.runnableCount === 0 ? '已核验没有未完成的可自动处理实验' : '可自动处理的未完成实验' : summary.sync === 'error' ? '作业列表同步失败，请刷新重试' : '正在同步作业列表'; const commonTitle = summary.ready ? summary.commonPending === 0 ? '图文作业均已提交或无需提交' : '图文作业待处理；当前不支持自动提交' : countTitle; return `<tr class="course-row ${selected ? 'selected' : ''}" data-course-row="${e(course.identifier)}"><td class="select-col"><label class="course-select"><input type="checkbox" data-select-course="${e(course.identifier)}" ${selected ? 'checked' : ''} ${!selectableCourse || state.creating || !accessible() ? 'disabled' : ''}><span class="sr-only">选择${e(course.name)}</span></label></td><td><div class="course-name"><span class="course-index">${String(index + 1).padStart(2, '0')}</span><div><strong>${e(course.name)}</strong>${renderCourseMeta(course)}</div></div></td><td><span class="table-number homework-count${summary.stale ? ' stale' : ''}" title="${e(countTitle)}">${e(countLabel)}</span></td><td><span class="table-number common-count${summary.stale ? ' stale' : ''}" title="${e(commonTitle)}">${e(commonLabel)}</span></td><td><span class="badge ${displayStatus.tone}" title="${e(commonTitle)}">${displayStatus.label}</span></td><td><button class="text-button" data-course-detail="${e(course.identifier)}">查看详情 ${icon('arrow')}</button></td></tr>`; }).join('')}</tbody></table></div>` : `<div class="panel empty"><h3>${state.search ? '没有找到这门课程' : '还没有课程'}</h3><p>${state.search ? '试试其他课程名称。' : '加入头歌课堂后，刷新这里即可同步。'}</p></div>`}<div class="selection-bar"><span class="selection-summary">已选 ${selectedCount(state.selected)} 门课程</span><button class="button primary" data-action="start-selected" ${!state.selected.length || state.creating || !accessible() ? 'disabled' : ''}>${state.creating ? '正在创建任务…' : '完成所选课程'}</button></div></section><aside class="status-rail side-card"><section class="current-service"><div class="rail-label"><i></i> 我的完成进度</div><h2>${latestHistorical ? '历史执行记录' : latest ? serviceLabel(latest) : completed ? '任务已完成' : '一切准备就绪'}</h2><p>${latest ? e(jobTitle(latest, state.courses)) : '选好课程后，我们会在这里跟进。'}</p>${latest && examSubmitted ? `<p class="rail-exam-status">已交卷${jobProgress(latest).total ? ` · 共 ${jobProgress(latest).total} 道题` : ''}</p>` : latest ? `<div class="large-progress"><strong>${jobProgress(latest).completed}</strong><span>/ ${jobProgress(latest).total || '—'} ${jobProgress(latest).unit}</span></div><div class="rail-track"><span style="width:${jobProgress(latest).percent}%"></span></div>` : '<div class="ready-mark" aria-hidden="true">✓</div>'}<p class="rail-note">${latestHistorical ? '当前课程已无对应待办，这里保留当次执行进度。' : latest && canRetryJob(latest) ? '本次任务已停止处理，可在完成进度中重新执行。' : latest && serviceStatus(latest) === 'support' ? '本次处理已暂停，已完成进度保留，剩余内容待跟进。课程状态以最新同步结果为准。' : '关闭页面也没关系，进度会为你保留。'}</p><button class="text-button" data-nav="progress">查看全部进度 ${icon('arrow')}</button></section><section class="panel reassurance"><h3>只需要三步</h3><ol><li><b>选择课程</b><p>按需要选择，或一键处理全部。</p></li><li><b>交给我们</b><p>处理过程中无需守候。</p></li><li><b>查看进度</b><p>完成后，结果清楚可见。</p></li></ol></section></aside></div>`;
 }
 function selectedCount(values: string[]): number { return values.length; }
 function renderProgress(): string {
@@ -288,19 +295,37 @@ function exerciseLink(course: Course, exercise: Exercise): string {
   } catch { /* Use the verified classroom exam list if a source URL is malformed. */ }
   return `<a class="text-button" href="${e(url)}" target="_blank" rel="noopener noreferrer">在头歌查看 ${icon('arrow')}</a>`;
 }
+function commonHomeworkLink(course: Course, homework: Homework): string {
+  const path = `/classrooms/${encodeURIComponent(course.identifier)}/common_homework/${encodeURIComponent(String(homework.id))}/detail`;
+  let url = `https://www.educoder.net${path}`;
+  try {
+    const source = new URL(homework.detailUrl || url);
+    if (source.protocol === 'https:' && ['www.educoder.net', 'educoder.net'].includes(source.hostname) && !source.username && !source.password && !source.port
+      && (source.pathname === path || source.pathname.startsWith(`${path}/`))) url = `${source.origin}${source.pathname}${source.search}`;
+  } catch { /* Keep the verified classroom common-homework route. */ }
+  return `<a class="text-button" href="${e(url)}" target="_blank" rel="noopener noreferrer">在头歌查看详情 ${icon('arrow')}</a>`;
+}
+function commonHomeworkStatus(homework: Homework): { label: string; tone: string } {
+  if (homework.submissionStatus === 'submitted') return { label: '已提交 · 待批阅', tone: 'processing' };
+  if (homework.submissionStatus === 'not_submitted') return { label: '待提交', tone: 'waiting' };
+  return { label: '状态待确认', tone: 'waiting' };
+}
 function renderCourseDetail(dialog: CourseDialog): string {
   const { course, homeworks, exercises, tab } = dialog;
   const pending = '<div class="loading" role="status"><span class="spinner"></span>正在同步列表…</div>';
   const unavailable = '<p class="detail-sync-message" role="status">列表暂未同步，请点击右上角刷新。</p>';
-  const homeworkBody = homeworks === null ? (dialog.failed.homework ? unavailable : pending) : `<p class="subtext">${homeworks.length} 份作业，只处理必做关卡，已完成的会自动跳过。</p><ul class="completion-list">${homeworks.map(homework => {
-    const complete = Boolean(homework.requiredProgressKnown && homework.requiredChallengeCount && (homework.finishedRequiredChallengeCount ?? 0) >= homework.requiredChallengeCount);
+  const shixun = (homeworks ?? []).filter(homework => homework.homeworkKind !== 'common');
+  const common = (homeworks ?? []).filter(homework => homework.homeworkKind === 'common');
+  const homeworkBody = homeworks === null ? (dialog.failed.homework ? unavailable : pending) : `<p class="subtext">${shixun.length} 份课程实验，只处理必做关卡；当前仅自动处理课程实验，已完成的会自动跳过。</p><ul class="completion-list">${shixun.map(homework => {
+    const complete = Boolean(homework.requiredProgressKnown && homework.requiredChallengeCount !== undefined && (homework.finishedRequiredChallengeCount ?? 0) >= homework.requiredChallengeCount);
     return `<li><span class="completion-icon ${complete ? 'done' : ''}">${complete ? '✓' : '·'}</span><div><strong>${e(homework.name)}</strong><p>${homework.requiredProgressKnown ? `${complete ? '已完成' : '待完成'} · ${count(homework.finishedRequiredChallengeCount)} / ${count(homework.requiredChallengeCount)} 必做关卡` : '开始处理时核验必做进度'}</p></div></li>`;
-  }).join('') || '<li>这门课程暂无待处理的必做作业。</li>'}</ul>`;
+  }).join('') || '<li>这门课程暂无待处理的课程实验。</li>'}</ul>`;
+  const commonBody = homeworks === null ? (dialog.failed.homework ? unavailable : pending) : `<p class="subtext">图文作业只展示状态，当前不支持自动提交；提交后由头歌教师批阅。</p><ul class="completion-list">${common.map(homework => { const status = commonHomeworkStatus(homework); return `<li><span class="completion-icon ${status.tone === 'completed' ? 'done' : ''}">${status.tone === 'completed' ? '✓' : '·'}</span><div class="exercise-row"><strong>${e(homework.name)}</strong><p>${status.label}${homework.deadline ? ` · 截止 ${e(homework.deadline)}` : ''}</p><p>${homework.status ? `作业状态：${e(homework.status)}` : '状态待确认'}</p><div class="exercise-actions">${commonHomeworkLink(course, homework)}</div></div></li>`; }).join('') || '<li>这门课程暂无图文作业。</li>'}</ul>`;
   const examBody = exercises === null ? (dialog.failed.exercise ? unavailable : pending) : exercises.length ? `<p class="subtext">在线考试需单独处理，不包含在一键完成课程作业中；已交卷的考试不会重复提交。</p><ul class="completion-list">${exercises.map(exercise => { const status = exerciseStatus(exercise); return `<li><span class="completion-icon ${status.tone === 'completed' ? 'done' : ''}">${status.tone === 'completed' ? '✓' : '·'}</span><div class="exercise-row"><strong>${e(exercise.name)}</strong><p>${status.label}${exercise.totalQuestions ? ` · ${exercise.totalQuestions} 道题` : ''}${exercise.deadline ? ` · 截止 ${e(exercise.deadline)}` : ''}</p><p>${e(exerciseReason(exercise))}</p><div class="exercise-actions">${exercise.submitted || !exercise.available || exercise.actionRequired === true ? '' : `<button class="button primary compact" data-exam-submit="${exercise.id}">开始处理考试</button>`}${exerciseLink(course, exercise)}</div></div></li>`; }).join('')}</ul>` : '<div class="empty"><h3>暂无在线考试</h3><p>这门课程当前没有可查看的在线考试。</p></div>';
-  const hasData = tab === 'homework' ? homeworks !== null : exercises !== null;
+  const hasData = tab === 'exercise' ? exercises !== null : homeworks !== null;
   const refreshed = dialog.updatedAt[tab] ? new Date(dialog.updatedAt[tab]).toLocaleTimeString('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit' }) : '';
   const message = dialog.loading[tab] ? (hasData ? '正在更新列表…' : '') : dialog.failed[tab] && hasData ? '暂未更新，继续显示上次结果。' : refreshed ? `更新于 ${refreshed}` : '';
-  return `<h2 id="modal-title" class="course-detail-title">${e(course.name)}</h2><button class="icon-button course-detail-refresh ${dialog.loading.homework || dialog.loading.exercise ? 'refreshing' : ''}" type="button" data-action="detail-refresh" aria-label="刷新作业和考试" title="刷新作业和考试" ${dialog.loading.homework || dialog.loading.exercise ? 'disabled' : ''}>${icon('refresh')}</button><p class="detail-sync-message" role="status">${e(message)}</p><div class="detail-tabs" role="tablist"><button class="detail-tab ${tab === 'homework' ? 'selected' : ''}" data-detail-tab="homework" role="tab" aria-selected="${tab === 'homework'}">课程实验</button><button class="detail-tab ${tab === 'exercise' ? 'selected' : ''}" data-detail-tab="exercise" role="tab" aria-selected="${tab === 'exercise'}">在线考试</button></div>${tab === 'homework' ? homeworkBody : examBody}<div class="modal-actions"><button class="button" data-action="close-modal">关闭</button></div>`;
+  return `<h2 id="modal-title" class="course-detail-title">${e(course.name)}</h2><button class="icon-button course-detail-refresh ${dialog.loading.homework || dialog.loading.exercise ? 'refreshing' : ''}" type="button" data-action="detail-refresh" aria-label="刷新作业和考试" title="刷新作业和考试" ${dialog.loading.homework || dialog.loading.exercise ? 'disabled' : ''}>${icon('refresh')}</button><p class="detail-sync-message" role="status">${e(message)}</p><div class="detail-tabs" role="tablist"><button class="detail-tab ${tab === 'homework' ? 'selected' : ''}" data-detail-tab="homework" role="tab" aria-selected="${tab === 'homework'}">课程实验</button><button class="detail-tab ${tab === 'common' ? 'selected' : ''}" data-detail-tab="common" role="tab" aria-selected="${tab === 'common'}">图文作业</button><button class="detail-tab ${tab === 'exercise' ? 'selected' : ''}" data-detail-tab="exercise" role="tab" aria-selected="${tab === 'exercise'}">在线考试</button></div>${tab === 'homework' ? homeworkBody : tab === 'common' ? commonBody : examBody}<div class="modal-actions"><button class="button" data-action="close-modal">关闭</button></div>`;
 }
 function render(): void {
   if (jobDialog && state.modalKind === 'job') {
@@ -552,8 +577,8 @@ function cachedCourseDialog(course: Course, tab: DetailTab): CourseDialog {
   const homeworks = courseCache.peekHomeworks(course.identifier);
   const exercises = courseCache.peekExercises(course.identifier);
   return { course, tab, homeworks: homeworks?.data ?? null, exercises: exercises?.data ?? null,
-    loading: { homework: false, exercise: false }, failed: { homework: false, exercise: false },
-    updatedAt: { homework: homeworks?.updatedAt ?? 0, exercise: exercises?.updatedAt ?? 0 } };
+    loading: { homework: false, common: false, exercise: false }, failed: { homework: false, common: false, exercise: false },
+    updatedAt: { homework: homeworks?.updatedAt ?? 0, common: homeworks?.updatedAt ?? 0, exercise: exercises?.updatedAt ?? 0 } };
 }
 function currentAdminJob(id: string, action: AdminJobAction): AdminJob | undefined {
   if (!isAdmin() || adminJobActions.has(id)) return undefined;
@@ -608,14 +633,14 @@ function renderCourseDialog(): void {
 async function loadDialogTab(tab: DetailTab, force: boolean, revision: number, session: number): Promise<void> {
   const dialog = courseDialog; if (!dialog || session !== generation || revision !== modalRevision) return;
   const id = dialog.course.identifier;
-  const cached = tab === 'homework' ? courseCache.peekHomeworks(id) : courseCache.peekExercises(id);
+  const cached = tab === 'homework' || tab === 'common' ? courseCache.peekHomeworks(id) : courseCache.peekExercises(id);
   if (!force && cached && !cached.stale) return;
   dialog.loading[tab] = true; dialog.failed[tab] = false; renderCourseDialog();
   try {
-    if (tab === 'homework') {
+    if (tab === 'homework' || tab === 'common') {
       const data = await courseCache.getHomeworks(id, force);
       if (session !== generation || revision !== modalRevision || courseDialog !== dialog) return;
-      dialog.homeworks = data; dialog.updatedAt.homework = courseCache.peekHomeworks(id)?.updatedAt ?? 0;
+      dialog.homeworks = data; const updatedAt = courseCache.peekHomeworks(id)?.updatedAt ?? 0; dialog.updatedAt.homework = updatedAt; dialog.updatedAt.common = updatedAt;
     } else {
       const data = await courseCache.getExercises(id, force);
       if (session !== generation || revision !== modalRevision || courseDialog !== dialog) return;
@@ -642,9 +667,10 @@ async function switchCourseDetailTab(tab: DetailTab): Promise<void> {
   await loadDialogTab(tab, false, revision, session);
 }
 function refreshCourseDetail(): void {
-  if (!courseDialog || courseDialog.loading.homework || courseDialog.loading.exercise) return;
+  if (!courseDialog || courseDialog.loading.homework || courseDialog.loading.common || courseDialog.loading.exercise) return;
   const revision = ++modalRevision; const session = generation;
-  void loadDialogTab('homework', true, revision, session);
+  const workTab: DetailTab = courseDialog.tab === 'common' ? 'common' : 'homework';
+  void loadDialogTab(workTab, true, revision, session);
   void loadDialogTab('exercise', true, revision, session);
 }
 function confirmExercise(course: Course, exercise: Exercise): void {
@@ -863,7 +889,7 @@ function bindEvents(): void {
   document.querySelectorAll<HTMLButtonElement>('[data-course-detail]').forEach(button => button.addEventListener('click', () => { void courseDetail(button.dataset.courseDetail!); }));
   document.querySelectorAll<HTMLButtonElement>('[data-detail-tab]').forEach(button => button.addEventListener('click', () => {
     if (!courseDialog) return;
-    void switchCourseDetailTab(button.dataset.detailTab === 'exercise' ? 'exercise' : 'homework');
+    void switchCourseDetailTab(button.dataset.detailTab === 'exercise' ? 'exercise' : button.dataset.detailTab === 'common' ? 'common' : 'homework');
   }));
   document.querySelectorAll<HTMLButtonElement>('[data-exam-submit]').forEach(button => button.addEventListener('click', () => {
     const exerciseID = Number(button.dataset.examSubmit);

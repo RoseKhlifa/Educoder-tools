@@ -74,9 +74,16 @@ export interface QuestionBankSummary {
   contributed_questions?: number;
 }
 
+export type HomeworkKind = 'shixun' | 'common';
+export type CommonSubmissionStatus = 'submitted' | 'not_submitted' | 'unknown';
+
 export interface Homework {
   id: number;
   name: string;
+  homeworkKind?: HomeworkKind;
+  automaticSupported?: boolean;
+  submissionStatus?: CommonSubmissionStatus;
+  detailUrl?: string;
   shixunIdentifier?: string;
   status: string;
   challengeCount?: number;

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.84 - 2026-11-04
+
+- Read and display both course experiments and common text/image homework tabs, preserve explicit personal submission state, and keep unsupported common homework out of the shixun execution queue
+
 ## 0.1.83 - 2026-11-04
 
 - Execute mixed Hadoop workspace candidates through the observed tab4 terminal while preserving editor placeholders

@@ -25,6 +25,13 @@ type EducoderClient interface {
 
 var _ EducoderClient = (*educoder.Client)(nil)
 
+// homeworkCatalogReader separates the browser's complete classroom catalog from
+// Homeworks, which remains the executable shixun-only list used by existing
+// clients and job runners.
+type homeworkCatalogReader interface {
+	HomeworksForDisplay(context.Context, string, string) ([]educoder.Homework, error)
+}
+
 type userDTO struct {
 	UserID    int64  `json:"id"`
 	Login     string `json:"login"`
@@ -61,23 +68,36 @@ func toCourseDTO(course educoder.Course) courseDTO {
 }
 
 type homeworkDTO struct {
-	ID               int64    `json:"id"`
-	Name             string   `json:"name"`
-	Status           []string `json:"status,omitempty"`
-	ShixunIdentifier string   `json:"shixunIdentifier,omitempty"`
-	IsShixun         bool     `json:"isShixun"`
-	EnterStatus      int      `json:"enterStatus"`
-	Category         string   `json:"category,omitempty"`
-	ChallengeCount   int      `json:"challengeCount,omitempty"`
-	FinishedCount    int      `json:"finishedChallengeCount,omitempty"`
-	RequiredCount    *int     `json:"requiredChallengeCount,omitempty"`
-	FinishedRequired *int     `json:"finishedRequiredChallengeCount,omitempty"`
-	RequiredKnown    bool     `json:"requiredProgressKnown"`
-	Deadline         string   `json:"deadline,omitempty"`
+	HomeworkKind       string   `json:"homeworkKind"`
+	AutomaticSupported bool     `json:"automaticSupported"`
+	SubmissionStatus   string   `json:"submissionStatus,omitempty"`
+	ID                 int64    `json:"id"`
+	Name               string   `json:"name"`
+	Status             []string `json:"status,omitempty"`
+	ShixunIdentifier   string   `json:"shixunIdentifier,omitempty"`
+	IsShixun           bool     `json:"isShixun"`
+	EnterStatus        int      `json:"enterStatus"`
+	Category           string   `json:"category,omitempty"`
+	ChallengeCount     int      `json:"challengeCount,omitempty"`
+	FinishedCount      int      `json:"finishedChallengeCount,omitempty"`
+	RequiredCount      *int     `json:"requiredChallengeCount,omitempty"`
+	FinishedRequired   *int     `json:"finishedRequiredChallengeCount,omitempty"`
+	RequiredKnown      bool     `json:"requiredProgressKnown"`
+	Deadline           string   `json:"deadline,omitempty"`
 }
 
 func toHomeworkDTO(homework educoder.Homework) homeworkDTO {
-	return homeworkDTO{ID: homework.ID, Name: homework.Name, Status: homework.Status, ShixunIdentifier: homework.ShixunIdentifier, IsShixun: homework.IsShixun, EnterStatus: homework.EnterStatus, Category: homework.Category, ChallengeCount: homework.ChallengeCount, FinishedCount: homework.FinishedCount, Deadline: homeworkDeadline(homework)}
+	kind := homework.Kind
+	if kind == "" {
+		// The legacy Homeworks interface predates mixed catalogs and only
+		// supplies shixun rows. Keep those clients backward compatible.
+		kind = "shixun"
+	}
+	result := homeworkDTO{HomeworkKind: kind, AutomaticSupported: kind == "shixun", ID: homework.ID, Name: homework.Name, Status: homework.Status, ShixunIdentifier: homework.ShixunIdentifier, IsShixun: homework.IsShixun, EnterStatus: homework.EnterStatus, Category: homework.Category, ChallengeCount: homework.ChallengeCount, FinishedCount: homework.FinishedCount, Deadline: homeworkDeadline(homework)}
+	if kind == "common" {
+		result.SubmissionStatus = homework.CommonSubmissionStatus()
+	}
+	return result
 }
 
 // homeworkDeadline accepts the string and numeric forms seen in the upstream

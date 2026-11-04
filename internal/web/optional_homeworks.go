@@ -13,10 +13,10 @@ type homeworkProgressReader interface {
 	HomeworkProgress(context.Context, string, int64) (*educoder.HomeworkProgress, error)
 }
 
-// serviceHomeworks reads progress only when the user opens one classroom's
-// details. The classroom overview stays a single list request. Unknown or
-// partial progress must not turn the upstream total (which includes optional
-// work) into a claimed required-work count.
+// serviceHomeworks enriches only executable shixun rows with required-level
+// progress. Common text/image assignments have a different submission protocol
+// and must remain visible without shixun progress requests or optional-level
+// filtering. Unknown or partial progress cannot claim required-work completion.
 func serviceHomeworks(ctx context.Context, client EducoderClient, course string, homeworks []educoder.Homework) []homeworkDTO {
 	result := make([]homeworkDTO, len(homeworks))
 	for i, homework := range homeworks {
@@ -28,10 +28,18 @@ func serviceHomeworks(ctx context.Context, client EducoderClient, course string,
 	}
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
-	limit := min(len(homeworks), 100)
+	candidates := make([]int, 0, min(len(homeworks), 100))
+	for i := range result {
+		if result[i].AutomaticSupported {
+			candidates = append(candidates, i)
+			if len(candidates) == 100 {
+				break
+			}
+		}
+	}
 	indexes := make(chan int)
 	var workers sync.WaitGroup
-	for i := 0; i < min(limit, 4); i++ {
+	for i := 0; i < min(len(candidates), 4); i++ {
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
@@ -47,7 +55,7 @@ func serviceHomeworks(ctx context.Context, client EducoderClient, course string,
 		}()
 	}
 send:
-	for i := 0; i < limit; i++ {
+	for _, i := range candidates {
 		select {
 		case <-ctx.Done():
 			break send
@@ -58,7 +66,7 @@ send:
 	workers.Wait()
 	visible := result[:0]
 	for _, homework := range result {
-		if homework.RequiredKnown && homework.RequiredCount != nil && *homework.RequiredCount == 0 {
+		if homework.AutomaticSupported && homework.RequiredKnown && homework.RequiredCount != nil && *homework.RequiredCount == 0 {
 			continue
 		}
 		visible = append(visible, homework)
@@ -67,7 +75,7 @@ send:
 }
 
 func applyRequiredProgress(dto *homeworkDTO, homework educoder.Homework, progress *educoder.HomeworkProgress) {
-	if progress == nil || homework.ChallengeCount < 1 || homework.ChallengeCount > 100 || len(progress.Challenges) != homework.ChallengeCount {
+	if !dto.AutomaticSupported || progress == nil || homework.ChallengeCount < 1 || homework.ChallengeCount > 100 || len(progress.Challenges) != homework.ChallengeCount {
 		return
 	}
 	ids, names := map[int64]bool{}, map[string]bool{}
