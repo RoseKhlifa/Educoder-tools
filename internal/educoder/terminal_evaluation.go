@@ -9,7 +9,7 @@ import (
 // execution. The receipt is bound privately to the client and task and can be
 // consumed once. It proves which script ran; it is not an editor-source digest.
 func (c *Client) SubmitTerminal(ctx context.Context, t *Task, receipt *TerminalResult, options PollOptions) (*EvaluationResult, error) {
-	env, err := terminalEnvironment(t)
+	env, err := executionEnvironment(t)
 	if err != nil {
 		return nil, err
 	}
@@ -75,8 +75,8 @@ func sameTerminalTarget(before, after *Task) bool {
 	if before == nil || after == nil {
 		return false
 	}
-	a, ea := terminalEnvironment(before)
-	b, eb := terminalEnvironment(after)
+	a, ea := executionEnvironment(before)
+	b, eb := executionEnvironment(after)
 	return ea == nil && eb == nil && a.EnvironmentID == b.EnvironmentID &&
 		before.CourseIdentifier == after.CourseIdentifier && before.HomeworkID == after.HomeworkID &&
 		before.Game.Identifier == after.Game.Identifier && before.Game.ID == after.Game.ID &&

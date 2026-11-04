@@ -25,6 +25,7 @@ type EducoderAdapter struct {
 	terminalTasks    map[string]*terminalBinding
 	terminalRun      func(context.Context, *educoder.Task, string, educoder.TerminalOptions) (*educoder.TerminalResult, error)
 	terminalSubmit   func(context.Context, *educoder.Task, *educoder.TerminalResult, educoder.PollOptions) (*educoder.EvaluationResult, error)
+	hadoopStart      func(context.Context, *educoder.Task) error
 }
 
 func NewEducoderAdapter(client *educoder.Client) (*EducoderAdapter, error) {
@@ -64,7 +65,7 @@ func (a *EducoderAdapter) Load(ctx context.Context, target Target) (LoadedProble
 	if t.Kind() == educoder.TaskKindGraphic {
 		return a.loadGraphic(ctx, t, target)
 	}
-	if t.IsTerminalTask() {
+	if t.IsTerminalTask() || t.IsHadoopWorkspaceTask() {
 		return a.loadTerminal(t, target)
 	}
 	pt, err := a.Client.ReadProgramming(ctx, t)
@@ -198,7 +199,7 @@ func (a *EducoderAdapter) SelfTest(ctx context.Context, target Target, file prob
 	if err != nil {
 		return SelfTest{}, err
 	}
-	if t.IsTerminalTask() || a.hasTerminalBinding(target.Game) {
+	if t.IsTerminalTask() || t.IsHadoopWorkspaceTask() || a.hasTerminalBinding(target.Game) {
 		return a.selfTestTerminal(ctx, t, target, file, input, expected)
 	}
 	if err := a.guardEditor(ctx, t, file); err != nil {
@@ -238,7 +239,7 @@ func (a *EducoderAdapter) Submit(ctx context.Context, target Target, file proble
 	if err != nil {
 		return Evaluation{}, err
 	}
-	if t.IsTerminalTask() || a.hasTerminalBinding(target.Game) {
+	if t.IsTerminalTask() || t.IsHadoopWorkspaceTask() || a.hasTerminalBinding(target.Game) {
 		return a.submitTerminal(ctx, t, target, file)
 	}
 	if t.Kind() == educoder.TaskKindGraphic {

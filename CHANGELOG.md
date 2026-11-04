@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.83 - 2026-11-04
+
+- Execute mixed Hadoop workspace candidates through the observed tab4 terminal while preserving editor placeholders
+
 ## 0.1.82 - 2026-11-04
 
 - Start Hadoop through bound terminal readiness checks and wait for complete evaluation lifecycle without repeated model repairs

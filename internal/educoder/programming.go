@@ -269,7 +269,7 @@ func (c *Client) saveCodeInEnvironment(ctx context.Context, t *Task, filePath, c
 	if err := c.request(ctx, http.MethodPost, "/api/myshixuns/"+t.MyShixun.Identifier+"/update_file.json", nil, body, taskRef(t), &response); err != nil {
 		return nil, err
 	}
-	terminal := t.IsTerminalTask() && environment.TabType == 4
+	terminal := (t.IsTerminalTask() || t.IsHadoopWorkspaceTask()) && environment.TabType == 4
 	// Terminal submits return a key without an editor Git commit. The source
 	// frontend sends commitID="" in that layout; editor submissions still
 	// require their concrete saved revision.
@@ -462,7 +462,7 @@ func validateSaved(t *Task, saved *SavedCode, evaluation bool) error {
 	if err := requireProgramming(t); err != nil {
 		return err
 	}
-	if saved == nil || saved.gameIdentifier != t.Game.Identifier || saved.myshixunID != t.MyShixun.ID || saved.SecKey == "" || saved.CommitID == "" && !(saved.terminalEvaluation && t.IsTerminalTask()) {
+	if saved == nil || saved.gameIdentifier != t.Game.Identifier || saved.myshixunID != t.MyShixun.ID || saved.SecKey == "" || saved.CommitID == "" && !(saved.terminalEvaluation && (t.IsTerminalTask() || t.IsHadoopWorkspaceTask())) {
 		return errors.New("评测需要当前关卡在内存中的保存响应")
 	}
 	if evaluation && saved.Evaluate != 1 {

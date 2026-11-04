@@ -41,9 +41,107 @@ func hadoopEditorTerminalTaskFixture() *Task {
 	task.Game.ID, task.Game.Identifier, task.Game.MyShixunID = 11, "GAME1", 80
 	task.MyShixun.ID, task.MyShixun.Identifier = 80, "MY1"
 	task.Challenge.ID, task.Challenge.ST, task.Challenge.WithCodeFile = 9, &zero, &yes
-	task.Challenge.Path = "main.cpp"
+	task.Challenge.Path = "src/step1/hint.txt"
+	task.Challenge.Description = "请使用命令行完成本题"
 	task.User.UserID = 99
 	return task
+}
+
+// hadoopWorkspaceTaskFixture models the recorded mixed Hadoop page: the
+// editor and terminal share one environment ID, while the terminal is the
+// unique tab_type=4 companion. The challenge names only its upstream hint
+// file, and its statement explicitly directs the student to the command line.
+func hadoopWorkspaceTaskFixture() *Task {
+	zero, yes := 0, true
+	task := &Task{ST: &zero, HomeworkID: 123, CourseIdentifier: "COURSE1", Environments: []ProgrammingEnvironment{
+		{EnvironmentID: 42, TabType: 1}, {EnvironmentID: 42, TabType: 4},
+	}}
+	task.CodeEditor.EnvironmentID, task.CodeEditor.Name = 42, "Hadoop"
+	task.Game.ID, task.Game.Identifier, task.Game.MyShixunID = 11, "GAME1", 80
+	task.MyShixun.ID, task.MyShixun.Identifier = 80, "MY1"
+	task.Challenge.ID, task.Challenge.ST, task.Challenge.WithCodeFile = 9, &zero, &yes
+	task.Challenge.Path = "src/step1/hint.txt"
+	task.Challenge.Description = "本关请使用命令行完成 Hadoop 操作。"
+	task.User.UserID = 99
+	return task
+}
+
+func TestIsHadoopWorkspaceTaskRequiresRecordedMixedWorkspace(t *testing.T) {
+	valid := hadoopWorkspaceTaskFixture()
+	if !valid.IsHadoopWorkspaceTask() {
+		t.Fatal("recorded Hadoop mixed workspace was rejected")
+	}
+	for _, test := range []struct {
+		name   string
+		change func(*Task)
+	}{
+		{"java-file-remains-editor", func(task *Task) {
+			task.CodeEditor.Name = "Java"
+			task.Challenge.Path = "src/Main.java"
+		}},
+		{"generic-editor", func(task *Task) { task.CodeEditor.Name = "C/C++" }},
+		{"missing-command-line-statement", func(task *Task) { task.Challenge.Description = "请完成本关代码。" }},
+		{"extra-source-file", func(task *Task) { task.Challenge.Path = "src/step1/hint.txt；src/Main.java" }},
+		{"wrong-hint-path", func(task *Task) { task.Challenge.Path = "src/step2/hint.txt" }},
+		{"duplicate-terminal", func(task *Task) {
+			task.Environments = append(task.Environments, ProgrammingEnvironment{EnvironmentID: 42, TabType: 4})
+		}},
+		{"terminal-bound-to-other-environment", func(task *Task) {
+			task.Environments[1].EnvironmentID = 43
+		}},
+		{"missing-editor-tab", func(task *Task) {
+			task.Environments = []ProgrammingEnvironment{{EnvironmentID: 42, TabType: 4}}
+		}},
+		{"editor-bound-to-other-environment", func(task *Task) {
+			task.Environments[0].EnvironmentID = 43
+		}},
+		{"terminal-vnc", func(task *Task) { task.Environments[1].VNCURL = true }},
+		{"editor-vnc", func(task *Task) { task.VNCURL = true }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			task := hadoopWorkspaceTaskFixture()
+			test.change(task)
+			if task.IsHadoopWorkspaceTask() {
+				t.Fatal("accepted an unobserved Hadoop workspace variant")
+			}
+		})
+	}
+}
+
+func TestHadoopWorkspaceDoesNotChangeIsTerminalTask(t *testing.T) {
+	if hadoopWorkspaceTaskFixture().IsTerminalTask() {
+		t.Fatal("mixed Hadoop workspace was classified as terminal-only")
+	}
+	if !terminalTaskFixture().IsTerminalTask() {
+		t.Fatal("terminal-only layout no longer satisfies IsTerminalTask")
+	}
+}
+
+func TestJavaSourceRemainsEditorExecution(t *testing.T) {
+	task := hadoopWorkspaceTaskFixture()
+	task.CodeEditor.Name = "Java"
+	task.Challenge.Path = "src/Main.java"
+	if task.IsHadoopWorkspaceTask() {
+		t.Fatal("Java source entered the Hadoop workspace route")
+	}
+	if task.IsTerminalTask() {
+		t.Fatal("Java editor plus terminal was classified as terminal-only")
+	}
+	env, err := programmingEnvironment(task)
+	if err != nil || env.TabType != 1 || env.EnvironmentID != 42 {
+		t.Fatalf("Java source lost its editor environment: env=%+v err=%v", env, err)
+	}
+}
+
+func TestRunTerminalCommandUsesHadoopWorkspaceTab4(t *testing.T) {
+	client, starts, commands := terminalSocketFixture(t, terminalFixtureOptions{mode: "success"})
+	result, err := client.RunTerminalCommand(context.Background(), hadoopWorkspaceTaskFixture(), "printf 'workspace\\n'", TerminalOptions{Timeout: time.Second})
+	if err != nil || result == nil || !result.Completed || result.ExitCode == nil || *result.ExitCode != 0 {
+		t.Fatalf("mixed Hadoop terminal completion=%+v err=%v", result, err)
+	}
+	if starts.Load() != 1 || commands.Load() != 1 {
+		t.Fatalf("tab4 runtime was not used exactly once: starts=%d commands=%d", starts.Load(), commands.Load())
+	}
 }
 
 func TestIsTerminalTaskRequiresObservedLayout(t *testing.T) {

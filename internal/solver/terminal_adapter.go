@@ -21,10 +21,12 @@ type terminalTaskIdentity struct {
 }
 
 type terminalBinding struct {
-	identity   terminalTaskIdentity
-	executions map[string]*terminalExecution
-	activeHash string
-	running    string
+	identity      terminalTaskIdentity
+	executions    map[string]*terminalExecution
+	activeHash    string
+	running       string
+	hadoopStarted bool
+	hadoopErr     error
 }
 
 type terminalExecution struct {
@@ -36,7 +38,7 @@ type terminalExecution struct {
 }
 
 func terminalIdentity(t *educoder.Task) (terminalTaskIdentity, error) {
-	if t == nil || !t.IsTerminalTask() || len(t.CodePaths()) != 1 || t.HomeworkID <= 0 || t.CourseIdentifier == "" || t.Game.Identifier == "" || t.Game.ID <= 0 || t.MyShixun.Identifier == "" || t.MyShixun.ID <= 0 || t.Game.MyShixunID != t.MyShixun.ID || t.User.UserID <= 0 || t.Challenge.ID <= 0 {
+	if t == nil || !t.IsTerminalTask() && !t.IsHadoopWorkspaceTask() || len(t.CodePaths()) != 1 || t.HomeworkID <= 0 || t.CourseIdentifier == "" || t.Game.Identifier == "" || t.Game.ID <= 0 || t.MyShixun.Identifier == "" || t.MyShixun.ID <= 0 || t.Game.MyShixunID != t.MyShixun.ID || t.User.UserID <= 0 || t.Challenge.ID <= 0 {
 		return terminalTaskIdentity{}, errors.New("terminal task identity or file contract is incomplete")
 	}
 	// Runtime identifiers remain private. Sorting avoids treating response order
@@ -101,6 +103,21 @@ func (a *EducoderAdapter) selfTestTerminal(ctx context.Context, t *educoder.Task
 	a.mu.Lock()
 	bound, hash, err := a.terminalGuard(t, target, file)
 	if err != nil {
+		a.mu.Unlock()
+		return SelfTest{}, err
+	}
+	if t.IsHadoopWorkspaceTask() && !bound.hadoopStarted {
+		bound.hadoopStarted = true
+		start := a.hadoopStart
+		if start == nil {
+			start = func(ctx context.Context, task *educoder.Task) error { return a.Client.StartHadoop(ctx, task) }
+		}
+		if startErr := start(ctx, t); startErr != nil {
+			bound.hadoopErr = errors.New("Hadoop 运行环境未就绪")
+		}
+	}
+	if bound.hadoopErr != nil {
+		err := bound.hadoopErr
 		a.mu.Unlock()
 		return SelfTest{}, err
 	}

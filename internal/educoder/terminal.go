@@ -29,6 +29,47 @@ func (t *Task) IsTerminalTask() bool {
 	return err == nil
 }
 
+// IsHadoopWorkspaceTask identifies the observed mixed editor/terminal layout
+// where the editor path is a placeholder (hint.txt) and the statement
+// explicitly directs the learner to use the command line. The editor remains
+// the programming contract; tab_type=4 is an execution workspace only.
+func (t *Task) IsHadoopWorkspaceTask() bool {
+	_, err := hadoopWorkspaceEnvironment(t)
+	return err == nil
+}
+
+func hadoopWorkspaceEnvironment(t *Task) (ProgrammingEnvironment, error) {
+	if t == nil || t.ST == nil || *t.ST != 0 || t.Challenge.ST == nil || *t.Challenge.ST != 0 || t.Challenge.WithCodeFile == nil || !*t.Challenge.WithCodeFile || len(t.Chooses) != 0 || t.CodeEditor.EnvironmentID <= 0 || !strings.EqualFold(strings.TrimSpace(t.CodeEditor.Name), "Hadoop") || len(t.CodePaths()) != 1 || !strings.EqualFold(t.CodePaths()[0], "src/step1/hint.txt") {
+		return ProgrammingEnvironment{}, errors.New("任务不是已观察的 Hadoop 工作区布局")
+	}
+	statement := strings.ToLower(strings.TrimSpace(t.Challenge.Description))
+	if !strings.Contains(statement, "命令行") && !strings.Contains(statement, "command line") && !strings.Contains(statement, "terminal") {
+		return ProgrammingEnvironment{}, errors.New("Hadoop 题干未明确要求使用命令行")
+	}
+	var terminal ProgrammingEnvironment
+	count, editorCount := 0, 0
+	for _, env := range t.Environments {
+		if env.EnvironmentID == t.CodeEditor.EnvironmentID && env.TabType == 1 && env.EnvironmentID > 0 {
+			editorCount++
+		}
+		if env.EnvironmentID == t.CodeEditor.EnvironmentID && env.TabType == 4 && env.EnvironmentID > 0 && !bool(env.VNCURL) {
+			terminal = env
+			count++
+		}
+	}
+	if count != 1 || editorCount != 1 || bool(t.VNCURL) {
+		return ProgrammingEnvironment{}, errors.New("Hadoop 工作区没有唯一匹配的 tab_type=4 环境")
+	}
+	return terminal, nil
+}
+
+func executionEnvironment(t *Task) (ProgrammingEnvironment, error) {
+	if env, err := terminalEnvironment(t); err == nil {
+		return env, nil
+	}
+	return hadoopWorkspaceEnvironment(t)
+}
+
 func terminalEnvironment(t *Task) (ProgrammingEnvironment, error) {
 	if t == nil || t.ST == nil || *t.ST != 0 || t.Challenge.ST == nil || *t.Challenge.ST != 0 || t.Challenge.WithCodeFile == nil || !*t.Challenge.WithCodeFile || len(t.Chooses) != 0 || t.CodeEditor.EnvironmentID != 0 || len(t.Environments) != 1 {
 		return ProgrammingEnvironment{}, errors.New("任务不是已观察的独立终端布局")
@@ -187,7 +228,7 @@ func terminalFailure(ctx context.Context, message string) error {
 // RunTerminalCommand opens the observed interactive terminal and sends one
 // child-shell execution. A timeout or broken stream is never replayed here.
 func (c *Client) RunTerminalCommand(ctx context.Context, t *Task, script string, options TerminalOptions) (*TerminalResult, error) {
-	env, err := terminalEnvironment(t)
+	env, err := executionEnvironment(t)
 	if err != nil {
 		return nil, err
 	}
@@ -354,20 +395,9 @@ func (c *Client) runBoundTerminalCommand(ctx context.Context, t *Task, env Progr
 // Mixed editor tasks retain their editor contract; only this fixed preparation
 // script runs in the attached terminal. Its receipt is not submission evidence.
 func (c *Client) StartHadoop(ctx context.Context, t *Task) error {
-	editor, err := programmingEnvironment(t)
-	if err != nil || !strings.EqualFold(strings.TrimSpace(t.CodeEditor.Name), "Hadoop") {
-		return errors.New("当前任务没有匹配的 Hadoop 编程环境")
-	}
-	var terminal ProgrammingEnvironment
-	count := 0
-	for _, environment := range t.Environments {
-		if environment.EnvironmentID == editor.EnvironmentID && environment.TabType == 4 && !bool(environment.VNCURL) {
-			terminal = environment
-			count++
-		}
-	}
-	if count != 1 || bool(t.VNCURL) {
-		return errors.New("Hadoop 环境没有唯一匹配的命令行")
+	terminal, err := hadoopWorkspaceEnvironment(t)
+	if err != nil {
+		return err
 	}
 	const script = "set -eu\ncommand -v start-dfs.sh >/dev/null\nif ! hdfs dfs -test -d / >/dev/null 2>&1; then\n  start-dfs.sh\nfi\nfor attempt in 1 2 3 4 5 6 7 8 9 10; do\n  if hdfs dfs -test -d / >/dev/null 2>&1; then exit 0; fi\n  sleep 1\ndone\nexit 1\n"
 	result, err := c.runBoundTerminalCommand(ctx, t, terminal, script, TerminalOptions{Timeout: 90 * time.Second})
