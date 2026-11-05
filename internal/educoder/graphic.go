@@ -288,6 +288,12 @@ type GraphicEnvironmentQuotaError struct {
 	Message string
 }
 
+type GraphicRuntimeResourceError struct{}
+
+func (e *GraphicRuntimeResourceError) Error() string {
+	return "图形环境上游资源暂不可用"
+}
+
 func (e *GraphicEnvironmentQuotaError) Error() string {
 	if e == nil || strings.TrimSpace(e.Message) == "" {
 		return "图形实验环境数量已达上限"
@@ -301,9 +307,25 @@ func (e *GraphicEnvironmentQuotaError) Error() string {
 // bounded: they only repeat idempotent reads/connection attempts and never
 // repeat a file save or a formal build.
 const (
-	graphicReadinessAttempts = 6
-	graphicReadinessDelay    = 250 * time.Millisecond
+	graphicReadinessAttempts     = 6
+	graphicReadinessDelay        = 250 * time.Millisecond
+	graphicResourceRetryAttempts = 4
+	graphicResourceRetryDelay    = 2 * time.Second
 )
+
+func waitGraphicResourceRetry(ctx context.Context, attempt int) error {
+	if attempt >= graphicResourceRetryAttempts-1 {
+		return nil
+	}
+	timer := time.NewTimer(graphicResourceRetryDelay * time.Duration(attempt+1))
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
 
 func waitGraphicRetry(ctx context.Context, attempt int) error {
 	if attempt >= graphicReadinessAttempts-1 {
@@ -356,6 +378,14 @@ func (p *GraphicProtocol) openEnvironment(ctx context.Context, t *Task, env Prog
 			} `json:"data"`
 		}
 		if err := p.Client.request(ctx, http.MethodGet, "/api/myshixuns/"+t.MyShixun.Identifier+"/start.json", query, nil, taskRef(t), &response); err != nil {
+			var apiErr *APIStatusError
+			if errors.As(err, &apiErr) && apiErr.Code == -1 {
+				lastErr = &GraphicRuntimeResourceError{}
+				if waitErr := waitGraphicResourceRetry(ctx, attempt); waitErr != nil {
+					return nil, waitErr
+				}
+				continue
+			}
 			lastErr = err
 		} else {
 			d := response.Data

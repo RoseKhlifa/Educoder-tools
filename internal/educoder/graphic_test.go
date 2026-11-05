@@ -431,3 +431,21 @@ func TestGraphicPathsAcceptFormatNounSuffix(t *testing.T) {
 		t.Fatalf("paths=%v want=%v", got, want)
 	}
 }
+
+func TestGraphicResourcePressureIsTypedAndCancellable(t *testing.T) {
+	task := graphicTaskFixture(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "start.json") {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		ioJSON(w, `{"status":-1,"message":"当前平台资源紧张，请稍后重试"}`)
+	}))
+	defer server.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_, err := NewGraphicProtocol(New(server.URL), &fakeGraphicTransport{}).Read(ctx, task)
+	var resource *GraphicRuntimeResourceError
+	if !errors.As(err, &resource) && !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("resource pressure was not classified or cancellable: %v", err)
+	}
+}

@@ -75,6 +75,20 @@ func Signature(method, timestamp string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+type APIStatusError struct {
+	Method  string
+	Path    string
+	Code    float64
+	Message string
+}
+
+func (e *APIStatusError) Error() string {
+	if e == nil {
+		return "upstream API status error"
+	}
+	return fmt.Sprintf("%s %s: API status %v%s", e.Method, e.Path, e.Code, messageSuffix(e.Message))
+}
+
 type User struct {
 	UserID   int64  `json:"user_id"`
 	Login    string `json:"login"`
@@ -351,7 +365,7 @@ func (c *Client) requestWithReadDiagnostics(ctx context.Context, method, path st
 		}
 		if !accepted {
 			stage, category = "api", "api_status"
-			return fmt.Errorf("%s %s: API status %v%s", method, path, code, messageSuffix(message))
+			return &APIStatusError{Method: method, Path: path, Code: code, Message: message}
 		}
 	}
 	if out != nil {

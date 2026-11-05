@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.95 - 2026-11-06
+
+- Classify upstream graphic resource pressure separately and retry it with a cancellable backoff; keep graphical environments alive between read and submit so the formal evaluation can reopen the runtime
+
 ## 0.1.94 - 2026-11-06
 
 - Release confirmed graphical environments through the official lifecycle endpoint, classify upstream quota exhaustion without retrying, support MySQL DESCRIBE artifacts with durable uncertainty evidence, and accept explicit .mdj file suffix wording
