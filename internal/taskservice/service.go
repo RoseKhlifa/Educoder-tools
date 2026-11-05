@@ -410,10 +410,9 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			// pro profiles can consume the entire 4096-token budget before the
 			// JSON answer is emitted. Leave enough room for a complete candidate.
 			profile.MaxTokens = 8192
-			if compactOutput {
-				// Reasoning and answers share the output limit. If a prior
-				// response was truncated, the next response uses the entire
-				// allowance for the compact answer JSON.
+			if compactOutput || len(resources) > 0 {
+				// Image questions need the full output budget for compact JSON.
+				// Reasoning can consume the response window before the answer.
 				profile.Thinking, profile.ReasoningEffort = "disabled", ""
 			}
 			pr := answer.ObjectiveRequest{Problem: snapshot, Previous: previous, Feedback: attemptHistory.feedback(feedback), Profile: profile, Resources: resources}

@@ -107,15 +107,15 @@ func (p *objectiveProfileSpy) EstimateObjective(req answer.ObjectiveRequest) (an
 	return p.fakeProvider.EstimateObjective(req)
 }
 
-func TestObjectiveImageRepairRetainsReasoningUnlessOutputWasTruncated(t *testing.T) {
+func TestObjectiveImageRepairsStayCompact(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		providerErr error
 		thinking    []string
 		passAfter   int
 	}{
-		{"score repair and pro", nil, []string{"disabled", "enabled", "enabled"}, 3},
-		{"malformed output preserves reasoning", &answer.Error{Kind: "invalid_output_json"}, []string{"disabled", "enabled", "enabled"}, 2},
+		{"score repair and pro", nil, []string{"disabled", "disabled", "disabled"}, 3},
+		{"malformed output stays compact", &answer.Error{Kind: "invalid_output_json"}, []string{"disabled", "disabled", "disabled"}, 2},
 		{"actual truncation uses compact output", &answer.Error{Kind: "truncated_output"}, []string{"disabled", "disabled", "disabled"}, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.97 - 2026-11-06
+
+- Keep image objective repairs in compact answer mode so reasoning cannot consume the JSON response window
+
 ## 0.1.96 - 2026-11-06
 
 - Allow multiple distinct images in one shared objective stem while keeping one provider image per unique asset and preserving every question mapping
