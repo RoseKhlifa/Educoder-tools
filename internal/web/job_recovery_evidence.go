@@ -59,6 +59,10 @@ func (s *Server) preformalRecoveryEvidence(owner string, original jobs.Job) func
 			return false, nil
 		}
 		key = fmt.Sprintf("%s:%d", key, challengeID)
-		return s.jobs.bank.PreformalProgrammingFailure(ctx, problem.HashContent(owner), key, course, homeworkID)
+		allowed, err := s.jobs.bank.PreformalProgrammingFailure(ctx, problem.HashContent(owner), key, course, homeworkID)
+		if err != nil || allowed {
+			return allowed, err
+		}
+		return s.jobs.bank.PreformalGraphicFailure(ctx, problem.HashContent(owner), key, course, homeworkID)
 	}
 }

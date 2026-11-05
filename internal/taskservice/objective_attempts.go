@@ -7,15 +7,18 @@ import (
 
 	"educoder-cli/internal/answer"
 	"educoder-cli/internal/educoder"
+	"educoder-cli/internal/questionbank"
 )
 
-// objectiveAttemptHistory belongs to one run only. It remembers complete,
-// validated candidates whose platform score was confirmed as not full score.
+// objectiveAttemptHistory remembers complete, validated candidates whose
+// platform score was confirmed as not full score, including bounded durable
+// evidence for the same exact snapshot from earlier runs.
 // It never derives individual answers from score changes or enumerates options.
 type objectiveAttemptHistory struct {
 	limit    int
 	byHash   map[[32]byte]objectiveAttempt
 	attempts []objectiveAttempt
+	prior    []objectiveAttempt
 }
 
 type objectiveAttempt struct {
@@ -48,9 +51,37 @@ func objectiveAttemptKey(candidate answer.ObjectiveCandidate) [32]byte {
 	return sha256.Sum256(encoded)
 }
 
+// restore seeds only exact, validated whole-vector failures. Keeping previous
+// from the latest observation avoids restarting repairs from an empty context;
+// a better total score alone is never used to infer any individual answer.
+func (h *objectiveAttemptHistory) restore(failed []questionbank.ObjectiveFailedAttempt) *answer.ObjectiveCandidate {
+	if len(failed) > 10 {
+		failed = failed[len(failed)-10:]
+	}
+	for _, item := range failed {
+		candidate := item.Candidate.Candidate
+		candidate.Answers = append([]string(nil), candidate.Answers...)
+		h.prior = append(h.prior, objectiveAttempt{Candidate: candidate, Score: item.Score, MaxScore: item.MaxScore})
+	}
+	if len(h.prior) == 0 {
+		return nil
+	}
+	previous := h.prior[len(h.prior)-1].Candidate
+	previous.Answers = append([]string(nil), previous.Answers...)
+	return &previous
+}
+
 func (h *objectiveAttemptHistory) contains(candidate answer.ObjectiveCandidate) bool {
-	_, ok := h.byHash[objectiveAttemptKey(candidate)]
-	return ok
+	key := objectiveAttemptKey(candidate)
+	if _, ok := h.byHash[key]; ok {
+		return true
+	}
+	for _, prior := range h.prior {
+		if objectiveAttemptKey(prior.Candidate) == key {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *objectiveAttemptHistory) remember(candidate answer.ObjectiveCandidate, score, maxScore string, results ...objectiveQuestionResult) {
@@ -70,10 +101,11 @@ func (h *objectiveAttemptHistory) remember(candidate answer.ObjectiveCandidate, 
 // invitation to search answer combinations against the platform scorer.
 func (h *objectiveAttemptHistory) feedback(current []answer.Feedback) []answer.Feedback {
 	result := append([]answer.Feedback(nil), current...)
-	if len(h.attempts) == 0 {
+	if len(h.prior) == 0 && len(h.attempts) == 0 {
 		return result
 	}
-	encoded, _ := json.Marshal(h.attempts)
+	history := append(append([]objectiveAttempt(nil), h.prior...), h.attempts...)
+	encoded, _ := json.Marshal(history)
 	return append(result, answer.Feedback{
 		Kind:    "formal_history",
 		Message: "以下完整答案已经提交并确认未满分；相同完整答案不会再次提交。question_results 仅在完整响应与本次题目及答案精确对应时提供，correct=true 的答案应保留，其余答案请根据题干、选项和学科知识独立复核并修正。不要枚举选项或把平台得分当成答案搜索器。已知尝试：" + string(encoded),

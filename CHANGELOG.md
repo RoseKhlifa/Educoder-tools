@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.92 - 2026-11-05
+
+- Preserve confirmed objective failures across recovery, keep image reasoning enabled, and use bounded feedback history to avoid repeating failed answer vectors
+- Recover graphic pre-build interruptions from exact saved-source evidence without replaying uncertain formal submissions
+
 ## 0.1.91 - 2026-11-05
 
 - Honor configured time limits for long course batches and default workers to two hours, preserving bounded requests, model calls and individual homework

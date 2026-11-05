@@ -376,6 +376,12 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 	var previous *answer.ObjectiveCandidate
 	var feedback []answer.Feedback
 	attemptHistory := newObjectiveAttemptHistory(s.cfg.MaxEvaluations)
+	failed, historyErr := s.store.ObjectiveFailedAttempts(ctx, hash, 10)
+	if historyErr != nil {
+		r.Status = "failed"
+		return r, historyErr
+	}
+	previous = attemptHistory.restore(failed)
 	compactOutput := false
 	for attempt := 0; attempt < s.cfg.MaxEvaluations; attempt++ {
 		var c answer.ObjectiveCandidate
@@ -393,7 +399,7 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 				return r, nil
 			}
 			profile := answer.DefaultProfile()
-			if r.ModelCalls > 0 {
+			if r.ModelCalls > 0 || previous != nil {
 				profile = answer.RepairProfile()
 			}
 			if r.ModelCalls >= 2 {
@@ -403,7 +409,7 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			// pro profiles can consume the entire 4096-token budget before the
 			// JSON answer is emitted. Leave enough room for a complete candidate.
 			profile.MaxTokens = 8192
-			if compactOutput || len(resources) > 0 {
+			if compactOutput {
 				// Reasoning and answers share the output limit. If a prior
 				// response was truncated, the next response uses the entire
 				// allowance for the compact answer JSON.
