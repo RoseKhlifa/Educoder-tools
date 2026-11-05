@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"html"
 	"net/http"
 	"net/url"
@@ -17,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -26,9 +28,9 @@ const MaxGraphicBytes = 4 << 20
 var graphicTags = regexp.MustCompile(`<[^>]*>`)
 var graphicFullPath = regexp.MustCompile(`(?:/data/workspace/myshixun/|/home/headless/Desktop/workspace/myshixun/|workspace/myshixun/)[^\s\x60"'<>，。；（）)]+(?i:\.mdj)`)
 var graphicQuotedDir = regexp.MustCompile(`["“]([^"”]+)["”]\s*目录下`)
-var graphicSaveDir = regexp.MustCompile(`保存在[^，。；]*?((?:/data/workspace/myshixun/|workspace/myshixun/)[^\s，。；]+)`)
-var graphicName = regexp.MustCompile(`(?:命名为|文件名改为)\s*[\x60"“']?([A-Za-z0-9_-]+(?:\.mdj)?)`)
-var graphicFormat = regexp.MustCompile(`格式为\s*[\x60"“']?([A-Za-z0-9]+)`)
+var graphicSaveDir = regexp.MustCompile(`(?:保存在|保存到)[^，。；\n]*?((?:/data/workspace/myshixun/|/home/headless/Desktop/workspace/myshixun/|workspace/myshixun/)[^\s\x60"'“”<>，。；（）)]+)`)
+var graphicName = regexp.MustCompile(`(?:命名为|名称为|文件名改为)\s*[\x60"“']?([A-Za-z0-9_-]+(?:\.[A-Za-z0-9]+)?)`)
+var graphicFormat = regexp.MustCompile(`格式为\s*[\x60"“']?\.?([A-Za-z0-9]+)`)
 
 func normalizeGraphicPath(value string) (string, error) {
 	value = strings.TrimSpace(value)
@@ -49,6 +51,28 @@ func normalizeGraphicPath(value string) (string, error) {
 	return value, nil
 }
 
+// graphicValueBoundary rejects partial tokens such as step1.mdj.bak. Natural
+// language punctuation and quotes can delimit paths without becoming part of them.
+func graphicValueBoundary(text string, end int) bool {
+	if end == len(text) {
+		return true
+	}
+	r, size := utf8.DecodeRuneInString(text[end:])
+	if unicode.IsSpace(r) || strings.ContainsRune("\x60\"'“”‘’<>，。；：、！？（）()[]{};,!?", r) {
+		return true
+	}
+	// A final English sentence stop is not an extra filename extension.
+	return r == '.' && (end+size == len(text) || graphicValueBoundary(text, end+size))
+}
+
+func graphicPathStartBoundary(text string, start int) bool {
+	if start == 0 {
+		return true
+	}
+	r, _ := utf8.DecodeLastRuneInString(text[:start])
+	return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_./\\~-%@", r))
+}
+
 // GraphicPaths returns only explicit .mdj paths. Different explicit targets are
 // intentionally retained as ambiguous; callers never spray copies into guessed
 // directories such as submit/ and submit_step_N/.
@@ -66,30 +90,79 @@ func (t *Task) GraphicPaths() []string {
 	}
 	// Task instructions supersede an editor path, which often names a readme.
 	text := html.UnescapeString(graphicTags.ReplaceAllString(t.Challenge.Description, " "))
-	for _, p := range graphicFullPath.FindAllString(text, -1) {
-		add(p)
+	for _, match := range graphicFullPath.FindAllStringIndex(text, -1) {
+		if !graphicPathStartBoundary(text, match[0]) || !graphicValueBoundary(text, match[1]) {
+			return nil
+		}
+		add(text[match[0]:match[1]])
+		if len(result) == 0 {
+			return nil
+		}
 	}
-	if len(result) == 0 {
-		var dir string
-		if m := graphicQuotedDir.FindStringSubmatch(text); len(m) > 0 {
-			dir = m[1]
+	// Reconstruct a filename only from one explicit directory and one explicit
+	// name. Multiple alternatives never produce a guessed Cartesian product or
+	// fall back to an unrelated editor placeholder.
+	dirs := map[string]bool{}
+	addDir := func(raw string) bool {
+		raw = strings.TrimRight(strings.TrimSpace(raw), "/")
+		probe, err := normalizeGraphicPath(raw + "/__graphic_path__.mdj")
+		if err != nil {
+			return false
 		}
-		if m := graphicSaveDir.FindStringSubmatch(text); dir == "" && len(m) > 0 {
-			dir = m[1]
+		dirs[path.Dir(probe)] = true
+		return true
+	}
+	for _, match := range graphicQuotedDir.FindAllStringSubmatch(text, -1) {
+		if !addDir(match[1]) {
+			return nil
 		}
-		dir = strings.TrimSuffix(strings.TrimSuffix(strings.TrimRight(dir, "/"), "文件夹下"), "下")
-		dir = strings.TrimRight(dir, "/")
-		name := graphicName.FindStringSubmatch(text)
-		format := graphicFormat.FindStringSubmatch(text)
-		if dir != "" && len(name) > 0 && (len(format) == 0 || strings.EqualFold(format[1], "mdj")) {
-			filename := name[1]
-			if path.Ext(filename) == "" {
-				filename += ".mdj"
+	}
+	for _, match := range graphicSaveDir.FindAllStringSubmatchIndex(text, -1) {
+		if !graphicPathStartBoundary(text, match[2]) {
+			return nil
+		}
+		dir := text[match[2]:match[3]]
+		// A complete filename is already handled above, rather than treated as a
+		// directory for another generated filename.
+		if strings.EqualFold(path.Ext(dir), ".mdj") {
+			continue
+		}
+		for _, suffix := range []string{"文件夹下", "目录下", "下"} {
+			dir = strings.TrimSuffix(dir, suffix)
+		}
+		if !addDir(dir) {
+			return nil
+		}
+	}
+	names := map[string]bool{}
+	for _, match := range graphicName.FindAllStringSubmatchIndex(text, -1) {
+		if !graphicValueBoundary(text, match[3]) {
+			return nil
+		}
+		names[text[match[2]:match[3]]] = true
+	}
+	formats := map[string]bool{}
+	for _, match := range graphicFormat.FindAllStringSubmatchIndex(text, -1) {
+		if !graphicValueBoundary(text, match[3]) {
+			return nil
+		}
+		formats[strings.ToLower(text[match[2]:match[3]])] = true
+	}
+	if len(dirs) > 0 {
+		if len(dirs) != 1 || len(names) != 1 || len(formats) > 1 || len(formats) == 1 && !formats["mdj"] {
+			return nil
+		}
+		for dir := range dirs {
+			for name := range names {
+				if path.Ext(name) == "" {
+					name += ".mdj"
+				}
+				add(dir + "/" + name)
 			}
-			add(dir + "/" + filename)
 		}
+		return result
 	}
-	if len(result) == 0 {
+	if len(result) == 0 && len(names) == 0 {
 		for _, p := range strings.FieldsFunc(t.Challenge.Path, func(r rune) bool { return r == '；' || r == ';' }) {
 			add(p)
 		}
@@ -358,35 +431,38 @@ func (p *GraphicProtocol) Submit(ctx context.Context, t *Task, document *Graphic
 	}
 	result := &GraphicSubmitResult{ContentHash: graphicHash([]byte(content)), CommitID: commit, Saved: true}
 	result.Document = &GraphicDocument{Path: file, Content: content, Hash: result.ContentHash, Exists: true, game: t.Game.Identifier, myshixunID: t.MyShixun.ID, userID: t.User.UserID}
-	// Tokens are acquired after the commit and remain in local stack variables.
-	var state struct {
-		EvaluationResult
-		SecKey string `json:"sec_key"`
+	// Read the previous verdict only as a polling baseline, never as a key.
+	var baseline EvaluationResult
+	if err := p.Client.requestWithStatuses(ctx, http.MethodGet, "/api/tasks/"+current.Game.Identifier+"/game_status.json",
+		url.Values{"homework_common_id": {strconv.FormatInt(current.HomeworkID, 10)}}, nil, taskRef(current), &baseline, 0, 1, 2); err != nil {
+		return result, err
 	}
-	statusQuery := url.Values{"homework_common_id": {strconv.FormatInt(t.HomeworkID, 10)}}
-	var statusErr error
-	for attempt := 0; attempt < graphicReadinessAttempts; attempt++ {
-		state = struct {
-			EvaluationResult
-			SecKey string `json:"sec_key"`
-		}{}
-		statusErr = p.Client.requestWithStatuses(ctx, http.MethodGet, "/api/tasks/"+t.Game.Identifier+"/game_status.json", statusQuery, nil, taskRef(t), &state, 0, 1, 2)
-		if statusErr == nil && state.SecKey != "" {
-			break
-		}
-		if retryErr := waitGraphicRetry(ctx, attempt); retryErr != nil {
-			return result, retryErr
-		}
+	// The graphical editor has no HTTP editor file. The official client uses
+	// update_file(evaluate=1) to prepare a key for the selected tab; it omits
+	// path/content when no code editor is open. The .mdj was already saved via
+	// SFTP and must never be sent as a placeholder file body.
+	var preparation struct {
+		SecKey          string `json:"sec_key"`
+		Resubmit        string `json:"resubmit"`
+		ContentModified int    `json:"content_modified"`
 	}
-	if statusErr != nil {
-		return result, statusErr
+	prepareBody := map[string]any{"evaluate": 1, "game_id": current.Game.ID, "tab_type": env.TabType,
+		"exercise_id": nil, "homework_common_id": strconv.FormatInt(current.HomeworkID, 10), "extras": programmingExtras(current)}
+	if err := p.Client.request(ctx, http.MethodPost, "/api/myshixuns/"+current.MyShixun.Identifier+"/update_file.json", nil, prepareBody, taskRef(current), &preparation); err != nil {
+		return result, fmt.Errorf("图形评测准备失败，文件已保存但未提交: %w", err)
 	}
-	if state.SecKey == "" {
-		return result, errors.New("图形评测未返回当前关卡评测密钥，文件已保存但未提交")
+	if preparation.SecKey == "" {
+		return result, errors.New("图形评测准备缺少密钥，文件已保存但未提交")
+	}
+	// Preparing a tab must not replace the independently saved workspace file.
+	prepared, exists, readErr := session.ReadFile(ctx, file)
+	if readErr != nil || !exists || graphicHash(prepared) != result.ContentHash {
+		return result, ErrGraphicChanged
 	}
 	extras := programmingExtras(current)
 	extras["commitID"] = commit
-	body := map[string]any{"sec_key": state.SecKey, "resubmit": "", "first": 1, "content_modified": 0, "shixun_environment_id": env.EnvironmentID, "tab_type": 3, "extras": extras}
+	body := map[string]any{"sec_key": preparation.SecKey, "resubmit": preparation.Resubmit, "first": 1,
+		"content_modified": preparation.ContentModified, "shixun_environment_id": env.EnvironmentID, "tab_type": env.TabType, "extras": extras}
 	var build BuildResult
 	if err = p.Client.requestWithStatuses(ctx, http.MethodPost, "/api/tasks/"+t.Game.Identifier+"/game_build.json", nil, body, taskRef(t), &build, 1); err != nil {
 		return result, err
@@ -395,8 +471,8 @@ func (p *GraphicProtocol) Submit(ctx context.Context, t *Task, document *Graphic
 		return result, errors.New("图形评测没有返回明确启动状态")
 	}
 	result.Submitted = true
-	query := url.Values{"resubmit": {""}, "time_out": {"false"}, "port": {strconv.Itoa(build.Port)}, "sec_key": {state.SecKey}, "challenge_id": {strconv.FormatInt(t.Challenge.ID, 10)}, "subject_id": {""}, "homework_common_id": {strconv.FormatInt(t.HomeworkID, 10)}}
-	result.Evaluation, err = p.wait(ctx, current, query, state.EvaluationResult, options)
+	query := url.Values{"resubmit": {preparation.Resubmit}, "time_out": {"false"}, "port": {strconv.Itoa(build.Port)}, "sec_key": {preparation.SecKey}, "challenge_id": {strconv.FormatInt(t.Challenge.ID, 10)}, "subject_id": {""}, "homework_common_id": {strconv.FormatInt(t.HomeworkID, 10)}}
+	result.Evaluation, err = p.wait(ctx, current, query, baseline, options)
 	if err != nil {
 		return result, err
 	}

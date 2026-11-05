@@ -106,12 +106,14 @@ func (c *Client) HomeworkRoster(ctx context.Context, course string, hw Homework)
 		ids[ch.ChallengeID] = true
 		canonical[ch.Name] = ch
 	}
-	// header_info can describe every challenge in the underlying shixun,
-	// while the selected homework may contain only a subset. The assignment's
-	// progress list and challenge_count are the authoritative selected roster;
-	// header IDs are used only to reject unknown progress entries and to verify
-	// names for the selected IDs.
-	if len(canonical) < 1 || len(canonical) > 100 || (hw.ChallengeCount > 0 && len(canonical) != hw.ChallengeCount) {
+	// Upstream exposes both roster shapes: a broader header with an exact
+	// assignment count, or an assignment-only header while challenge_count
+	// still counts the full shixun. Keep the count guard for the first shape.
+	// Accept the second only when progress covers every unique header ID with
+	// its exact name and the assigned roster fits within the catalog total.
+	catalogCountMatches := hw.ChallengeCount <= 0 || len(canonical) == hw.ChallengeCount
+	headerProvesAssigned := len(headerIDs) > 0 && len(canonical) == len(headerIDs) && len(headerIDs) <= hw.ChallengeCount
+	if len(canonical) < 1 || len(canonical) > 100 || (!catalogCountMatches && !headerProvesAssigned) {
 		return nil, errors.New("homework score roster incomplete or exceeds 100 levels")
 	}
 	var games []collectionGame

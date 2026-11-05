@@ -51,11 +51,16 @@ func (t *Task) Kind() TaskKind {
 			return TaskKindGraphic
 		}
 	}
-	if t != nil && len(t.GraphicPaths()) > 0 {
+	if t != nil {
+		hasVNC, hasEditor := bool(t.VNCURL), false
 		for _, env := range t.Environments {
-			if env.TabType == 3 || bool(env.VNCURL) || bool(t.VNCURL) {
-				return TaskKindUnknown
-			}
+			hasVNC = hasVNC || env.TabType == 3 || bool(env.VNCURL)
+			hasEditor = hasEditor || env.TabType == 1 && env.EnvironmentID > 0 && env.EnvironmentID == t.CodeEditor.EnvironmentID
+		}
+		// A VNC-only environment with a placeholder file is not a code editor.
+		// Unknown graphic targets must not enter code self-test or save routes.
+		if hasVNC && (len(t.GraphicPaths()) > 0 || !hasEditor) {
+			return TaskKindUnknown
 		}
 	}
 	if t != nil && t.ST != nil && *t.ST == 0 && t.Challenge.ST != nil && *t.Challenge.ST == 0 && t.Challenge.WithCodeFile != nil && *t.Challenge.WithCodeFile {

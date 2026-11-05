@@ -119,9 +119,24 @@ func TestGraphicHTTPProtocolUsesRuntimeCommitThenEvaluation(t *testing.T) {
 				t.Errorf("wrong start context: %v", q)
 			}
 			ioJSON(w, `{"status":0,"data":{"ssh_address":"ssh.educoder.net","port":"2222","username":"headless","password":"ephemeral-password","myshixun_id":80}}`)
+		case "/api/myshixuns/MY1/update_file.json":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if r.Method != http.MethodPost || body["evaluate"] != float64(1) || body["tab_type"] != float64(3) || body["game_id"] != float64(task.Game.ID) || body["homework_common_id"] != "99" {
+				t.Errorf("wrong graphical preparation body: %v", body)
+			}
+			if _, ok := body["path"]; ok {
+				t.Error("graphical preparation must not overwrite an editor placeholder")
+			}
+			if _, ok := body["content"]; ok {
+				t.Error("graphical preparation must not write the .mdj through the code API")
+			}
+			ioJSON(w, `{"content":{"commitID":""},"resubmit":"fixture-resubmit","sec_key":"prepared-key","content_modified":7}`)
 		case "/api/tasks/GRAPHIC1/game_status.json":
 			if !built {
-				ioJSON(w, `{"status":0,"sec_key":"ephemeral-key"}`)
+				ioJSON(w, `{"status":0}`)
 				break
 			}
 			polls++
@@ -135,7 +150,7 @@ func TestGraphicHTTPProtocolUsesRuntimeCommitThenEvaluation(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatal(err)
 			}
-			if body["tab_type"] != float64(3) || body["sec_key"] != "ephemeral-key" || body["extras"].(map[string]any)["commitID"] != graphicCommitFixture {
+			if body["tab_type"] != float64(3) || body["sec_key"] != "prepared-key" || body["resubmit"] != "fixture-resubmit" || body["content_modified"] != float64(7) || body["extras"].(map[string]any)["commitID"] != graphicCommitFixture {
 				t.Errorf("build did not use runtime commit")
 			}
 			built = true
@@ -169,7 +184,7 @@ func TestGraphicHTTPProtocolUsesRuntimeCommitThenEvaluation(t *testing.T) {
 	if strings.Contains(string(encoded), "password") || strings.Contains(string(encoded), "ssh.educoder") {
 		t.Fatal("runtime credentials serializable")
 	}
-	want := []string{"GET /api/myshixuns/MY1/start.json", "GET /api/tasks/GRAPHIC1.json", "GET /api/myshixuns/MY1/start.json", "GET /api/tasks/GRAPHIC1/game_status.json", "POST /api/tasks/GRAPHIC1/game_build.json", "GET /api/tasks/GRAPHIC1/game_status.json", "GET /api/tasks/GRAPHIC1/game_status.json", "GET /api/tasks/GRAPHIC1.json"}
+	want := []string{"GET /api/myshixuns/MY1/start.json", "GET /api/tasks/GRAPHIC1.json", "GET /api/myshixuns/MY1/start.json", "GET /api/tasks/GRAPHIC1/game_status.json", "POST /api/myshixuns/MY1/update_file.json", "POST /api/tasks/GRAPHIC1/game_build.json", "GET /api/tasks/GRAPHIC1/game_status.json", "GET /api/tasks/GRAPHIC1/game_status.json", "GET /api/tasks/GRAPHIC1.json"}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("events=%v", events)
 	}
@@ -213,47 +228,6 @@ func TestGraphicReadRetriesEventuallyConsistentRuntimeBinding(t *testing.T) {
 	}
 }
 
-func TestGraphicRetriesMissingEvaluationKeyBeforeDeclaringSavedNotSubmitted(t *testing.T) {
-	task := graphicTaskFixture(t)
-	statusReads := 0
-	built := false
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.HasSuffix(r.URL.Path, "start.json"):
-			ioJSON(w, `{"status":0,"data":{"ssh_address":"ssh.educoder.net","port":2222,"username":"headless","password":"private-secret","myshixun_id":80}}`)
-		case strings.HasSuffix(r.URL.Path, "game_status.json"):
-			statusReads++
-			if statusReads < 3 {
-				ioJSON(w, `{"status":0}`)
-			} else if !built {
-				ioJSON(w, `{"status":0,"sec_key":"eventual-key"}`)
-			} else {
-				ioJSON(w, `{"status":2,"test_sets_count":1,"sets_error_count":0,"test_sets":[{"result":true,"compile_success":1}]}`)
-			}
-		case strings.HasSuffix(r.URL.Path, "game_build.json"):
-			built = true
-			ioJSON(w, `{"status":1,"port":1234}`)
-		default:
-			clone := *task
-			if built {
-				clone.Game.Status = 2
-			}
-			_ = json.NewEncoder(w).Encode(&clone)
-		}
-	}))
-	defer server.Close()
-	fake := &fakeGraphicTransport{session: &fakeGraphicSession{}}
-	protocol := NewGraphicProtocol(New(server.URL), fake)
-	doc, err := protocol.Read(context.Background(), task)
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := protocol.Submit(context.Background(), task, doc, graphicProject, PollOptions{})
-	if err != nil || result == nil || !result.Saved || !result.Submitted || statusReads < 4 {
-		t.Fatalf("missing-key retry behavior result=%+v err=%v reads=%d", result, err, statusReads)
-	}
-}
-
 func TestGraphicWaitTreatsQueuedStatusZeroAsPending(t *testing.T) {
 	task := graphicTaskFixture(t)
 	reads := 0
@@ -284,7 +258,7 @@ func TestGraphicMissingEvaluationKeyIsSavedNotSubmitted(t *testing.T) {
 		switch {
 		case strings.HasSuffix(r.URL.Path, "start.json"):
 			ioJSON(w, `{"status":0,"data":{"ssh_address":"ssh.educoder.net","port":2222,"username":"headless","password":"private-secret","myshixun_id":80}}`)
-		case strings.HasSuffix(r.URL.Path, "game_status.json"):
+		case strings.HasSuffix(r.URL.Path, "update_file.json") || strings.HasSuffix(r.URL.Path, "game_status.json"):
 			ioJSON(w, `{"status":0}`)
 		case strings.HasSuffix(r.URL.Path, "game_build.json"):
 			t.Error("formal build without key")
