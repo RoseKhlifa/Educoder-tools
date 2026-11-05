@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.87 - 2026-11-05
+
+- Retry eventually consistent graphic runtime bindings with bounded readiness checks before opening the workspace
+
 ## 0.1.86 - 2026-11-05
 
 - Carry explicit graphic saved-before-submission evidence from homework results to the affected challenge during recovery

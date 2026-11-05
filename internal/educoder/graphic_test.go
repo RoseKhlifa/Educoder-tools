@@ -188,6 +188,31 @@ func TestGraphicDoesNotAcceptCachedVerdict(t *testing.T) {
 	}
 }
 
+func TestGraphicReadRetriesEventuallyConsistentRuntimeBinding(t *testing.T) {
+	task := graphicTaskFixture(t)
+	starts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "start.json") {
+			starts++
+			if starts < 3 {
+				ioJSON(w, `{"status":0,"data":{}}`)
+				return
+			}
+			ioJSON(w, `{"status":0,"data":{"ssh_address":"ssh.educoder.net","port":2222,"username":"headless","password":"ephemeral-password","myshixun_id":80}}`)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(task)
+	}))
+	defer server.Close()
+	protocol := NewGraphicProtocol(New(server.URL), &fakeGraphicTransport{session: &fakeGraphicSession{content: []byte(graphicProject), exists: true}})
+	if _, err := protocol.Read(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	if starts != 3 {
+		t.Fatalf("start attempts=%d want 3", starts)
+	}
+}
+
 func TestGraphicMissingEvaluationKeyIsSavedNotSubmitted(t *testing.T) {
 	task := graphicTaskFixture(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -209,6 +209,31 @@ type GraphicProtocol struct {
 	Transport GraphicTransport
 }
 
+// Graphic startup is eventually consistent upstream.  A successful start
+// request can briefly return an empty or stale runtime binding while the
+// workspace is being materialized.  These retries are deliberately small and
+// bounded: they only repeat idempotent reads/connection attempts and never
+// repeat a file save or a formal build.
+const (
+	graphicReadinessAttempts = 3
+	graphicReadinessDelay    = 150 * time.Millisecond
+)
+
+func waitGraphicRetry(ctx context.Context, attempt int) error {
+	if attempt >= graphicReadinessAttempts-1 {
+		return nil
+	}
+	delay := graphicReadinessDelay * time.Duration(attempt+1)
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func NewGraphicProtocol(client *Client, transport GraphicTransport) *GraphicProtocol {
 	if transport == nil {
 		transport = NewSSHGraphicTransport(GraphicSSHOptions{})
@@ -224,39 +249,51 @@ func (p *GraphicProtocol) open(ctx context.Context, t *Task) (GraphicSession, er
 	if p == nil || p.Client == nil || p.Transport == nil {
 		return nil, errors.New("图形协议未初始化")
 	}
-	var response struct {
-		Data struct {
-			SSHAddress string          `json:"ssh_address"`
-			Port       json.RawMessage `json:"port"`
-			Username   string          `json:"username"`
-			Password   string          `json:"password"`
-			MyShixunID *int64          `json:"myshixun_id"`
-			Code       *int            `json:"code"`
-		} `json:"data"`
-	}
 	query := url.Values{"shixun_environment_id": {strconv.FormatInt(env.EnvironmentID, 10)}, "tab_type": {"3"}, "game_id": {strconv.FormatInt(t.Game.ID, 10)}, "homework_common_id": {strconv.FormatInt(t.HomeworkID, 10)}}
-	if err := p.Client.request(ctx, http.MethodGet, "/api/myshixuns/"+t.MyShixun.Identifier+"/start.json", query, nil, taskRef(t), &response); err != nil {
-		return nil, err
-	}
-	d := response.Data
-	var port int
-	if json.Unmarshal(d.Port, &port) != nil {
-		var text string
-		if json.Unmarshal(d.Port, &text) == nil {
-			port, _ = strconv.Atoi(text)
+	var lastErr error
+	for attempt := 0; attempt < graphicReadinessAttempts; attempt++ {
+		var response struct {
+			Data struct {
+				SSHAddress string          `json:"ssh_address"`
+				Port       json.RawMessage `json:"port"`
+				Username   string          `json:"username"`
+				Password   string          `json:"password"`
+				MyShixunID *int64          `json:"myshixun_id"`
+				Code       *int            `json:"code"`
+			} `json:"data"`
+		}
+		if err := p.Client.request(ctx, http.MethodGet, "/api/myshixuns/"+t.MyShixun.Identifier+"/start.json", query, nil, taskRef(t), &response); err != nil {
+			lastErr = err
+		} else {
+			d := response.Data
+			var port int
+			if json.Unmarshal(d.Port, &port) != nil {
+				var text string
+				if json.Unmarshal(d.Port, &text) == nil {
+					port, _ = strconv.Atoi(text)
+				}
+			}
+			if d.Code != nil && *d.Code != 0 || d.MyShixunID != nil && *d.MyShixunID != t.MyShixun.ID || port <= 0 || port > 65535 || d.SSHAddress == "" || d.Username == "" || d.Password == "" {
+				lastErr = errors.New("图形环境未就绪或返回不匹配的运行实例")
+			} else {
+				session, openErr := p.Transport.Open(ctx, GraphicConnection{Host: d.SSHAddress, Port: port, Username: d.Username, Password: d.Password})
+				if openErr == nil {
+					return session, nil
+				}
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				lastErr = errors.New("图形环境 SSH 连接失败")
+			}
+		}
+		if err := waitGraphicRetry(ctx, attempt); err != nil {
+			return nil, err
 		}
 	}
-	if d.Code != nil && *d.Code != 0 || d.MyShixunID != nil && *d.MyShixunID != t.MyShixun.ID || port <= 0 || port > 65535 || d.SSHAddress == "" || d.Username == "" || d.Password == "" {
-		return nil, errors.New("图形环境未就绪或返回不匹配的运行实例")
+	if lastErr != nil {
+		return nil, lastErr
 	}
-	session, err := p.Transport.Open(ctx, GraphicConnection{Host: d.SSHAddress, Port: port, Username: d.Username, Password: d.Password})
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, errors.New("图形环境 SSH 连接失败")
-	}
-	return session, nil
+	return nil, errors.New("图形环境未就绪或返回不匹配的运行实例")
 }
 
 func (p *GraphicProtocol) Read(ctx context.Context, t *Task) (*GraphicDocument, error) {
