@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.93 - 2026-11-06
+
+- Allow cold graphic runtimes a bounded six readiness attempts with 3.75 seconds of cancellable backoff before opening the workspace
+- Block direct job replay when a self-test stream is unconfirmed, including nested course and level results
+
 ## 0.1.92 - 2026-11-05
 
 - Preserve confirmed objective failures across recovery, keep image reasoning enabled, and use bounded feedback history to avoid repeating failed answer vectors

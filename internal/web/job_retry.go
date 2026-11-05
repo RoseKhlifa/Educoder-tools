@@ -56,7 +56,7 @@ func resultNeedsReview(state retryResultState) bool {
 
 func uncertainJobState(state string) bool {
 	switch strings.ToLower(state) {
-	case "uncertain", "verification_unconfirmed", "submission_uncertain", "result_unconfirmed", "unknown":
+	case "uncertain", "verification_unconfirmed", "submission_uncertain", "result_unconfirmed", "selftest_stream_unconfirmed", "unknown":
 		return true
 	}
 	return false

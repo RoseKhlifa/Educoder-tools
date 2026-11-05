@@ -287,9 +287,11 @@ type GraphicProtocol struct {
 // workspace is being materialized.  These retries are deliberately small and
 // bounded: they only repeat idempotent reads/connection attempts and never
 // repeat a file save or a formal build.
+// Six reads wait at most 3.75 seconds between attempts, in addition to the
+// caller-bounded request/SSH time, so a cold runtime can become ready.
 const (
-	graphicReadinessAttempts = 3
-	graphicReadinessDelay    = 150 * time.Millisecond
+	graphicReadinessAttempts = 6
+	graphicReadinessDelay    = 250 * time.Millisecond
 )
 
 func waitGraphicRetry(ctx context.Context, attempt int) error {

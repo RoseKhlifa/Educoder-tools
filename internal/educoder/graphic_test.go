@@ -228,6 +228,37 @@ func TestGraphicReadRetriesEventuallyConsistentRuntimeBinding(t *testing.T) {
 	}
 }
 
+func TestGraphicReadRetriesRuntimeBindingBeyondThirdAttempt(t *testing.T) {
+	task := graphicTaskFixture(t)
+	starts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "start.json") {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		starts++
+		if starts <= 3 {
+			ioJSON(w, `{"status":0,"data":{}}`)
+			return
+		}
+		ioJSON(w, `{"status":0,"data":{"ssh_address":"ssh.educoder.net","port":2222,"username":"headless","password":"ephemeral-password","myshixun_id":80}}`)
+	}))
+	defer server.Close()
+	transport := &fakeGraphicTransport{session: &fakeGraphicSession{content: []byte(graphicProject), exists: true}}
+	protocol := NewGraphicProtocol(New(server.URL), transport)
+	document, err := protocol.Read(context.Background(), task)
+	if err != nil {
+		t.Fatalf("runtime ready on fourth attempt was rejected after %d starts: %v", starts, err)
+	}
+	if starts != 4 || len(transport.connections) != 1 || transport.session.saves != 0 {
+		t.Fatalf("readiness replayed work: starts=%d connections=%d saves=%d", starts, len(transport.connections), transport.session.saves)
+	}
+	if document.Content != graphicProject || !document.Exists {
+		t.Fatalf("runtime document was not read after readiness: %+v", document)
+	}
+}
+
 func TestGraphicWaitTreatsQueuedStatusZeroAsPending(t *testing.T) {
 	task := graphicTaskFixture(t)
 	reads := 0
