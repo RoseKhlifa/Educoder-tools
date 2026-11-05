@@ -363,8 +363,23 @@ func (p *GraphicProtocol) Submit(ctx context.Context, t *Task, document *Graphic
 		EvaluationResult
 		SecKey string `json:"sec_key"`
 	}
-	if err = p.Client.requestWithStatuses(ctx, http.MethodGet, "/api/tasks/"+t.Game.Identifier+"/game_status.json", url.Values{"homework_common_id": {strconv.FormatInt(t.HomeworkID, 10)}}, nil, taskRef(t), &state, 0, 1, 2); err != nil {
-		return result, err
+	statusQuery := url.Values{"homework_common_id": {strconv.FormatInt(t.HomeworkID, 10)}}
+	var statusErr error
+	for attempt := 0; attempt < graphicReadinessAttempts; attempt++ {
+		state = struct {
+			EvaluationResult
+			SecKey string `json:"sec_key"`
+		}{}
+		statusErr = p.Client.requestWithStatuses(ctx, http.MethodGet, "/api/tasks/"+t.Game.Identifier+"/game_status.json", statusQuery, nil, taskRef(t), &state, 0, 1, 2)
+		if statusErr == nil && state.SecKey != "" {
+			break
+		}
+		if retryErr := waitGraphicRetry(ctx, attempt); retryErr != nil {
+			return result, retryErr
+		}
+	}
+	if statusErr != nil {
+		return result, statusErr
 	}
 	if state.SecKey == "" {
 		return result, errors.New("图形评测未返回当前关卡评测密钥，文件已保存但未提交")

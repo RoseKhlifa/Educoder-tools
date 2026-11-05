@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.88 - 2026-11-05
+
+- Retry missing graphic evaluation keys with bounded read-only polling before marking a saved file unsubmitted
+
 ## 0.1.87 - 2026-11-05
 
 - Retry eventually consistent graphic runtime bindings with bounded readiness checks before opening the workspace

@@ -213,6 +213,47 @@ func TestGraphicReadRetriesEventuallyConsistentRuntimeBinding(t *testing.T) {
 	}
 }
 
+func TestGraphicRetriesMissingEvaluationKeyBeforeDeclaringSavedNotSubmitted(t *testing.T) {
+	task := graphicTaskFixture(t)
+	statusReads := 0
+	built := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "start.json"):
+			ioJSON(w, `{"status":0,"data":{"ssh_address":"ssh.educoder.net","port":2222,"username":"headless","password":"private-secret","myshixun_id":80}}`)
+		case strings.HasSuffix(r.URL.Path, "game_status.json"):
+			statusReads++
+			if statusReads < 3 {
+				ioJSON(w, `{"status":0}`)
+			} else if !built {
+				ioJSON(w, `{"status":0,"sec_key":"eventual-key"}`)
+			} else {
+				ioJSON(w, `{"status":2,"test_sets_count":1,"sets_error_count":0,"test_sets":[{"result":true,"compile_success":1}]}`)
+			}
+		case strings.HasSuffix(r.URL.Path, "game_build.json"):
+			built = true
+			ioJSON(w, `{"status":1,"port":1234}`)
+		default:
+			clone := *task
+			if built {
+				clone.Game.Status = 2
+			}
+			_ = json.NewEncoder(w).Encode(&clone)
+		}
+	}))
+	defer server.Close()
+	fake := &fakeGraphicTransport{session: &fakeGraphicSession{}}
+	protocol := NewGraphicProtocol(New(server.URL), fake)
+	doc, err := protocol.Read(context.Background(), task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := protocol.Submit(context.Background(), task, doc, graphicProject, PollOptions{})
+	if err != nil || result == nil || !result.Saved || !result.Submitted || statusReads < 4 {
+		t.Fatalf("missing-key retry behavior result=%+v err=%v reads=%d", result, err, statusReads)
+	}
+}
+
 func TestGraphicMissingEvaluationKeyIsSavedNotSubmitted(t *testing.T) {
 	task := graphicTaskFixture(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
