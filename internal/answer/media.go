@@ -142,7 +142,6 @@ func prepareObjectiveResources(snapshot ObjectiveSnapshot, resources []ImageReso
 	images := make([]string, 0, len(resources))
 	refs := make([]imageReference, 0, len(resources))
 	imageIndexes := make(map[string]int, len(resources))
-	bindingImages := make(map[ImageBinding]string, len(resources))
 	total := 0
 	for _, resource := range resources {
 		bindings := resource.EffectiveBindings()
@@ -213,13 +212,6 @@ func prepareObjectiveResources(snapshot ObjectiveSnapshot, resources []ImageReso
 			imageIndexes[hash] = imageIndex
 		}
 		for _, binding := range bindings {
-			if owner, exists := bindingImages[binding]; exists {
-				if owner != hash {
-					return nil, nil, &Error{Kind: "invalid_objective_resource"}
-				}
-				continue
-			}
-			bindingImages[binding] = hash
 			refs = append(refs, imageReference{ImageIndex: imageIndex, QuestionPosition: binding.QuestionPosition, OptionLabel: binding.OptionLabel, MediaType: mediaType, SHA256: hash})
 		}
 	}

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.96 - 2026-11-06
+
+- Allow multiple distinct images in one shared objective stem while keeping one provider image per unique asset and preserving every question mapping
+
 ## 0.1.95 - 2026-11-06
 
 - Classify upstream graphic resource pressure separately and retry it with a cancellable backoff; keep graphical environments alive between read and submit so the formal evaluation can reopen the runtime

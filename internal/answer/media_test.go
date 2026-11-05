@@ -136,3 +136,24 @@ func TestObjectiveImageValidationAndSerializationAreOpaque(t *testing.T) {
 		t.Fatal("transport-only data leaked through serialization or formatting")
 	}
 }
+
+func TestObjectiveAllowsMultipleDistinctImagesForOneStemBinding(t *testing.T) {
+	first := fixturePNG(t)
+	var secondBuffer bytes.Buffer
+	if err := png.Encode(&secondBuffer, image.NewRGBA(image.Rect(0, 0, 3, 3))); err != nil {
+		t.Fatal(err)
+	}
+	second := secondBuffer.Bytes()
+	snapshot := objectiveFixture()
+	one := sha256.Sum256(first)
+	two := sha256.Sum256(second)
+	oneHash, twoHash := hex.EncodeToString(one[:]), hex.EncodeToString(two[:])
+	snapshot.Statement = `<img src="sha256:` + oneHash + `"><img src="sha256:` + twoHash + `">`
+	resources := []ImageResource{
+		{MediaType: "image/png", Content: first, SHA256: oneHash, Bindings: []ImageBinding{{QuestionPosition: 1}, {QuestionPosition: 2}}},
+		{MediaType: "image/png", Content: second, SHA256: twoHash, Bindings: []ImageBinding{{QuestionPosition: 1}, {QuestionPosition: 2}}},
+	}
+	if err := ValidateObjectiveResources(snapshot, resources); err != nil {
+		t.Fatalf("distinct stem images were rejected: %v", err)
+	}
+}
