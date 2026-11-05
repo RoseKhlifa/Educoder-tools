@@ -254,6 +254,30 @@ func TestGraphicRetriesMissingEvaluationKeyBeforeDeclaringSavedNotSubmitted(t *t
 	}
 }
 
+func TestGraphicWaitTreatsQueuedStatusZeroAsPending(t *testing.T) {
+	task := graphicTaskFixture(t)
+	reads := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "game_status.json") {
+			ioJSON(w, `{"status":0}`)
+			return
+		}
+		reads++
+		switch reads {
+		case 1, 2:
+			ioJSON(w, `{"status":0}`)
+		default:
+			ioJSON(w, `{"status":2,"test_sets_count":1,"sets_error_count":0,"test_sets":[{"result":true,"compile_success":1}]}`)
+		}
+	}))
+	defer server.Close()
+	protocol := NewGraphicProtocol(New(server.URL), &fakeGraphicTransport{})
+	result, err := protocol.wait(context.Background(), task, nil, EvaluationResult{}, PollOptions{Timeout: time.Second, Interval: time.Millisecond})
+	if err != nil || result == nil || !result.Completed || !result.Passed || reads != 3 {
+		t.Fatalf("queued status=0 was not polled: result=%+v err=%v reads=%d", result, err, reads)
+	}
+}
+
 func TestGraphicMissingEvaluationKeyIsSavedNotSubmitted(t *testing.T) {
 	task := graphicTaskFixture(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

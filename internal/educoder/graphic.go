@@ -464,6 +464,11 @@ func (p *GraphicProtocol) wait(ctx context.Context, t *Task, query url.Values, b
 					}
 				}
 				return &r, nil
+			} else if r.Status != nil && *r.Status == 0 {
+				// After game_build, Educoder can report status=0 while the
+				// formal evaluator is queued or the runtime is materializing.
+				// This is a non-terminal state; keep polling until status=2,
+				// an explicit failure, or the bounded context timeout.
 			} else {
 				return nil, errors.New("图形评测返回未确认的状态组合")
 			}
