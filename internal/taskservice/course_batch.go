@@ -75,7 +75,17 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 	if req.Owner == "" || req.Mode != solver.ModeSubmit || req.HomeworkID != 0 || req.Game != "" || (req.Course != "" && !courseIdentifier.MatchString(req.Course)) || req.BudgetMicroUSD < 0 {
 		return nil, errors.New("course service requires owner, submit mode and no homework or game target")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+	// A course can contain many multi-level assignments. Share the worker's
+	// configured batch deadline instead of imposing another fixed 30-minute
+	// deadline; parent cancellation and the per-homework deadline still apply.
+	timeout := s.cfg.Timeout
+	if timeout <= 0 {
+		timeout = 2 * time.Hour
+	}
+	if timeout > 24*time.Hour {
+		timeout = 24 * time.Hour
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	scope := "all"
 	if req.Course != "" {

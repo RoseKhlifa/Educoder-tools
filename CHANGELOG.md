@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.91 - 2026-11-05
+
+- Honor configured time limits for long course batches and default workers to two hours, preserving bounded requests, model calls and individual homework
+
 ## 0.1.90 - 2026-11-05
 
 - Align graphic tasks with the official evaluation preparation protocol, recover assigned subset rosters, and classify VNC placeholders safely

@@ -11,6 +11,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
@@ -27,6 +28,11 @@ for recording in ROOT.glob("*.har"):
         for entry in har.get("log", {}).get("entries", []):
             for message in (entry.get("request", {}), entry.get("response", {})):
                 for cookie in message.get("cookies", []):
+                    # GitHub's dotcom_user is a public display/login name, not
+                    # an authentication secret. Its value can be the explicitly
+                    # configured public repository owner in release docs.
+                    if cookie.get("name") == "dotcom_user" and (urlsplit(entry.get("request", {}).get("url", "")).hostname or "") in {"github.com", "www.github.com", "alive.github.com"}:
+                        continue
                     value = cookie.get("value", "")
                     if isinstance(value, str) and len(value) >= 8:
                         secrets.add(value.encode())
