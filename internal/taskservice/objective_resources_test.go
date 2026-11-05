@@ -130,16 +130,19 @@ func TestPrepareObjectiveResourcesSharedImagesUseMemoryCacheAndCountLimit(t *tes
 	choice.Task.Challenge.Description = `<img src="/api/attachments/shared?signature=fixture-private">`
 	choice.Questions[0].Subject = `![repeat](/api/attachments/shared?signature=fixture-private)`
 	snapshot, resources, err := prepareObjectiveResources(context.Background(), educoder.New(server.URL), choice)
-	if err != nil || requests != 1 || len(resources) != 3 || resources[0].QuestionPosition != 5 || resources[2].QuestionPosition != 7 {
-		t.Fatalf("shared resource cache failed: requests=%d resources=%d err=%v", requests, len(resources), err)
+	if err != nil || requests != 1 || len(resources) != 1 {
+		t.Fatalf("shared resource dedupe failed: requests=%d resources=%d err=%v", requests, len(resources), err)
+	}
+	if len(resources[0].Bindings) != 2 || resources[0].Bindings[0] != (answer.ImageBinding{QuestionPosition: 5}) || resources[0].Bindings[1] != (answer.ImageBinding{QuestionPosition: 7}) {
+		t.Fatalf("shared resource bindings lost: %#v", resources[0].Bindings)
 	}
 	if err := answer.ValidateObjectiveResources(snapshot, resources); err != nil {
 		t.Fatal(err)
 	}
 	choice = objectiveResourceFixture()
 	choice.Questions[0].Subject = strings.Repeat(`![repeat](/api/attachments/shared)`, 129)
-	if _, _, err := prepareObjectiveResources(context.Background(), educoder.New(server.URL), choice); err == nil {
-		t.Fatal("image-count limit not enforced")
+	if _, _, err := prepareObjectiveResources(context.Background(), educoder.New(server.URL), choice); err != nil {
+		t.Fatalf("repeated shared image should stay within unique-resource limit: %v", err)
 	}
 }
 
@@ -161,10 +164,16 @@ func TestPrepareObjectiveResourcesAggregateByteLimit(t *testing.T) {
 	// still checking the provider's aggregate bound for five attachments.
 	content := objectiveResourcePNG(t, 35)
 	content = append(content, make([]byte, educoder.MaxQuestionImageBytes-1-len(content))...)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write(content) }))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		unique := append([]byte(nil), content...)
+		if len(unique) > 0 {
+			unique[len(unique)-1] = r.URL.Path[len(r.URL.Path)-1]
+		}
+		_, _ = w.Write(unique)
+	}))
 	defer server.Close()
 	choice := objectiveResourceFixture()
-	choice.Questions[0].Subject = strings.Repeat(`![same](/api/attachments/large)`, 5)
+	choice.Questions[0].Subject = `![same](/api/attachments/large1) ![same](/api/attachments/large2) ![same](/api/attachments/large3) ![same](/api/attachments/large4) ![same](/api/attachments/large5)`
 	_, _, err := prepareObjectiveResources(context.Background(), educoder.New(server.URL), choice)
 	var typed *educoder.QuestionImageError
 	if !errors.As(err, &typed) || typed.Kind != "objective_image_limit" {

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.94 - 2026-11-06
+
+- Release confirmed graphical environments through the official lifecycle endpoint, classify upstream quota exhaustion without retrying, support MySQL DESCRIBE artifacts with durable uncertainty evidence, and accept explicit .mdj file suffix wording
+
 ## 0.1.93 - 2026-11-06
 
 - Allow cold graphic runtimes a bounded six readiness attempts with 3.75 seconds of cancellable backoff before opening the workspace

@@ -143,10 +143,11 @@ func (t *Task) GraphicPaths() []string {
 	}
 	formats := map[string]bool{}
 	for _, match := range graphicFormat.FindAllStringSubmatchIndex(text, -1) {
-		if !graphicValueBoundary(text, match[3]) {
+		end := match[3]
+		if !graphicValueBoundary(text, end) && !(strings.HasPrefix(text[end:], "文件") && graphicValueBoundary(text, end+len("文件"))) {
 			return nil
 		}
-		formats[strings.ToLower(text[match[2]:match[3]])] = true
+		formats[strings.ToLower(text[match[2]:end])] = true
 	}
 	if len(dirs) > 0 {
 		if len(dirs) != 1 || len(names) != 1 || len(formats) > 1 || len(formats) == 1 && !formats["mdj"] {
@@ -269,17 +270,29 @@ type GraphicDocument struct {
 	userID     int64
 }
 type GraphicSubmitResult struct {
-	ContentHash string            `json:"content_hash"`
-	CommitID    string            `json:"commit_id"`
-	Saved       bool              `json:"saved"`
-	Submitted   bool              `json:"submitted"`
-	Document    *GraphicDocument  `json:"-"`
-	Evaluation  *EvaluationResult `json:"evaluation,omitempty"`
-	Confirmed   bool              `json:"confirmed"`
+	ContentHash         string            `json:"content_hash"`
+	CommitID            string            `json:"commit_id"`
+	Saved               bool              `json:"saved"`
+	Submitted           bool              `json:"submitted"`
+	Document            *GraphicDocument  `json:"-"`
+	Evaluation          *EvaluationResult `json:"evaluation,omitempty"`
+	Confirmed           bool              `json:"confirmed"`
+	EnvironmentReleased bool              `json:"environment_released"`
+	CleanupError        string            `json:"cleanup_error,omitempty"`
 }
 type GraphicProtocol struct {
 	Client    *Client
 	Transport GraphicTransport
+}
+type GraphicEnvironmentQuotaError struct {
+	Message string
+}
+
+func (e *GraphicEnvironmentQuotaError) Error() string {
+	if e == nil || strings.TrimSpace(e.Message) == "" {
+		return "图形实验环境数量已达上限"
+	}
+	return "图形实验环境数量已达上限: " + strings.TrimSpace(e.Message)
 }
 
 // Graphic startup is eventually consistent upstream.  A successful start
@@ -287,8 +300,6 @@ type GraphicProtocol struct {
 // workspace is being materialized.  These retries are deliberately small and
 // bounded: they only repeat idempotent reads/connection attempts and never
 // repeat a file save or a formal build.
-// Six reads wait at most 3.75 seconds between attempts, in addition to the
-// caller-bounded request/SSH time, so a cold runtime can become ready.
 const (
 	graphicReadinessAttempts = 6
 	graphicReadinessDelay    = 250 * time.Millisecond
@@ -321,6 +332,12 @@ func (p *GraphicProtocol) open(ctx context.Context, t *Task) (GraphicSession, er
 	if err != nil {
 		return nil, err
 	}
+	return p.openEnvironment(ctx, t, env)
+}
+
+// openEnvironment is shared by source-bound VNC artifact routes. Every caller
+// validates its own public task contract before requesting this runtime.
+func (p *GraphicProtocol) openEnvironment(ctx context.Context, t *Task, env ProgrammingEnvironment) (GraphicSession, error) {
 	if p == nil || p.Client == nil || p.Transport == nil {
 		return nil, errors.New("图形协议未初始化")
 	}
@@ -335,6 +352,7 @@ func (p *GraphicProtocol) open(ctx context.Context, t *Task) (GraphicSession, er
 				Password   string          `json:"password"`
 				MyShixunID *int64          `json:"myshixun_id"`
 				Code       *int            `json:"code"`
+				Message    string          `json:"msg"`
 			} `json:"data"`
 		}
 		if err := p.Client.request(ctx, http.MethodGet, "/api/myshixuns/"+t.MyShixun.Identifier+"/start.json", query, nil, taskRef(t), &response); err != nil {
@@ -347,6 +365,9 @@ func (p *GraphicProtocol) open(ctx context.Context, t *Task) (GraphicSession, er
 				if json.Unmarshal(d.Port, &text) == nil {
 					port, _ = strconv.Atoi(text)
 				}
+			}
+			if d.Code != nil && *d.Code == -5 {
+				return nil, &GraphicEnvironmentQuotaError{Message: d.Message}
 			}
 			if d.Code != nil && *d.Code != 0 || d.MyShixunID != nil && *d.MyShixunID != t.MyShixun.ID || port <= 0 || port > 65535 || d.SSHAddress == "" || d.Username == "" || d.Password == "" {
 				lastErr = errors.New("图形环境未就绪或返回不匹配的运行实例")
@@ -371,8 +392,19 @@ func (p *GraphicProtocol) open(ctx context.Context, t *Task) (GraphicSession, er
 	return nil, errors.New("图形环境未就绪或返回不匹配的运行实例")
 }
 
+// ReleaseGraphicEnvironment releases exactly one worker-owned graphical environment
+// after a confirmed formal result. It follows the upstream web-client lifecycle
+// endpoint and never uses the broad quota cleanup endpoint.
+func (c *Client) ReleaseGraphicEnvironment(ctx context.Context, t *Task, environmentID int64) error {
+	if c == nil || t == nil || validIdentifier(t.MyShixun.Identifier) != nil || environmentID <= 0 {
+		return errors.New("图形环境释放上下文无效")
+	}
+	body := map[string]any{"shixun_environment_ids": []int64{environmentID}}
+	return c.request(ctx, http.MethodPost, "/api/myshixuns/"+t.MyShixun.Identifier+"/exit_delete_pod.json", nil, body, taskRef(t), &struct{}{})
+}
+
 func (p *GraphicProtocol) Read(ctx context.Context, t *Task) (*GraphicDocument, error) {
-	file, _, err := requireGraphic(t)
+	file, env, err := requireGraphic(t)
 	if err != nil {
 		return nil, err
 	}
@@ -380,15 +412,23 @@ func (p *GraphicProtocol) Read(ctx context.Context, t *Task) (*GraphicDocument, 
 	if err != nil {
 		return nil, err
 	}
-	defer session.Close()
 	content, exists, err := session.ReadFile(ctx, file)
 	if err != nil {
+		_ = session.Close()
 		return nil, errors.New("图形文件读取失败")
 	}
 	if len(content) > MaxGraphicBytes || !utf8.Valid(content) {
+		_ = session.Close()
 		return nil, errors.New("图形文件不是支持范围内的 UTF-8 内容")
 	}
-	return &GraphicDocument{Path: file, Content: string(content), Hash: graphicHash(content), Exists: exists, game: t.Game.Identifier, myshixunID: t.MyShixun.ID, userID: t.User.UserID}, nil
+	doc := &GraphicDocument{Path: file, Content: string(content), Hash: graphicHash(content), Exists: exists, game: t.Game.Identifier, myshixunID: t.MyShixun.ID, userID: t.User.UserID}
+	if err := session.Close(); err != nil {
+		return nil, err
+	}
+	if err := p.Client.ReleaseGraphicEnvironment(ctx, t, env.EnvironmentID); err != nil {
+		return nil, err
+	}
+	return doc, nil
 }
 
 func (p *GraphicProtocol) Submit(ctx context.Context, t *Task, document *GraphicDocument, content string, options PollOptions) (*GraphicSubmitResult, error) {
@@ -417,7 +457,6 @@ func (p *GraphicProtocol) Submit(ctx context.Context, t *Task, document *Graphic
 	if err != nil {
 		return nil, err
 	}
-	defer session.Close()
 	commit, err := session.SaveAndCommit(ctx, file, document.Hash, document.Exists, []byte(content))
 	if err != nil {
 		if errors.Is(err, ErrGraphicChanged) {
@@ -433,6 +472,27 @@ func (p *GraphicProtocol) Submit(ctx context.Context, t *Task, document *Graphic
 	}
 	result := &GraphicSubmitResult{ContentHash: graphicHash([]byte(content)), CommitID: commit, Saved: true}
 	result.Document = &GraphicDocument{Path: file, Content: content, Hash: result.ContentHash, Exists: true, game: t.Game.Identifier, myshixunID: t.MyShixun.ID, userID: t.User.UserID}
+	result, err = p.evaluateWorkspace(ctx, current, t, env, file, session.ReadFile, result, options, requireGraphic, nil)
+	if result != nil && result.Confirmed {
+		if closeErr := session.Close(); closeErr != nil {
+			result.CleanupError = closeErr.Error()
+		} else if releaseErr := p.Client.ReleaseGraphicEnvironment(ctx, current, env.EnvironmentID); releaseErr != nil {
+			result.CleanupError = releaseErr.Error()
+		} else {
+			result.EnvironmentReleased = true
+		}
+	} else {
+		_ = session.Close()
+	}
+	return result, err
+}
+
+// evaluateWorkspace submits exactly one ordinary VNC build after an artifact
+// was independently produced and verified. Preparation and build POSTs are
+// never retried; an uncertain response remains uncertain.
+func (p *GraphicProtocol) evaluateWorkspace(ctx context.Context, current, t *Task, env ProgrammingEnvironment, file string,
+	read func(context.Context, string) ([]byte, bool, error), result *GraphicSubmitResult, options PollOptions,
+	require func(*Task) (string, ProgrammingEnvironment, error), evidence *MySQLArtifactStage) (*GraphicSubmitResult, error) {
 	// Read the previous verdict only as a polling baseline, never as a key.
 	var baseline EvaluationResult
 	if err := p.Client.requestWithStatuses(ctx, http.MethodGet, "/api/tasks/"+current.Game.Identifier+"/game_status.json",
@@ -448,6 +508,9 @@ func (p *GraphicProtocol) Submit(ctx context.Context, t *Task, document *Graphic
 		Resubmit        string `json:"resubmit"`
 		ContentModified int    `json:"content_modified"`
 	}
+	if evidence != nil {
+		evidence.PreparationAttempted = true
+	}
 	prepareBody := map[string]any{"evaluate": 1, "game_id": current.Game.ID, "tab_type": env.TabType,
 		"exercise_id": nil, "homework_common_id": strconv.FormatInt(current.HomeworkID, 10), "extras": programmingExtras(current)}
 	if err := p.Client.request(ctx, http.MethodPost, "/api/myshixuns/"+current.MyShixun.Identifier+"/update_file.json", nil, prepareBody, taskRef(current), &preparation); err != nil {
@@ -456,29 +519,45 @@ func (p *GraphicProtocol) Submit(ctx context.Context, t *Task, document *Graphic
 	if preparation.SecKey == "" {
 		return result, errors.New("图形评测准备缺少密钥，文件已保存但未提交")
 	}
+	if evidence != nil {
+		evidence.PreparationConfirmed = true
+	}
 	// Preparing a tab must not replace the independently saved workspace file.
-	prepared, exists, readErr := session.ReadFile(ctx, file)
+	prepared, exists, readErr := read(ctx, file)
 	if readErr != nil || !exists || graphicHash(prepared) != result.ContentHash {
 		return result, ErrGraphicChanged
 	}
 	extras := programmingExtras(current)
-	extras["commitID"] = commit
+	extras["commitID"] = result.CommitID
 	body := map[string]any{"sec_key": preparation.SecKey, "resubmit": preparation.Resubmit, "first": 1,
 		"content_modified": preparation.ContentModified, "shixun_environment_id": env.EnvironmentID, "tab_type": env.TabType, "extras": extras}
 	var build BuildResult
+	if evidence != nil {
+		evidence.BuildAttempted = true
+	}
+	var err error
 	if err = p.Client.requestWithStatuses(ctx, http.MethodPost, "/api/tasks/"+t.Game.Identifier+"/game_build.json", nil, body, taskRef(t), &build, 1); err != nil {
 		return result, err
 	}
 	if build.Status != 1 {
 		return result, errors.New("图形评测没有返回明确启动状态")
 	}
+	if evidence != nil {
+		evidence.BuildAccepted = true
+		evidence.EvaluationAttempted = true
+	}
 	result.Submitted = true
 	query := url.Values{"resubmit": {preparation.Resubmit}, "time_out": {"false"}, "port": {strconv.Itoa(build.Port)}, "sec_key": {preparation.SecKey}, "challenge_id": {strconv.FormatInt(t.Challenge.ID, 10)}, "subject_id": {""}, "homework_common_id": {strconv.FormatInt(t.HomeworkID, 10)}}
 	result.Evaluation, err = p.wait(ctx, current, query, baseline, options)
+	if result.Evaluation != nil && evidence != nil {
+		evidence.EvaluationObserved = true
+		evidence.EvaluationPassed = result.Evaluation.Passed
+		evidence.EvaluationCompleted = result.Evaluation.Completed
+	}
 	if err != nil {
 		return result, err
 	}
-	stored, exists, readErr := session.ReadFile(ctx, file)
+	stored, exists, readErr := read(ctx, file)
 	if readErr != nil {
 		return result, errors.New("图形评测后文件复核失败")
 	}
@@ -490,7 +569,7 @@ func (p *GraphicProtocol) Submit(ctx context.Context, t *Task, document *Graphic
 		if loadErr != nil {
 			return result, loadErr
 		}
-		checkFile, checkEnv, checkErr := requireGraphic(check)
+		checkFile, checkEnv, checkErr := require(check)
 		result.Confirmed = checkErr == nil && checkFile == file && checkEnv.EnvironmentID == env.EnvironmentID && check.Game.Status == 2 && check.User.UserID == t.User.UserID && check.MyShixun.ID == t.MyShixun.ID && check.Game.ID == t.Game.ID && check.MyShixun.Identifier == t.MyShixun.Identifier
 	}
 	return result, nil

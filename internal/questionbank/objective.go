@@ -126,8 +126,9 @@ var objectiveCanonicalImage = regexp.MustCompile(`<img src="sha256:([0-9a-f]{64}
 var objectiveUnsupportedSnapshotMedia = regexp.MustCompile(`(?is)<\s*(?:img|svg|object|embed|video|audio|canvas|iframe|picture|source)\b|!\[|\bsrcset\s*=|\burl\s*\(`)
 
 // Only the canonical placeholder emitted after fetching an image is supported.
-// The binding includes the question and option, so matching bytes in another
-// option or a shared statement cannot substitute for the referenced image.
+// Each binding includes the question and option, so matching bytes in another
+// option cannot substitute for the referenced image. A single shared statement
+// image may provide several exact question-position bindings.
 func objectiveSnapshotResourcesMatch(snapshot answer.ObjectiveSnapshot, resources []answer.ImageResource) bool {
 	type binding struct {
 		position int
@@ -139,7 +140,9 @@ func objectiveSnapshotResourcesMatch(snapshot answer.ObjectiveSnapshot, resource
 		if !objectiveSHA256Pattern.MatchString(resource.SHA256) {
 			return false
 		}
-		available[binding{resource.QuestionPosition, resource.OptionLabel, resource.SHA256}] = true
+		for _, bound := range resource.EffectiveBindings() {
+			available[binding{bound.QuestionPosition, bound.OptionLabel, resource.SHA256}] = true
+		}
 	}
 	used := make(map[binding]bool, len(resources))
 	matchText := func(text string, position int, option string) bool {

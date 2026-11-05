@@ -31,6 +31,7 @@ func prepareObjectiveResources(ctx context.Context, client *educoder.Client, cho
 	snapshot := objectiveSnapshot(choice)
 	resources := []answer.ImageResource{}
 	cache := map[string]educoder.QuestionImage{}
+	resourceIndexes := map[string]int{}
 	locators := map[string]string{}
 	total := 0
 	var resourceErr error
@@ -40,7 +41,7 @@ func prepareObjectiveResources(ctx context.Context, client *educoder.Client, cho
 		}
 		rawLocator := locator
 		locator = html.UnescapeString(strings.TrimSpace(locator))
-		if len(resources) >= 128 || locator == "" || strings.ContainsAny(locator, "\r\n\t") {
+		if locator == "" || strings.ContainsAny(locator, "\r\n\t") {
 			resourceErr = &educoder.QuestionImageError{Kind: "objective_image_limit"}
 			return ""
 		}
@@ -52,12 +53,30 @@ func prepareObjectiveResources(ctx context.Context, client *educoder.Client, cho
 			}
 			cache[locator] = image
 		}
-		total += len(image.Content)
-		if total > 40<<20 {
-			resourceErr = &educoder.QuestionImageError{Kind: "objective_image_limit"}
-			return ""
+		resourceKey := image.SHA256
+		resourceIndex, exists := resourceIndexes[resourceKey]
+		if !exists {
+			if len(resources) >= 128 || total+len(image.Content) > 40<<20 {
+				resourceErr = &educoder.QuestionImageError{Kind: "objective_image_limit"}
+				return ""
+			}
+			total += len(image.Content)
+			resourceIndex = len(resources)
+			resourceIndexes[resourceKey] = resourceIndex
+			resources = append(resources, answer.ImageResource{QuestionPosition: position, OptionLabel: label, MediaType: image.MediaType, Content: image.Content, SHA256: image.SHA256, Bindings: []answer.ImageBinding{{QuestionPosition: position, OptionLabel: label}}})
+		} else {
+			bindings := &resources[resourceIndex].Bindings
+			seen := false
+			for _, binding := range *bindings {
+				if binding.QuestionPosition == position && binding.OptionLabel == label {
+					seen = true
+					break
+				}
+			}
+			if !seen {
+				*bindings = append(*bindings, answer.ImageBinding{QuestionPosition: position, OptionLabel: label})
+			}
 		}
-		resources = append(resources, answer.ImageResource{QuestionPosition: position, OptionLabel: label, MediaType: image.MediaType, Content: image.Content, SHA256: image.SHA256})
 		placeholder := `<img src="sha256:` + image.SHA256 + `">`
 		locators[rawLocator], locators[locator] = placeholder, placeholder
 		return placeholder

@@ -20,9 +20,10 @@ import (
 type TaskKind string
 
 const (
-	TaskKindProgramming TaskKind = "programming"
-	TaskKindGraphic     TaskKind = "graphic"
-	TaskKindChoice      TaskKind = "choice"
+	TaskKindProgramming   TaskKind = "programming"
+	TaskKindGraphic       TaskKind = "graphic"
+	TaskKindMySQLArtifact TaskKind = "mysql_artifact"
+	TaskKindChoice        TaskKind = "choice"
 	// TaskKindObjective is an explicit alias for callers that use the
 	// objective-question terminology. Both values serialize as "choice".
 	TaskKindObjective TaskKind = TaskKindChoice
@@ -45,6 +46,9 @@ func (t *Task) Kind() TaskKind {
 	// them into the graphic writer based only on that environment.
 	if t != nil && t.ST != nil && *t.ST == 1 && t.Challenge.ST != nil && *t.Challenge.ST == 1 && len(t.Chooses) > 0 {
 		return TaskKindChoice
+	}
+	if t != nil && t.IsMySQLArtifactTask() {
+		return TaskKindMySQLArtifact
 	}
 	if t != nil && len(t.Chooses) == 0 && len(t.GraphicPaths()) == 1 {
 		if _, err := graphicEnvironment(t); err == nil {

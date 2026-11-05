@@ -57,20 +57,21 @@ type BatchProgress struct {
 	CurrentTitle    string `json:"current_title,omitempty"`
 }
 type Result struct {
-	Status           string         `json:"status"`
-	Kind             string         `json:"kind"`
-	RunID            string         `json:"run_id,omitempty"`
-	CandidateID      int64          `json:"candidate_id,omitempty"`
-	Source           string         `json:"source,omitempty"`
-	ModelCalls       int            `json:"model_calls"`
-	CostMicroUSD     int64          `json:"cost_micro_usd"`
-	ReservedMicroUSD int64          `json:"reserved_micro_usd,omitempty"`
-	Score            string         `json:"score,omitempty"`
-	MaxScore         string         `json:"max_score,omitempty"`
-	ScoreCheck       string         `json:"score_check,omitempty"`
-	ScoreKnown       bool           `json:"score_known,omitempty"`
-	Programming      *solver.Result `json:"programming,omitempty"`
-	Diagnostics      []string       `json:"diagnostics,omitempty"`
+	Status           string                        `json:"status"`
+	Kind             string                        `json:"kind"`
+	RunID            string                        `json:"run_id,omitempty"`
+	CandidateID      int64                         `json:"candidate_id,omitempty"`
+	Source           string                        `json:"source,omitempty"`
+	ModelCalls       int                           `json:"model_calls"`
+	CostMicroUSD     int64                         `json:"cost_micro_usd"`
+	ReservedMicroUSD int64                         `json:"reserved_micro_usd,omitempty"`
+	Score            string                        `json:"score,omitempty"`
+	MaxScore         string                        `json:"max_score,omitempty"`
+	ScoreCheck       string                        `json:"score_check,omitempty"`
+	ScoreKnown       bool                          `json:"score_known,omitempty"`
+	Programming      *solver.Result                `json:"programming,omitempty"`
+	MySQLArtifact    *educoder.MySQLArtifactResult `json:"mysql_artifact,omitempty"`
+	Diagnostics      []string                      `json:"diagnostics,omitempty"`
 	providerRetry    answer.AvailabilityRetry
 }
 type Service struct {
@@ -149,6 +150,34 @@ func (s *Service) lock(ctx context.Context, key string) (func(), error) {
 		return nil, ctx.Err()
 	}
 }
+func findHomeworkForAdmission(ctx context.Context, client *educoder.Client, course string, homeworkID int64) (*educoder.Homework, error) {
+	homeworks, err := client.Homeworks(ctx, course, "")
+	if err != nil {
+		return nil, err
+	}
+	for i := range homeworks {
+		if homeworks[i].ID == homeworkID {
+			item := homeworks[i]
+			return &item, nil
+		}
+	}
+	return nil, fmt.Errorf("课堂中没有作业 %d", homeworkID)
+}
+
+func admitSubmitHomework(ctx context.Context, client *educoder.Client, course string, homeworkID int64, kind string) (*Result, error) {
+	homework, err := findHomeworkForAdmission(ctx, client, course, homeworkID)
+	if err != nil {
+		return nil, err
+	}
+	if homework.IsClosed(time.Now()) {
+		if kind == "" {
+			kind = "service"
+		}
+		return &Result{Status: "deadline_passed", Kind: kind, Diagnostics: []string{"deadline_passed"}}, nil
+	}
+	return nil, nil
+}
+
 func (s *Service) Run(ctx context.Context, client *educoder.Client, req Request, report func(Progress)) (*Result, error) {
 	if s == nil || s.store == nil || client == nil {
 		return nil, errors.New("task service requires store and authenticated client")
@@ -170,26 +199,10 @@ func (s *Service) Run(ctx context.Context, client *educoder.Client, req Request,
 	var task *educoder.Task
 	var err error
 	if req.Game == "" && req.Mode == solver.ModeSubmit {
-		// Enter may create the student's runtime. Resolve the assignment's
-		// availability before that call when a direct request did not provide a
-		// pre-resolved game identifier.
-		homeworks, e := client.Homeworks(ctx, req.Course, "")
-		if e != nil {
-			return nil, e
-		}
-		var selected *educoder.Homework
-		for i := range homeworks {
-			if homeworks[i].ID == req.HomeworkID {
-				item := homeworks[i]
-				selected = &item
-				break
-			}
-		}
-		if selected == nil {
-			return nil, fmt.Errorf("课堂中没有作业 %d", req.HomeworkID)
-		}
-		if selected.IsClosed(time.Now()) {
-			return &Result{Status: "deadline_passed", Kind: "service", Diagnostics: []string{"deadline_passed"}}, nil
+		// Enter may create the student's runtime, so reject closed work before
+		// any runtime creation.
+		if result, e := admitSubmitHomework(ctx, client, req.Course, req.HomeworkID, "service"); e != nil || result != nil {
+			return result, e
 		}
 	}
 	if req.Game == "" {
@@ -202,6 +215,14 @@ func (s *Service) Run(ctx context.Context, client *educoder.Client, req Request,
 	}
 	if task.IsOptional() {
 		return &Result{Status: "skipped_optional", Kind: "service"}, nil
+	}
+	if req.Mode == solver.ModeSubmit {
+		kind := task.Kind()
+		if kind == educoder.TaskKindMySQLArtifact || kind == educoder.TaskKindProgramming || kind == educoder.TaskKindGraphic {
+			if result, e := admitSubmitHomework(ctx, client, req.Course, req.HomeworkID, string(kind)); e != nil || result != nil {
+				return result, e
+			}
+		}
 	}
 	client, err = client.WithRequiredTasks()
 	if err != nil {
@@ -218,30 +239,10 @@ func (s *Service) Run(ctx context.Context, client *educoder.Client, req Request,
 	}
 	defer unlock()
 	switch task.Kind() {
+	case educoder.TaskKindMySQLArtifact:
+		r, e := s.runMySQLArtifact(ctx, client, req, task, func(phase, message string) { emit(phase, "mysql_artifact", message) })
+		return optionalResult(r, e)
 	case educoder.TaskKindProgramming, educoder.TaskKindGraphic:
-		if req.Mode == solver.ModeSubmit {
-			// A direct single-level programming request bypasses RunHomework.
-			// Recheck the assignment history before invoking the solver, which is
-			// the first point at which a model call or write can occur.
-			homeworks, e := client.Homeworks(ctx, req.Course, "")
-			if e != nil {
-				return nil, e
-			}
-			var selected *educoder.Homework
-			for i := range homeworks {
-				if homeworks[i].ID == req.HomeworkID {
-					item := homeworks[i]
-					selected = &item
-					break
-				}
-			}
-			if selected == nil {
-				return nil, fmt.Errorf("课堂中没有作业 %d", req.HomeworkID)
-			}
-			if selected.IsClosed(time.Now()) {
-				return &Result{Status: "deadline_passed", Kind: "programming", Diagnostics: []string{"deadline_passed"}}, nil
-			}
-		}
 		adapter, adapterErr := solver.NewEducoderAdapter(client)
 		if adapterErr != nil {
 			return nil, adapterErr

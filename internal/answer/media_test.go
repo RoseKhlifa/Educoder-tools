@@ -47,8 +47,8 @@ func TestObjectiveSendsActualImagesWithExplicitQuestionOptionMapping(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if wire.Messages[0].Content.parts != nil || len(wire.Messages[1].Content.parts) != 3 || wire.Messages[1].Content.parts[0].Type != "text" {
-		t.Fatal("expected string system prompt and one user text part followed by two images")
+	if wire.Messages[0].Content.parts != nil || len(wire.Messages[1].Content.parts) != 2 || wire.Messages[1].Content.parts[0].Type != "text" {
+		t.Fatal("expected string system prompt and one user text part followed by one deduplicated image")
 	}
 	var payload struct {
 		Questions []ObjectiveQuestion `json:"questions"`
@@ -57,8 +57,8 @@ func TestObjectiveSendsActualImagesWithExplicitQuestionOptionMapping(t *testing.
 	if err := json.Unmarshal([]byte(wire.Messages[1].Content.textOnly()), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if len(payload.Resources) != 2 || payload.Resources[0].QuestionPosition != 1 || payload.Resources[0].OptionLabel != "B" || payload.Resources[0].ImageIndex != 1 || payload.Resources[1].QuestionPosition != 2 || payload.Resources[1].OptionLabel != "" || payload.Resources[1].ImageIndex != 2 {
-		t.Fatal("question/option mapping lost")
+	if len(payload.Resources) != 2 || payload.Resources[0].QuestionPosition != 1 || payload.Resources[0].OptionLabel != "B" || payload.Resources[0].ImageIndex != 1 || payload.Resources[1].QuestionPosition != 2 || payload.Resources[1].OptionLabel != "" || payload.Resources[1].ImageIndex != 1 {
+		t.Fatal("question/option mapping or shared image index lost")
 	}
 	if payload.Questions[0].Category != 1 || payload.Questions[1].Category != 2 || payload.Questions[0].Options[0].Label != "A" {
 		t.Fatal("question type or option order lost")

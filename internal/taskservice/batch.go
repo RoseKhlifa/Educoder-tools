@@ -428,6 +428,10 @@ func batchFailureReason(r *Result, err error) string {
 	if errors.As(err, &imageErr) {
 		return "objective_image_unavailable"
 	}
+	var quotaErr *educoder.GraphicEnvironmentQuotaError
+	if errors.As(err, &quotaErr) {
+		return "environment_quota_exhausted"
+	}
 	var providerErr *answer.Error
 	if errors.As(err, &providerErr) {
 		switch providerErr.Kind {

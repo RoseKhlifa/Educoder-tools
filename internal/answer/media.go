@@ -14,16 +14,40 @@ import (
 	"strings"
 )
 
-// ImageResource binds actual public image bytes to one question or option.
-// DataURL and Content are transport-only and deliberately excluded from JSON.
-// A caller persisting a snapshot should persist the SHA256 reference instead.
-type ImageResource struct {
+// ImageBinding identifies the question stem or option where an image appears.
+// One image can be shared by a statement and several questions, so a resource
+// may carry more than one binding while the provider still receives one image.
+type ImageBinding struct {
 	QuestionPosition int    `json:"question_position"`
 	OptionLabel      string `json:"option_label,omitempty"`
-	MediaType        string `json:"media_type"`
-	DataURL          string `json:"-"`
-	Content          []byte `json:"-"`
-	SHA256           string `json:"sha256,omitempty"`
+}
+
+// ImageResource binds actual public image bytes to one or more question or
+// option positions. DataURL and Content are transport-only and deliberately
+// excluded from JSON. A caller persisting a snapshot should persist the
+// SHA256 reference instead. Bindings supersedes the legacy singular fields
+// when present; the singular fields remain for compatibility with callers that
+// provide one binding per resource.
+type ImageResource struct {
+	QuestionPosition int            `json:"question_position"`
+	OptionLabel      string         `json:"option_label,omitempty"`
+	MediaType        string         `json:"media_type"`
+	DataURL          string         `json:"-"`
+	Content          []byte         `json:"-"`
+	SHA256           string         `json:"sha256,omitempty"`
+	Bindings         []ImageBinding `json:"-"`
+}
+
+// EffectiveBindings returns the explicit shared-image bindings, or the legacy
+// singular binding when a caller supplied the original resource shape.
+func (r ImageResource) EffectiveBindings() []ImageBinding {
+	if len(r.Bindings) > 0 {
+		return r.Bindings
+	}
+	if r.QuestionPosition <= 0 {
+		return nil
+	}
+	return []ImageBinding{{QuestionPosition: r.QuestionPosition, OptionLabel: r.OptionLabel}}
 }
 
 func (ImageResource) String() string   { return "objective image resource (content redacted)" }
@@ -111,31 +135,36 @@ func (m messageContent) GoString() string { return m.textOnly() }
 func prepareObjectiveResources(snapshot ObjectiveSnapshot, resources []ImageResource) ([]string, []imageReference, error) {
 	const maxImageBytes = 10 << 20
 	const maxTotalBytes = 40 << 20
-	if len(resources) > 128 {
-		return nil, nil, &Error{Kind: "invalid_objective_resource"}
-	}
 	questions := make(map[int]ObjectiveQuestion, len(snapshot.Questions))
 	for _, q := range snapshot.Questions {
 		questions[q.Position] = q
 	}
 	images := make([]string, 0, len(resources))
 	refs := make([]imageReference, 0, len(resources))
+	imageIndexes := make(map[string]int, len(resources))
+	bindingImages := make(map[ImageBinding]string, len(resources))
 	total := 0
 	for _, resource := range resources {
-		q, ok := questions[resource.QuestionPosition]
-		if !ok {
+		bindings := resource.EffectiveBindings()
+		if len(bindings) == 0 {
 			return nil, nil, &Error{Kind: "invalid_objective_resource"}
 		}
-		if resource.OptionLabel != "" {
-			found := false
-			for _, option := range q.Options {
-				if option.Label == resource.OptionLabel {
-					found = true
-					break
-				}
-			}
-			if !found {
+		for _, binding := range bindings {
+			q, ok := questions[binding.QuestionPosition]
+			if !ok {
 				return nil, nil, &Error{Kind: "invalid_objective_resource"}
+			}
+			if binding.OptionLabel != "" {
+				found := false
+				for _, option := range q.Options {
+					if option.Label == binding.OptionLabel {
+						found = true
+						break
+					}
+				}
+				if !found {
+					return nil, nil, &Error{Kind: "invalid_objective_resource"}
+				}
 			}
 		}
 		mediaType := resource.MediaType
@@ -156,7 +185,7 @@ func prepareObjectiveResources(snapshot ObjectiveSnapshot, resources []ImageReso
 				return nil, nil, &Error{Kind: "invalid_objective_resource"}
 			}
 		}
-		if len(content) == 0 || len(content) > maxImageBytes || total+len(content) > maxTotalBytes || http.DetectContentType(content) != mediaType {
+		if len(content) == 0 || len(content) > maxImageBytes || http.DetectContentType(content) != mediaType {
 			return nil, nil, &Error{Kind: "invalid_objective_resource"}
 		}
 		// WebP is identified by its RIFF/WEBP signature by DetectContentType.
@@ -168,14 +197,31 @@ func prepareObjectiveResources(snapshot ObjectiveSnapshot, resources []ImageReso
 				return nil, nil, &Error{Kind: "invalid_objective_resource"}
 			}
 		}
-		total += len(content)
 		digest := sha256.Sum256(content)
 		hash := hex.EncodeToString(digest[:])
 		if resource.SHA256 != "" && resource.SHA256 != hash {
 			return nil, nil, &Error{Kind: "invalid_objective_resource"}
 		}
-		images = append(images, "data:"+mediaType+";base64,"+base64.StdEncoding.EncodeToString(content))
-		refs = append(refs, imageReference{ImageIndex: len(images), QuestionPosition: resource.QuestionPosition, OptionLabel: resource.OptionLabel, MediaType: mediaType, SHA256: hash})
+		imageIndex, found := imageIndexes[hash]
+		if !found {
+			if len(images) >= 128 || total+len(content) > maxTotalBytes {
+				return nil, nil, &Error{Kind: "invalid_objective_resource"}
+			}
+			total += len(content)
+			images = append(images, "data:"+mediaType+";base64,"+base64.StdEncoding.EncodeToString(content))
+			imageIndex = len(images)
+			imageIndexes[hash] = imageIndex
+		}
+		for _, binding := range bindings {
+			if owner, exists := bindingImages[binding]; exists {
+				if owner != hash {
+					return nil, nil, &Error{Kind: "invalid_objective_resource"}
+				}
+				continue
+			}
+			bindingImages[binding] = hash
+			refs = append(refs, imageReference{ImageIndex: imageIndex, QuestionPosition: binding.QuestionPosition, OptionLabel: binding.OptionLabel, MediaType: mediaType, SHA256: hash})
+		}
 	}
 	return images, refs, nil
 }

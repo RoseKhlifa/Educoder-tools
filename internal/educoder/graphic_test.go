@@ -155,6 +155,16 @@ func TestGraphicHTTPProtocolUsesRuntimeCommitThenEvaluation(t *testing.T) {
 			}
 			built = true
 			ioJSON(w, `{"status":1,"port":55}`)
+		case "/api/myshixuns/MY1/exit_delete_pod.json":
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			ids, ok := body["shixun_environment_ids"].([]any)
+			if !ok || len(ids) != 1 || ids[0] != float64(23) {
+				t.Fatalf("wrong release body: %v", body)
+			}
+			ioJSON(w, `{"status":0,"message":"success"}`)
 		default:
 			t.Errorf("unexpected endpoint %s", r.URL.Path)
 			http.NotFound(w, r)
@@ -174,7 +184,7 @@ func TestGraphicHTTPProtocolUsesRuntimeCommitThenEvaluation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Confirmed || !result.Saved || !result.Submitted || result.Document == nil || result.Document.Hash != result.ContentHash || result.Evaluation == nil || !result.Evaluation.Passed || result.ContentHash != graphicHash([]byte(graphicProject)) || transport.session.saves != 1 {
+	if !result.Confirmed || !result.EnvironmentReleased || !result.Saved || !result.Submitted || result.Document == nil || result.Document.Hash != result.ContentHash || result.Evaluation == nil || !result.Evaluation.Passed || result.ContentHash != graphicHash([]byte(graphicProject)) || transport.session.saves != 1 {
 		t.Fatalf("result=%+v", result)
 	}
 	if len(transport.connections) != 2 {
@@ -184,7 +194,7 @@ func TestGraphicHTTPProtocolUsesRuntimeCommitThenEvaluation(t *testing.T) {
 	if strings.Contains(string(encoded), "password") || strings.Contains(string(encoded), "ssh.educoder") {
 		t.Fatal("runtime credentials serializable")
 	}
-	want := []string{"GET /api/myshixuns/MY1/start.json", "GET /api/tasks/GRAPHIC1.json", "GET /api/myshixuns/MY1/start.json", "GET /api/tasks/GRAPHIC1/game_status.json", "POST /api/myshixuns/MY1/update_file.json", "POST /api/tasks/GRAPHIC1/game_build.json", "GET /api/tasks/GRAPHIC1/game_status.json", "GET /api/tasks/GRAPHIC1/game_status.json", "GET /api/tasks/GRAPHIC1.json"}
+	want := []string{"GET /api/myshixuns/MY1/start.json", "POST /api/myshixuns/MY1/exit_delete_pod.json", "GET /api/tasks/GRAPHIC1.json", "GET /api/myshixuns/MY1/start.json", "GET /api/tasks/GRAPHIC1/game_status.json", "POST /api/myshixuns/MY1/update_file.json", "POST /api/tasks/GRAPHIC1/game_build.json", "GET /api/tasks/GRAPHIC1/game_status.json", "GET /api/tasks/GRAPHIC1/game_status.json", "GET /api/tasks/GRAPHIC1.json", "POST /api/myshixuns/MY1/exit_delete_pod.json"}
 	if !reflect.DeepEqual(events, want) {
 		t.Fatalf("events=%v", events)
 	}
@@ -232,6 +242,10 @@ func TestGraphicReadRetriesRuntimeBindingBeyondThirdAttempt(t *testing.T) {
 	task := graphicTaskFixture(t)
 	starts := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "exit_delete_pod.json") {
+			ioJSON(w, `{"status":0,"message":"success"}`)
+			return
+		}
 		if !strings.HasSuffix(r.URL.Path, "start.json") {
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusBadRequest)
@@ -339,6 +353,8 @@ func TestGraphicRejectsChangedFileAndInvalidProjectBeforeBuild(t *testing.T) {
 			ioJSON(w, `{"status":0,"data":{"ssh_address":"ssh.educoder.net","port":2222,"username":"headless","password":"private-secret","myshixun_id":80}}`)
 		case r.URL.Path == "/api/tasks/GRAPHIC1.json":
 			_ = json.NewEncoder(w).Encode(task)
+		case strings.HasSuffix(r.URL.Path, "exit_delete_pod.json"):
+			ioJSON(w, `{"status":0,"message":"success"}`)
 		default:
 			builds++
 			t.Errorf("mutation attempted %s", r.URL.Path)
@@ -385,5 +401,33 @@ func TestGraphicRejectsTaskOwnerChange(t *testing.T) {
 	}
 	if len(fake.connections) != 0 {
 		t.Fatal("changed owner opened runtime")
+	}
+}
+
+func TestGraphicQuotaErrorStopsReadinessRetries(t *testing.T) {
+	task := graphicTaskFixture(t)
+	starts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "start.json") {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		starts++
+		ioJSON(w, `{"status":0,"data":{"code":-5,"msg":"用户创建实验环境数已达上限","data_list":[]}}`)
+	}))
+	defer server.Close()
+	_, err := NewGraphicProtocol(New(server.URL), &fakeGraphicTransport{}).Read(context.Background(), task)
+	var quota *GraphicEnvironmentQuotaError
+	if !errors.As(err, &quota) || starts != 1 {
+		t.Fatalf("quota error was retried or lost: err=%v starts=%d", err, starts)
+	}
+}
+
+func TestGraphicPathsAcceptFormatNounSuffix(t *testing.T) {
+	task := graphicTaskFixture(t)
+	task.Challenge.Path = "系统流程图/submit/submit_step_2；"
+	task.Challenge.Description = "请将最终结果保存在桌面的workspace/myshixun/系统流程图/submit_step_2/，文件夹下，并将文件名改为step，格式为.mdj文件，点击测评即可。"
+	want := []string{"系统流程图/submit_step_2/step.mdj"}
+	if got := task.GraphicPaths(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("paths=%v want=%v", got, want)
 	}
 }
