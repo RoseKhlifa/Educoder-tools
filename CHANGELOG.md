@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.90 - 2026-11-05
+
+- Align graphic tasks with the official evaluation preparation protocol, recover assigned subset rosters, and classify VNC placeholders safely
+
 ## 0.1.89 - 2026-11-05
 
 - Treat graphic status=0 after formal build as a queued non-terminal state and continue polling until a bounded terminal result
