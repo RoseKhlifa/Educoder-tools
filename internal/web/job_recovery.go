@@ -36,6 +36,7 @@ type recoveryState struct {
 	Homeworks        []recoveryState `json:"homeworks"`
 	Levels           []recoveryState `json:"levels"`
 	RecoveryOriginal *recoveryState  `json:"recovery_original"`
+	Diagnostics      []string        `json:"diagnostics"`
 }
 
 type recoveryTarget struct {
@@ -152,6 +153,51 @@ func recoveryTargets(original jobs.Job) ([]recoveryTarget, error) {
 	return out, nil
 }
 
+const savedWithoutSubmissionMarker = "文件已保存但未提交"
+
+// recoveryHasExplicitUnsubmittedEvidence authorizes a continuation only for
+// the graphic protocol's precise pre-submission failure. The marker is written
+// after the file commit but before game_build, so it proves that no formal
+// evaluation request was sent for this challenge. Generic uncertainty, a
+// positive work ID, or an unconfirmed score never qualifies.
+func recoveryHasExplicitUnsubmittedEvidence(node recoveryState, course string, homeworkID, challengeID int64) bool {
+	if node.Course != "" {
+		course = node.Course
+	}
+	if node.HomeworkID > 0 {
+		homeworkID = node.HomeworkID
+	}
+	if node.ChallengeID == challengeID && course != "" && homeworkID > 0 &&
+		strings.Contains(strings.Join(node.Diagnostics, "\n"), savedWithoutSubmissionMarker) {
+		return true
+	}
+	for _, child := range node.Homeworks {
+		if recoveryHasExplicitUnsubmittedEvidence(child, course, homeworkID, challengeID) {
+			return true
+		}
+	}
+	for _, child := range node.Levels {
+		if recoveryHasExplicitUnsubmittedEvidence(child, course, homeworkID, challengeID) {
+			return true
+		}
+	}
+	if node.Result != nil && recoveryHasExplicitUnsubmittedEvidence(*node.Result, course, homeworkID, challengeID) {
+		return true
+	}
+	if node.RecoveryOriginal != nil && recoveryHasExplicitUnsubmittedEvidence(*node.RecoveryOriginal, course, homeworkID, challengeID) {
+		return true
+	}
+	return false
+}
+
+func originalState(original jobs.Job) recoveryState {
+	var state recoveryState
+	if len(original.Result) != 0 {
+		_ = json.Unmarshal(original.Result, &state)
+	}
+	return state
+}
+
 func recoveryPreflight(ctx context.Context, client EducoderClient, original jobs.Job) error {
 	return recoveryPreflightWithEvidence(ctx, client, original, nil)
 }
@@ -236,6 +282,9 @@ func recoveryPreflightWithEvidence(ctx context.Context, client EducoderClient, o
 					if allowed {
 						continue
 					}
+				}
+				if found && recoveryHasExplicitUnsubmittedEvidence(originalState(original), target.course, target.homeworkID, challengeID) {
+					continue
 				}
 				return fmt.Errorf("作业 %d 关卡 %d 的提交结果仍未确认满分，未继续执行", target.homeworkID, challengeID)
 			}

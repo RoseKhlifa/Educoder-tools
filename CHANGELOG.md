@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.85 - 2026-11-05
+
+- Resume graphic tasks safely when the persisted failure proves the file was saved before any formal submission
+
 ## 0.1.84 - 2026-11-04
 
 - Read and display both course experiments and common text/image homework tabs, preserve explicit personal submission state, and keep unsupported common homework out of the shixun execution queue

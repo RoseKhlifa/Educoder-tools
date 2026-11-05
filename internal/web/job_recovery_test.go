@@ -96,6 +96,17 @@ func TestConsumerRecoveryCapabilityKeepsRetryProtection(t *testing.T) {
 	}
 }
 
+func TestRecoveryExplicitSavedWithoutSubmissionEvidenceSurvivesBlockedChild(t *testing.T) {
+	parent := recoveryState{Homeworks: []recoveryState{{Course: "C", HomeworkID: 42, Levels: []recoveryState{{ChallengeID: 2, Status: "submission_uncertain", Diagnostics: []string{"图形评测未返回当前关卡评测密钥，文件已保存但未提交"}}}}}}
+	child := recoveryState{Status: "verification_unconfirmed", RecoveryOriginal: &parent}
+	if !recoveryHasExplicitUnsubmittedEvidence(child, "", 0, 2) {
+		t.Fatal("explicit saved-but-unsubmitted evidence was lost through recovery_original")
+	}
+	if recoveryHasExplicitUnsubmittedEvidence(child, "", 0, 3) {
+		t.Fatal("evidence for another challenge authorized recovery")
+	}
+}
+
 func TestRecoveryPreflightRequiresExactFreshEvidence(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -105,6 +116,8 @@ func TestRecoveryPreflightRequiresExactFreshEvidence(t *testing.T) {
 	}{
 		{"specific uncertain passed", `{"homeworks":[{"course":"C","homework_id":42,"result":{"status":"verification_unconfirmed","levels":[{"challenge_id":1,"status":"verification_unconfirmed"},{"challenge_id":2,"status":"planned"}]}}]}`, nil, true},
 		{"specific uncertain unconfirmed", `{"homeworks":[{"course":"C","homework_id":42,"result":{"levels":[{"challenge_id":2,"status":"uncertain"}]}}]}`, nil, false},
+		{"graphic saved but not submitted", `{"homeworks":[{"course":"C","homework_id":42,"result":{"levels":[{"course":"C","homework_id":42,"challenge_id":2,"status":"submission_uncertain","reason_code":"submission_uncertain","diagnostics":["图形评测未返回当前关卡评测密钥，文件已保存但未提交"]}]}}]}`, nil, true},
+		{"saved marker for another challenge does not authorize", `{"homeworks":[{"course":"C","homework_id":42,"result":{"levels":[{"course":"C","homework_id":42,"challenge_id":1,"status":"submission_uncertain","reason_code":"submission_uncertain","diagnostics":["图形评测未返回当前关卡评测密钥，文件已保存但未提交"]},{"challenge_id":2,"status":"uncertain"}]}}]}`, nil, false},
 		{"unknown challenge id", `{"homeworks":[{"course":"C","homework_id":42,"result":{"levels":[{"challenge_id":99,"status":"uncertain"}]}}]}`, nil, false},
 		{"missing child id requires whole completion", `{"homeworks":[{"course":"C","homework_id":42,"result":{"status":"uncertain"}}]}`, nil, false},
 		{"whole complete without child identity", `{"homeworks":[{"course":"C","homework_id":42,"result":{"status":"uncertain"}}]}`, func(c *recoveryFixtureClient) { c.progress.Challenges[1].GameScore = "10" }, true},
