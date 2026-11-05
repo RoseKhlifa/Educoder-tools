@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.86 - 2026-11-05
+
+- Carry explicit graphic saved-before-submission evidence from homework results to the affected challenge during recovery
+
 ## 0.1.85 - 2026-11-05
 
 - Resume graphic tasks safely when the persisted failure proves the file was saved before any formal submission

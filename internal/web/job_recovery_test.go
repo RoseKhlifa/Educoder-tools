@@ -97,7 +97,7 @@ func TestConsumerRecoveryCapabilityKeepsRetryProtection(t *testing.T) {
 }
 
 func TestRecoveryExplicitSavedWithoutSubmissionEvidenceSurvivesBlockedChild(t *testing.T) {
-	parent := recoveryState{Homeworks: []recoveryState{{Course: "C", HomeworkID: 42, Levels: []recoveryState{{ChallengeID: 2, Status: "submission_uncertain", Diagnostics: []string{"图形评测未返回当前关卡评测密钥，文件已保存但未提交"}}}}}}
+	parent := recoveryState{Homeworks: []recoveryState{{Course: "C", HomeworkID: 42, Diagnostics: []string{"图形评测未返回当前关卡评测密钥，文件已保存但未提交"}, Levels: []recoveryState{{ChallengeID: 2, Status: "submission_uncertain"}}}}}
 	child := recoveryState{Status: "verification_unconfirmed", RecoveryOriginal: &parent}
 	if !recoveryHasExplicitUnsubmittedEvidence(child, "", 0, 2) {
 		t.Fatal("explicit saved-but-unsubmitted evidence was lost through recovery_original")

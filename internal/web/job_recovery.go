@@ -161,30 +161,34 @@ const savedWithoutSubmissionMarker = "文件已保存但未提交"
 // evaluation request was sent for this challenge. Generic uncertainty, a
 // positive work ID, or an unconfirmed score never qualifies.
 func recoveryHasExplicitUnsubmittedEvidence(node recoveryState, course string, homeworkID, challengeID int64) bool {
+	return recoveryHasExplicitUnsubmittedEvidenceInherited(node, course, homeworkID, challengeID, false)
+}
+
+func recoveryHasExplicitUnsubmittedEvidenceInherited(node recoveryState, course string, homeworkID, challengeID int64, inherited bool) bool {
 	if node.Course != "" {
 		course = node.Course
 	}
 	if node.HomeworkID > 0 {
 		homeworkID = node.HomeworkID
 	}
-	if node.ChallengeID == challengeID && course != "" && homeworkID > 0 &&
-		strings.Contains(strings.Join(node.Diagnostics, "\n"), savedWithoutSubmissionMarker) {
+	marker := inherited || strings.Contains(strings.Join(node.Diagnostics, "\n"), savedWithoutSubmissionMarker)
+	if node.ChallengeID == challengeID && course != "" && homeworkID > 0 && marker {
 		return true
 	}
 	for _, child := range node.Homeworks {
-		if recoveryHasExplicitUnsubmittedEvidence(child, course, homeworkID, challengeID) {
+		if recoveryHasExplicitUnsubmittedEvidenceInherited(child, course, homeworkID, challengeID, marker) {
 			return true
 		}
 	}
 	for _, child := range node.Levels {
-		if recoveryHasExplicitUnsubmittedEvidence(child, course, homeworkID, challengeID) {
+		if recoveryHasExplicitUnsubmittedEvidenceInherited(child, course, homeworkID, challengeID, marker) {
 			return true
 		}
 	}
-	if node.Result != nil && recoveryHasExplicitUnsubmittedEvidence(*node.Result, course, homeworkID, challengeID) {
+	if node.Result != nil && recoveryHasExplicitUnsubmittedEvidenceInherited(*node.Result, course, homeworkID, challengeID, marker) {
 		return true
 	}
-	if node.RecoveryOriginal != nil && recoveryHasExplicitUnsubmittedEvidence(*node.RecoveryOriginal, course, homeworkID, challengeID) {
+	if node.RecoveryOriginal != nil && recoveryHasExplicitUnsubmittedEvidenceInherited(*node.RecoveryOriginal, course, homeworkID, challengeID, marker) {
 		return true
 	}
 	return false
