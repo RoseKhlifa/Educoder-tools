@@ -1,6 +1,6 @@
 {
   "name": "educoder-workbench",
-  "version": "0.1.106",
+  "version": "0.1.107",
   "private": true,
   "type": "module",
   "description": "Browser TypeScript workbench for the Go Educoder service",

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.107 - 2026-11-06
+
+- Align deployment JOB_TIMEOUT defaults and documentation with production two-hour batch limit
+
 ## 0.1.106 - 2026-11-06
 
 - Distinguish per-decision combinations, feasible global input-predicate combinations and runtime short-circuit observations in objective coverage analysis

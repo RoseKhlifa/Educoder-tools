@@ -77,7 +77,7 @@ go run ./cmd/web
 | `PLATFORM_ADMIN_USER_IDS` | 经核验的头歌数字用户 ID，逗号分隔，默认无引导管理员 |
 | `JOB_WORKERS` / `JOB_QUEUE_SIZE` | `16` / `256` |
 | `JOB_PER_ACCOUNT_PENDING` / `JOB_PER_ACCOUNT_RUNNING` | `16` / `4` |
-| `JOB_TIMEOUT` | `30m` |
+| `JOB_TIMEOUT` | `2h` |
 | `MODEL_CONCURRENCY` / `MODEL_TIMEOUT` | `8` / `4m`；实际供应商 RPM 由供应商账号决定 |
 | `DEEPSEEK_API_KEY_FILE` | 推荐用 Docker secret 的文件路径 |
 
