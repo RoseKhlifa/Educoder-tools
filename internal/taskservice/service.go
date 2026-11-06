@@ -8,12 +8,14 @@ import (
 	"crypto/sha256"
 	"educoder-cli/internal/answer"
 	"educoder-cli/internal/educoder"
+	"educoder-cli/internal/problem"
 	"educoder-cli/internal/questionbank"
 	"educoder-cli/internal/solver"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -292,6 +294,77 @@ func objectiveSnapshot(t *educoder.ChoiceTask) answer.ObjectiveSnapshot {
 	return s
 }
 
+func objectiveBankResources(resources []answer.ImageResource) []questionbank.ObjectiveResource {
+	seen := map[string]bool{}
+	out := make([]questionbank.ObjectiveResource, 0, len(resources))
+	for _, resource := range resources {
+		if resource.SHA256 == "" || seen[resource.SHA256] {
+			continue
+		}
+		seen[resource.SHA256] = true
+		out = append(out, questionbank.ObjectiveResource{Locator: "sha256:" + resource.SHA256, SHA256: resource.SHA256})
+	}
+	return out
+}
+
+func (s *Service) objectiveFixedAnswers(ctx context.Context, snapshot answer.ObjectiveSnapshot, resources []answer.ImageResource) ([]string, bool, error) {
+	contextComplete := strings.TrimSpace(snapshot.Title) != "" && strings.TrimSpace(snapshot.Statement) != ""
+	context := questionbank.ObjectiveQuestionContext{Kind: "objective", Title: snapshot.Title, Statement: snapshot.Statement, Complete: contextComplete}
+	bankResources := objectiveBankResources(resources)
+	fixed := make([]string, len(snapshot.Questions))
+	for i, question := range snapshot.Questions {
+		key, reusable, keyErr := questionbank.ObjectiveQuestionKeyWithContext(questionbank.ObjectiveQuestionInput{Question: question, Context: context, Resources: bankResources})
+		if keyErr != nil {
+			return nil, false, keyErr
+		}
+		if !reusable {
+			continue
+		}
+		answers, lookupErr := s.store.LookupObjectiveAnswersWithContext(ctx, key)
+		if lookupErr != nil && !errors.Is(lookupErr, questionbank.ErrNotFound) {
+			return nil, false, lookupErr
+		}
+		for _, candidate := range answers {
+			if candidate.Reusable {
+				fixed[i] = candidate.Answer
+				break
+			}
+		}
+	}
+	return fixed, true, nil
+}
+
+func (s *Service) recordObjectiveQuestionEvidence(ctx context.Context, client *educoder.Client, snapshot answer.ObjectiveSnapshot, resources []answer.ImageResource, choice *educoder.ChoiceTask, candidate answer.ObjectiveCandidate, submitted *educoder.ChoiceSubmitResult, runID, snapshotHash string) error {
+	current := submitted
+	if current == nil || len(current.TestSets) == 0 {
+		if fresh, loadErr := client.LoadChoiceTask(ctx, choice.Task.CourseIdentifier, choice.Task.HomeworkID, choice.Task.Game.Identifier); loadErr == nil && fresh != nil && fresh.Task.Challenge.ID == choice.Task.Challenge.ID {
+			current = &educoder.ChoiceSubmitResult{Correct: fresh.TestCases.Correct, Count: fresh.TestCases.Count, TestSets: fresh.TestCases.TestSets}
+		}
+	}
+	results := trustedObjectiveQuestionResults(choice, candidate, current)
+	if len(results) == 0 || len(results) != len(snapshot.Questions) {
+		return nil
+	}
+	contextComplete := strings.TrimSpace(snapshot.Title) != "" && strings.TrimSpace(snapshot.Statement) != ""
+	context := questionbank.ObjectiveQuestionContext{Kind: "objective", Title: snapshot.Title, Statement: snapshot.Statement, Complete: contextComplete}
+	bankResources := objectiveBankResources(resources)
+	for i, question := range snapshot.Questions {
+		key, reusable, keyErr := questionbank.ObjectiveQuestionKeyWithContext(questionbank.ObjectiveQuestionInput{Question: question, Context: context, Resources: bankResources})
+		if keyErr != nil || !reusable {
+			continue
+		}
+		answerID, addErr := s.store.AddObjectiveAnswer(ctx, key, candidate.Answers[i], "platform_submission", "")
+		if addErr != nil {
+			return addErr
+		}
+		correct := results[i].Correct
+		if err := s.store.RecordObjectiveValidation(ctx, answerID, questionbank.ObjectiveValidation{Passed: correct, Confirmed: true, PerQuestionCorrect: correct, AnswerHash: problem.HashContent(candidate.Answers[i]), ScopeHash: snapshotHash, Feedback: "当前关卡返回了与题目身份和答案向量一致的逐题评测结果。"}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 type objectiveState struct {
 	Result        Result                   `json:"result"`
 	Target        solver.Target            `json:"target"`
@@ -311,6 +384,15 @@ func (s *Service) persistObjective(ctx context.Context, req Request, r *Result, 
 	}
 	return s.store.PutRun(ctx, questionbank.RunRecord{ID: r.RunID, Owner: ownerHash(req.Owner), IdempotencyKey: req.IdempotencyKey, Status: r.Status, Data: raw, CreatedAt: created, UpdatedAt: time.Now().UTC()})
 }
+func allObjectiveAnswersFixed(values []string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) == "" {
+			return false
+		}
+	}
+	return len(values) > 0
+}
+
 func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req Request, emit func(string, string), budget int64) (r *Result, err error) {
 	if budget <= 0 {
 		budget = s.cfg.BudgetMicroUSD
@@ -351,6 +433,10 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 	if err != nil {
 		return nil, err
 	}
+	fixedAnswers, fixedReady, fixedErr := s.objectiveFixedAnswers(ctx, snapshot, resources)
+	if fixedErr != nil {
+		return nil, fixedErr
+	}
 	r = &Result{RunID: runID(), Kind: "objective", Status: "running"}
 	created := time.Now().UTC()
 	if err = s.persistObjective(ctx, req, r, created); err != nil {
@@ -390,6 +476,9 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			c = cached.Candidate
 			r.CandidateID = cached.ID
 			r.Source = "bank"
+		} else if attempt == 0 && fixedReady && len(fixedAnswers) == len(snapshot.Questions) && allObjectiveAnswersFixed(fixedAnswers) {
+			c = answer.ObjectiveCandidate{Kind: "objective", Answers: append([]string(nil), fixedAnswers...)}
+			r.Source = "question_bank"
 		} else {
 			if s.provider == nil {
 				r.Status = "needs_provider"
@@ -416,6 +505,9 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 				profile.Thinking, profile.ReasoningEffort = "disabled", ""
 			}
 			pr := answer.ObjectiveRequest{Problem: snapshot, Previous: previous, Feedback: attemptHistory.feedback(feedback), Profile: profile, Resources: resources}
+			if fixedReady {
+				pr.FixedAnswers = append([]string(nil), fixedAnswers...)
+			}
 			estimate, e := s.provider.EstimateObjective(pr)
 			if e != nil {
 				r.Status = "budget_unavailable"
@@ -489,6 +581,14 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			r.Status = "invalid_candidate"
 			return r, e
 		}
+		if fixedReady {
+			for i, locked := range fixedAnswers {
+				if strings.TrimSpace(locked) != "" && strings.TrimSpace(locked) != strings.TrimSpace(c.Answers[i]) {
+					r.Status = "invalid_candidate"
+					return r, errors.New("模型答案覆盖了已验证的单题答案")
+				}
+			}
+		}
 		if attemptHistory.contains(c) {
 			// Generation consumes the existing bounded budget, but a known
 			// failed answer must not consume another platform submission.
@@ -543,6 +643,10 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			r.Diagnostics = append(r.Diagnostics, submitted.ScoreDiagnostic)
 		}
 		if e = s.store.RecordObjectiveVerification(ctx, r.CandidateID, r.RunID, submitted.ScoreCheck, submitted.Score, submitted.MaxScore); e != nil {
+			r.Status = "verification_persistence_failed"
+			return r, e
+		}
+		if e = s.recordObjectiveQuestionEvidence(ctx, client, snapshot, resources, choice, c, submitted, r.RunID, hash); e != nil {
 			r.Status = "verification_persistence_failed"
 			return r, e
 		}

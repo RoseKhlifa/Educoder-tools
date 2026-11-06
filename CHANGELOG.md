@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.99 - 2026-11-06
+
+- Add context-complete per-question objective reuse with fail-closed fingerprints, fixed verified answer slots, and one full-vector platform submission
+
 ## 0.1.98 - 2026-11-06
 
 - Stop reusing objective candidates after a later current-run partial score invalidates their historical full-score verification

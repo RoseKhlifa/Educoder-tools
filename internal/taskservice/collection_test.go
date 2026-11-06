@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,13 +108,18 @@ func TestCollectionObjectiveFullScoreDedupAndOwner(t *testing.T) {
 	if reason != "" {
 		t.Fatal(reason)
 	}
-	hash, e := h.Bank.PutObjectiveSnapshot(context.Background(), snapshot)
-	if e != nil {
-		t.Fatal(e)
+	contextComplete := strings.TrimSpace(snapshot.Title) != "" && strings.TrimSpace(snapshot.Statement) != ""
+	ctxInfo := questionbank.ObjectiveQuestionContext{Kind: "objective", Title: snapshot.Title, Statement: snapshot.Statement, Complete: contextComplete}
+	if !contextComplete {
+		t.Fatal("objective context incomplete")
 	}
-	cached, e := h.Bank.FindObjectiveVerified(context.Background(), hash)
-	if e != nil || len(cached.Candidate.Answers) != 1 || cached.Candidate.Answers[0] != "B" {
-		t.Fatalf("collected answer not reusable: %+v %v", cached, e)
+	key, reusable, e := h.Bank.UpsertObjectiveQuestionWithContext(context.Background(), questionbank.ObjectiveQuestionInput{Question: snapshot.Questions[0], Context: ctxInfo})
+	if e != nil || !reusable {
+		t.Fatalf("question context key unavailable: key=%q reusable=%v err=%v", key, reusable, e)
+	}
+	answers, e := h.Bank.LookupObjectiveAnswersWithContext(context.Background(), key)
+	if e != nil || len(answers) != 1 || !answers[0].Reusable || answers[0].Answer != "B" {
+		t.Fatalf("collected answer not reusable: %+v %v", answers, e)
 	}
 	s, e = h.Scan(context.Background(), f, owner, nil)
 	if e != nil || s.Collected != 0 || s.Duplicates != 1 {

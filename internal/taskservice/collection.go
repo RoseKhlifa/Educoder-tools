@@ -582,12 +582,22 @@ func (h *Collector) collectLevel(ctx context.Context, c CollectionReader, owner 
 			Answers   []string
 		}{t.Game.Identifier, t.Challenge.ID, snapshot, answers})
 		scope := problem.HashContent(string(scopeBytes))
+		contextComplete := strings.TrimSpace(snapshot.Title) != "" && strings.TrimSpace(snapshot.Statement) != ""
+		context := questionbank.ObjectiveQuestionContext{Kind: "objective", Title: snapshot.Title, Statement: snapshot.Statement, Complete: contextComplete}
+		if !contextComplete {
+			s.skip("objective_context_incomplete", true)
+			return nil
+		}
 		for i, q := range snapshot.Questions {
-			key, err := h.Bank.UpsertObjectiveQuestion(ctx, q)
+			key, reusable, err := h.Bank.UpsertObjectiveQuestionWithContext(ctx, questionbank.ObjectiveQuestionInput{Question: q, Context: context})
+			if err == nil && !reusable {
+				s.skip("objective_context_incomplete", true)
+				return nil
+			}
 			if err != nil {
 				return err
 			}
-			existing, err := h.Bank.LookupObjectiveAnswers(ctx, key)
+			existing, err := h.Bank.LookupObjectiveAnswersWithContext(ctx, key)
 			if err != nil {
 				return err
 			}
