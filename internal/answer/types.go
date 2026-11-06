@@ -119,6 +119,38 @@ type Config struct {
 	ImageTokenReserve int64
 }
 
+// ObjectiveOutputReason is a fixed output-contract classification, never a
+// provider response fragment or a candidate answer.
+type ObjectiveOutputReason string
+
+const (
+	ObjectiveOutputKind            ObjectiveOutputReason = "kind"
+	ObjectiveOutputAnswerCount     ObjectiveOutputReason = "answer_count"
+	ObjectiveOutputAnswerShape     ObjectiveOutputReason = "answer_shape"
+	ObjectiveOutputUnknownOption   ObjectiveOutputReason = "unknown_option"
+	ObjectiveOutputDuplicateOption ObjectiveOutputReason = "duplicate_option"
+	ObjectiveOutputOptionOrder     ObjectiveOutputReason = "option_order"
+)
+
+type ObjectiveAnswerShape string
+
+const (
+	ObjectiveShapeSingle   ObjectiveAnswerShape = "single"
+	ObjectiveShapeMultiple ObjectiveAnswerShape = "multiple"
+)
+
+// ObjectiveOutputViolation retains only structural metadata. In particular it
+// must never contain the submitted/returned labels, question text, raw JSON,
+// prior scores or provider body. Rendering also validates both string enums.
+type ObjectiveOutputViolation struct {
+	Reason           ObjectiveOutputReason
+	ExpectedAnswers  int
+	ReceivedAnswers  int
+	QuestionPosition int
+	Shape            ObjectiveAnswerShape
+	OptionCount      int
+}
+
 // Error deliberately contains no provider body, prompt, key, or request URL.
 // Generate returns any known charged usage alongside an error. BilledUnknown
 // means the caller must retain its reservation rather than assume zero cost.
@@ -136,6 +168,87 @@ type Error struct {
 	ReadCause     string
 	BytesRead     int64
 	ExpectedBytes int64
+	// ObjectiveOutput is optional, content-free evidence for correcting an
+	// objective response's shape without exposing earlier answers or scores.
+	ObjectiveOutput *ObjectiveOutputViolation
+}
+
+func sanitizedObjectiveOutputViolation(e *Error) (ObjectiveOutputViolation, bool) {
+	if e == nil || e.Kind != "objective_candidate_contract" || e.ObjectiveOutput == nil {
+		return ObjectiveOutputViolation{}, false
+	}
+	v := *e.ObjectiveOutput
+	switch v.Reason {
+	case ObjectiveOutputKind, ObjectiveOutputAnswerCount, ObjectiveOutputAnswerShape,
+		ObjectiveOutputUnknownOption, ObjectiveOutputDuplicateOption, ObjectiveOutputOptionOrder:
+	default:
+		return ObjectiveOutputViolation{}, false
+	}
+	if v.ExpectedAnswers < 0 {
+		v.ExpectedAnswers = 0
+	}
+	if v.ReceivedAnswers < 0 {
+		v.ReceivedAnswers = 0
+	}
+	if v.QuestionPosition < 0 {
+		v.QuestionPosition = 0
+	}
+	if v.OptionCount < 0 {
+		v.OptionCount = 0
+	}
+	switch v.Shape {
+	case ObjectiveShapeSingle, ObjectiveShapeMultiple:
+	default:
+		v.Shape = ""
+	}
+	return v, true
+}
+
+// ObjectiveOutputFeedback returns only structural correction instructions. It
+// does not reuse Error.Error() or any provider text, so a clean independent
+// review stays independent of previous candidate content and correctness.
+func ObjectiveOutputFeedback(err error) (Feedback, bool) {
+	var providerErr *Error
+	if !errors.As(err, &providerErr) {
+		return Feedback{}, false
+	}
+	v, ok := sanitizedObjectiveOutputViolation(providerErr)
+	if !ok {
+		return Feedback{}, false
+	}
+	message := "Correct only the objective JSON output contract. Return one JSON object with kind=objective and an answers array; do not return explanations or other fields."
+	if v.ExpectedAnswers > 0 {
+		message += fmt.Sprintf(" The answers array must have exactly %d entries, one per entry in questions in its supplied order; the rejected output had %d entries. context_questions are reference context only and do not request additional answers.", v.ExpectedAnswers, v.ReceivedAnswers)
+	}
+	if v.QuestionPosition > 0 {
+		message += fmt.Sprintf(" The structural violation concerns the requested question at original position %d.", v.QuestionPosition)
+	}
+	switch v.Reason {
+	case ObjectiveOutputKind:
+		message += " Use the literal kind value objective."
+	case ObjectiveOutputAnswerCount:
+		message += " Answer only the requested questions; do not combine answers into one entry or include sibling-context entries."
+	case ObjectiveOutputAnswerShape:
+		message += " Every answers entry must be a non-empty string containing only allowed uppercase option labels."
+	case ObjectiveOutputUnknownOption:
+		message += " Use only option labels present in the requested question."
+	case ObjectiveOutputDuplicateOption:
+		message += " Do not repeat an option label within an answer."
+	case ObjectiveOutputOptionOrder:
+		message += " Put selected option labels in alphabetical order without separators."
+	}
+	switch v.Shape {
+	case ObjectiveShapeSingle:
+		message += " This is single choice: return exactly one allowed uppercase option label."
+	case ObjectiveShapeMultiple:
+		message += " This is multiple choice: return one or more distinct allowed uppercase option labels concatenated in alphabetical order, without separators."
+	default:
+		message += " For single choice use exactly one allowed uppercase option label; for multiple choice concatenate distinct allowed uppercase option labels in alphabetical order without separators."
+	}
+	if v.OptionCount > 0 {
+		message += fmt.Sprintf(" The requested question contains %d allowed options; use its supplied labels, not labels inferred from other questions.", v.OptionCount)
+	}
+	return Feedback{Kind: "objective_output_contract", Message: message}, true
 }
 
 // IsRetryableError classifies provider-only failures. Callers must separately
@@ -184,6 +297,13 @@ func (e *Error) Error() string {
 			expectedBytes = -1
 		}
 		message += fmt.Sprintf(" [phase=body cause=%s bytes_read=%d expected_bytes=%d]", cause, bytesRead, expectedBytes)
+	}
+	if v, ok := sanitizedObjectiveOutputViolation(e); ok {
+		shape := string(v.Shape)
+		if shape == "" {
+			shape = "unspecified"
+		}
+		message += fmt.Sprintf(" [objective_output reason=%s expected_answers=%d received_answers=%d position=%d shape=%s option_count=%d]", v.Reason, v.ExpectedAnswers, v.ReceivedAnswers, v.QuestionPosition, shape, v.OptionCount)
 	}
 	return message
 }

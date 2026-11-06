@@ -12,13 +12,14 @@ import (
 // or prior answer is deliberately not part of an individual review request.
 // The caller owns call/cost limits and permits at most one sweep per run.
 type objectiveIndependentReview struct {
-	snapshot  answer.ObjectiveSnapshot
-	resources []answer.ImageResource
-	answers   []string
-	queue     []int
-	index     int
-	remaining int
-	issued    bool
+	snapshot       answer.ObjectiveSnapshot
+	resources      []answer.ImageResource
+	answers        []string
+	queue          []int
+	index          int
+	remaining      int
+	issued         bool
+	outputFeedback *answer.Feedback
 }
 
 func newObjectiveIndependentReview(snapshot answer.ObjectiveSnapshot, resources []answer.ImageResource, previous *answer.ObjectiveCandidate, fixed []string) (*objectiveIndependentReview, error) {
@@ -93,7 +94,7 @@ func (s *objectiveIndependentReview) request(index int, profile answer.Profile) 
 	question := s.snapshot.Questions[index]
 	question.Options = append([]answer.ObjectiveOption(nil), question.Options...)
 	context := cloneIndependentSnapshot(s.snapshot)
-	return answer.ObjectiveRequest{
+	request := answer.ObjectiveRequest{
 		Problem: answer.ObjectiveSnapshot{
 			Kind: s.snapshot.Kind, Title: s.snapshot.Title, Statement: s.snapshot.Statement,
 			Questions: []answer.ObjectiveQuestion{question},
@@ -101,6 +102,22 @@ func (s *objectiveIndependentReview) request(index int, profile answer.Profile) 
 		Context:   &context,
 		Profile:   profile,
 		Resources: cloneIndependentResources(s.resources),
+	}
+	if s.outputFeedback != nil && index == s.queue[s.index] {
+		request.Feedback = []answer.Feedback{*s.outputFeedback}
+	}
+	return request
+}
+
+// Retain only sanitized structural output errors for the pending slot. Never
+// copy failed answers, scores, general feedback or upstream response bodies into
+// this clean review context.
+func (s *objectiveIndependentReview) observeModelError(err error) {
+	if s == nil || s.remaining == 0 {
+		return
+	}
+	if feedback, ok := answer.ObjectiveOutputFeedback(err); ok {
+		s.outputFeedback = &feedback
 	}
 }
 
@@ -119,6 +136,7 @@ func (s *objectiveIndependentReview) accept(candidate answer.ObjectiveCandidate)
 	s.index++
 	s.remaining--
 	s.issued = false
+	s.outputFeedback = nil
 	if s.remaining != 0 {
 		return answer.ObjectiveCandidate{}, false, nil
 	}

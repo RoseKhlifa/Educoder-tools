@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"sort"
@@ -171,7 +172,7 @@ func ValidateObjectiveFixedAnswers(s ObjectiveSnapshot, fixed []string) error {
 func validateObjectiveAnswer(q ObjectiveQuestion, answer string) error {
 	answer = strings.ToUpper(strings.TrimSpace(answer))
 	if answer == "" {
-		return &Error{Kind: "objective_candidate_contract"}
+		return objectiveAnswerContractError(q, ObjectiveOutputAnswerShape)
 	}
 	allowed := map[byte]bool{}
 	for _, option := range q.Options {
@@ -181,8 +182,11 @@ func validateObjectiveAnswer(q ObjectiveQuestion, answer string) error {
 		}
 	}
 	if q.Category == 1 {
-		if len(answer) != 1 || answer[0] < 'A' || answer[0] > 'Z' || !allowed[answer[0]] {
-			return &Error{Kind: "objective_candidate_contract"}
+		if len(answer) != 1 {
+			return objectiveAnswerContractError(q, ObjectiveOutputAnswerShape)
+		}
+		if answer[0] < 'A' || answer[0] > 'Z' || !allowed[answer[0]] {
+			return objectiveAnswerContractError(q, ObjectiveOutputUnknownOption)
 		}
 		return nil
 	}
@@ -190,23 +194,44 @@ func validateObjectiveAnswer(q ObjectiveQuestion, answer string) error {
 	canonical := []byte(answer)
 	sort.Slice(canonical, func(a, b int) bool { return canonical[a] < canonical[b] })
 	for _, ch := range answer {
-		if ch < 'A' || ch > 'Z' || seen[byte(ch)] || !allowed[byte(ch)] {
-			return &Error{Kind: "objective_candidate_contract"}
+		if ch < 'A' || ch > 'Z' {
+			return objectiveAnswerContractError(q, ObjectiveOutputAnswerShape)
+		}
+		if !allowed[byte(ch)] {
+			return objectiveAnswerContractError(q, ObjectiveOutputUnknownOption)
+		}
+		if seen[byte(ch)] {
+			return objectiveAnswerContractError(q, ObjectiveOutputDuplicateOption)
 		}
 		seen[byte(ch)] = true
 	}
 	if string(canonical) != answer {
-		return &Error{Kind: "objective_candidate_contract"}
+		return objectiveAnswerContractError(q, ObjectiveOutputOptionOrder)
 	}
 	return nil
+}
+
+func objectiveAnswerContractError(q ObjectiveQuestion, reason ObjectiveOutputReason) error {
+	shape := ObjectiveShapeMultiple
+	if q.Category == 1 {
+		shape = ObjectiveShapeSingle
+	}
+	return &Error{Kind: "objective_candidate_contract", ObjectiveOutput: &ObjectiveOutputViolation{
+		Reason: reason, QuestionPosition: q.Position, Shape: shape, OptionCount: len(q.Options),
+	}}
 }
 
 func validateObjectiveCandidate(s ObjectiveSnapshot, c ObjectiveCandidate) error {
 	if err := validateObjectiveSnapshot(s); err != nil {
 		return err
 	}
-	if c.Kind != "objective" || len(c.Answers) != len(s.Questions) {
-		return &Error{Kind: "objective_candidate_contract"}
+	if c.Kind != "objective" {
+		return &Error{Kind: "objective_candidate_contract", ObjectiveOutput: &ObjectiveOutputViolation{Reason: ObjectiveOutputKind}}
+	}
+	if len(c.Answers) != len(s.Questions) {
+		return &Error{Kind: "objective_candidate_contract", ObjectiveOutput: &ObjectiveOutputViolation{
+			Reason: ObjectiveOutputAnswerCount, ExpectedAnswers: len(s.Questions), ReceivedAnswers: len(c.Answers),
+		}}
 	}
 	for i, answer := range c.Answers {
 		if err := validateObjectiveAnswer(s.Questions[i], answer); err != nil {
@@ -276,16 +301,22 @@ func buildObjectiveRequest(req ObjectiveRequest) (wireRequest, error) {
 		return wireRequest{}, err
 	}
 	payload := struct {
-		Kind             string              `json:"kind"`
-		Title            string              `json:"title"`
-		Statement        string              `json:"statement"`
-		Questions        []ObjectiveQuestion `json:"questions"`
-		ContextQuestions []ObjectiveQuestion `json:"context_questions,omitempty"`
-		Previous         *ObjectiveCandidate `json:"previous_candidate,omitempty"`
-		FixedAnswers     []string            `json:"fixed_answers,omitempty"`
-		Feedback         []Feedback          `json:"feedback,omitempty"`
-		Resources        []imageReference    `json:"resources,omitempty"`
-	}{"objective", req.Problem.Title, req.Problem.Statement, req.Problem.Questions, contextQuestions, req.Previous, req.FixedAnswers, req.Feedback, refs}
+		Kind             string                  `json:"kind"`
+		Title            string                  `json:"title"`
+		Statement        string                  `json:"statement"`
+		Questions        []ObjectiveQuestion     `json:"questions"`
+		ContextQuestions []ObjectiveQuestion     `json:"context_questions,omitempty"`
+		Previous         *ObjectiveCandidate     `json:"previous_candidate,omitempty"`
+		FixedAnswers     []string                `json:"fixed_answers,omitempty"`
+		Feedback         []Feedback              `json:"feedback,omitempty"`
+		Resources        []imageReference        `json:"resources,omitempty"`
+		OutputContract   objectiveOutputContract `json:"output_contract"`
+	}{
+		Kind: "objective", Title: req.Problem.Title, Statement: req.Problem.Statement,
+		Questions: req.Problem.Questions, ContextQuestions: contextQuestions,
+		Previous: req.Previous, FixedAnswers: req.FixedAnswers, Feedback: req.Feedback, Resources: refs,
+		OutputContract: makeObjectiveOutputContract(req.Problem),
+	}
 	for _, f := range req.Feedback {
 		if err := problem.ValidatePublicText(f.Kind + f.Message + f.Stdin + f.ExpectedStdout + f.ActualStdout); err != nil {
 			return wireRequest{}, &Error{Kind: "invalid_feedback"}
@@ -295,7 +326,7 @@ func buildObjectiveRequest(req ObjectiveRequest) (wireRequest, error) {
 	if err != nil {
 		return wireRequest{}, &Error{Kind: "prompt_build_failed"}
 	}
-	system := objectiveSystemPrompt
+	system := fmt.Sprintf("REQUEST-SPECIFIC OUTPUT: answers must contain exactly %d strings, one per entry in questions in that array's order, not indexed by original position. Only requested original question positions %v require answers. Each multiple-choice answer occupies ONE string of concatenated labels, never separate array entries. context_questions is background only. Follow output_contract.answer_slots for each slot's original position, shape and allowed labels.\n\n", len(req.Problem.Questions), payload.OutputContract.QuestionPositions) + objectiveSystemPrompt
 	content := textContent(string(b))
 	if len(images) > 0 {
 		parts := []contentPart{{Type: "text", Text: string(b)}}
@@ -307,6 +338,36 @@ func buildObjectiveRequest(req ObjectiveRequest) (wireRequest, error) {
 	w := wireRequest{Model: p.Model, MaxTokens: p.MaxTokens, Stream: false, Messages: []chatMessage{{Role: "system", Content: textContent(system)}, {Role: "user", Content: content}}, Thinking: map[string]string{"type": p.Thinking}, ReasoningEffort: p.ReasoningEffort}
 	w.ResponseFormat.Type = "json_object"
 	return w, nil
+}
+
+type objectiveOutputSlot struct {
+	ArrayIndex       int      `json:"array_index"`
+	QuestionPosition int      `json:"question_position"`
+	Shape            string   `json:"shape"`
+	AllowedLabels    []string `json:"allowed_labels"`
+}
+
+type objectiveOutputContract struct {
+	AnswerCount       int                   `json:"answer_count"`
+	QuestionPositions []int                 `json:"question_positions"`
+	AnswerSlots       []objectiveOutputSlot `json:"answer_slots"`
+}
+
+func makeObjectiveOutputContract(snapshot ObjectiveSnapshot) objectiveOutputContract {
+	contract := objectiveOutputContract{AnswerCount: len(snapshot.Questions)}
+	for index, question := range snapshot.Questions {
+		shape := "concatenated_labels_in_one_string"
+		if question.Category == 1 {
+			shape = "one_label_in_one_string"
+		}
+		slot := objectiveOutputSlot{ArrayIndex: index, QuestionPosition: question.Position, Shape: shape}
+		for _, option := range question.Options {
+			slot.AllowedLabels = append(slot.AllowedLabels, option.Label)
+		}
+		contract.QuestionPositions = append(contract.QuestionPositions, question.Position)
+		contract.AnswerSlots = append(contract.AnswerSlots, slot)
+	}
+	return contract
 }
 
 // A focused request can select a subset, never invent or alter its context.

@@ -697,6 +697,9 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			}
 			if e != nil {
 				if retryableObjectiveModelError(e) && attempt+1 < s.cfg.MaxEvaluations && r.ModelCalls < s.cfg.MaxModelCalls && ctx.Err() == nil {
+					if independent != nil {
+						independent.observeModelError(e)
+					}
 					// Once the provider has demonstrated a length failure, keep
 					// subsequent pre-submit repairs compact; malformed output must
 					// not silently escalate back into the same truncating profile.

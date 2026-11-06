@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.105 - 2026-11-06
+
+- Make objective output slots explicit for focused review, including original positions, exact array length and single/multiple-choice string shapes
+- Carry only sanitized structural output feedback into a retry of the same question; never reuse rejected answer values or scores and clear feedback before the next question
+- Diagnose rejected objective responses by whitelisted count/shape metadata while preserving strict validation, complete-context review, existing budgets and durable usage accounting
+
 ## 0.1.104 - 2026-11-06
 
 - Break repeated objective-answer anchoring with one bounded clean per-question review sweep inside existing model and evaluation limits
