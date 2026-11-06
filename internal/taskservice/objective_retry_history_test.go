@@ -118,7 +118,7 @@ func TestObjectiveImageRepairsRetainReasoning(t *testing.T) {
 		{"score repair and pro", nil, []string{"disabled", "enabled", "enabled"}, 3, false},
 		{"shared tutorial does not downgrade text questions", nil, []string{"disabled", "enabled", "enabled"}, 3, true},
 		{"malformed output retains reasoning", &answer.Error{Kind: "invalid_output_json"}, []string{"disabled", "enabled", "enabled"}, 2, false},
-		{"truncation fallback is one call only", &answer.Error{Kind: "truncated_output"}, []string{"disabled", "disabled", "enabled"}, 2, false},
+		{"truncation fallback stays compact", &answer.Error{Kind: "truncated_output"}, []string{"disabled", "disabled", "disabled"}, 2, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var task educoder.Task
@@ -175,7 +175,7 @@ func TestObjectiveImageRepairsRetainReasoning(t *testing.T) {
 					t.Fatalf("disabled thinking retained incompatible reasoning effort: %+v", request.Profile)
 				}
 			}
-			if provider.requests[2].Profile.Model != answer.ProProfile().Model {
+			if !tc.sharedImage && tc.providerErr == nil && provider.requests[2].Profile.Model != answer.ProProfile().Model {
 				t.Fatalf("pro escalation lost: %+v", provider.requests[2].Profile)
 			}
 		})

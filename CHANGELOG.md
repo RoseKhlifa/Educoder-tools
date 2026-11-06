@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.102 - 2026-11-06
+
+- Keep objective repair in a compact Flash profile after any observed truncation, preventing Pro reasoning from alternating back into repeated 8192-token failures
+- Preserve compact mode across malformed follow-up responses until a valid candidate is produced, while retaining normal reasoning escalation when no truncation occurred
+
 ## 0.1.101 - 2026-11-06
 
 - Preserve objective repair reasoning with image attachments; limit compact-output fallback to the single call after an observed truncation rather than downgrading the entire run

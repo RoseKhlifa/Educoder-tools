@@ -39,12 +39,8 @@ func TestObjectiveTruncationRetryChangesOutputProfileAndRecordsEveryCharge(t *te
 	if err != nil || r.Status != "passed" || r.ModelCalls != 3 || r.CostMicroUSD != 6 || submits.Load() != 1 {
 		t.Fatalf("result=%+v err=%v submits=%d", r, err, submits.Load())
 	}
-	for i, request := range provider.requests[1:] {
-		thinking, effort := "disabled", ""
-		if i == 1 {
-			thinking, effort = "enabled", "low"
-		}
-		if request.Profile.MaxTokens != 8192 || request.Profile.Thinking != thinking || request.Profile.ReasoningEffort != effort || len(request.Feedback) == 0 {
+	for _, request := range provider.requests[1:] {
+		if request.Profile.Model != answer.RepairProfile().Model || request.Profile.MaxTokens != 8192 || request.Profile.Thinking != "disabled" || request.Profile.ReasoningEffort != "" || len(request.Feedback) == 0 {
 			t.Fatalf("retry profile/feedback=%+v", request)
 		}
 	}

@@ -585,7 +585,7 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			if r.ModelCalls > 0 || previous != nil {
 				profile = answer.RepairProfile()
 			}
-			if r.ModelCalls >= 2 {
+			if r.ModelCalls >= 2 && !compactOutput {
 				profile = answer.ProProfile()
 			}
 			// Objective answers are compact, but reasoning-enabled repair and
@@ -599,7 +599,6 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 				// one call, not every subsequent repair in the run.
 				profile.Thinking, profile.ReasoningEffort = "disabled", ""
 			}
-			compactOutput = false
 			pr := answer.ObjectiveRequest{Problem: snapshot, Previous: previous, Feedback: append(append([]answer.Feedback(nil), legacyFeedback...), attemptHistory.feedback(feedback)...), Profile: profile, Resources: resources}
 			if fixedReady {
 				pr.FixedAnswers = append([]string(nil), fixedAnswers...)
@@ -652,7 +651,10 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			}
 			if e != nil {
 				if retryableObjectiveModelError(e) && attempt+1 < s.cfg.MaxEvaluations && r.ModelCalls < s.cfg.MaxModelCalls && ctx.Err() == nil {
-					compactOutput = answer.IsTruncatedOutput(e)
+					// Once the provider has demonstrated a length failure, keep
+					// subsequent pre-submit repairs compact; malformed output must
+					// not silently escalate back into the same truncating profile.
+					compactOutput = compactOutput || answer.IsTruncatedOutput(e)
 					r.Diagnostics = append(r.Diagnostics, e.Error())
 					feedback = []answer.Feedback{{Kind: "model", Message: e.Error()}}
 					if persistErr := s.persistObjective(ctx, req, r, created); persistErr != nil {
