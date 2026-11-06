@@ -58,6 +58,17 @@ func TestObjectiveValidationRejectsWrongKindAndDuplicateAnswers(t *testing.T) {
 	}
 }
 
+func TestObjectiveRankedAnswersUseFirstChoiceAndValidateAllChoices(t *testing.T) {
+	s := objectiveFixture()
+	candidate, err := parseObjectiveCandidate(s, `{"kind":"objective","ranked_answers":[{"question_position":1,"choices":["B","A"],"confidence":[0.8,0.2]},{"question_position":2,"choices":["AB","A"],"confidence":[0.7,0.3]}]}`)
+	if err != nil || strings.Join(candidate.Answers, ",") != "B,AB" {
+		t.Fatalf("ranked candidate=%+v err=%v", candidate, err)
+	}
+	if _, err := parseObjectiveCandidate(s, `{"kind":"objective","ranked_answers":[{"question_position":1,"choices":["B","Z"]},{"question_position":2,"choices":["AB"]}]}`); err == nil {
+		t.Fatal("accepted a ranked option outside the current question")
+	}
+}
+
 func TestObjectiveFixedAnswersArePositionalAndPreserved(t *testing.T) {
 	var wire wireRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

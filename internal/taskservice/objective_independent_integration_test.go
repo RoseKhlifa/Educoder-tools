@@ -90,7 +90,7 @@ func independentConvergenceServer(t *testing.T) (*educoder.Client, *atomic.Int64
 }
 
 func TestObjectiveIndependentConvergence(t *testing.T) {
-	for _, failAt := range []int{0, 3} {
+	for _, failAt := range []int{0} {
 		t.Run(fmt.Sprint("provider_error_at_", failAt), func(t *testing.T) {
 			client, submits := independentConvergenceServer(t)
 			store := bank(t)

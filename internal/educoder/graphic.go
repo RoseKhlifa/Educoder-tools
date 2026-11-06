@@ -510,12 +510,18 @@ func (p *GraphicProtocol) Submit(ctx context.Context, t *Task, document *Graphic
 		return result, err
 	}
 	defer func() { cleanup(result) }()
-	if document.deferredRead {
-		document, err = readGraphicDocument(ctx, session, current, file)
-		if err != nil {
-			return result, err
-		}
+	// Always read the mutation baseline in this submit-owned SSH session, even
+	// when a caller also supplied a document from an earlier discovery read.
+	// The earlier document is only an identity/version hint; it is never reused
+	// after a release/restart gap.
+	currentDocument, readErr := readGraphicDocument(ctx, session, current, file)
+	if readErr != nil {
+		return result, readErr
 	}
+	if !document.deferredRead && (currentDocument.Hash != document.Hash || currentDocument.Exists != document.Exists) {
+		return result, ErrGraphicChanged
+	}
+	document = currentDocument
 	// The same SSH session reads the baseline and performs the guarded save. No
 	// release/restart gap exists between reading the file and its compare-write.
 	result.Stage = GraphicStageSaveUnconfirmed

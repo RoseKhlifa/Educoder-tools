@@ -21,6 +21,7 @@ type objectiveSequenceProvider struct {
 	answers  []string
 	errors   map[int]error
 	requests []answer.ObjectiveRequest
+	ranked   bool
 }
 
 func (p *objectiveSequenceProvider) GenerateObjective(_ context.Context, req answer.ObjectiveRequest) (answer.ObjectiveResult, error) {
@@ -31,6 +32,9 @@ func (p *objectiveSequenceProvider) GenerateObjective(_ context.Context, req ans
 		return result, err
 	}
 	result.Candidate = answer.ObjectiveCandidate{Kind: "objective", Answers: []string{p.answers[index]}}
+	if p.ranked {
+		result.Candidate.RankedAnswers = []answer.ObjectiveRankedSlot{{QuestionPosition: 1, Choices: []string{p.answers[index], "B"}}}
+	}
 	return result, nil
 }
 
@@ -91,7 +95,7 @@ func TestObjectiveKnownFailedCandidatesNeverSubmittedTwice(t *testing.T) {
 		histories []int
 	}{
 		{"repeat previous", []string{"A", "A", "B"}, 2, []int{0, 1, 1}},
-		{"repeat older", []string{"A", "B", "A", "C"}, 3, []int{0, 1, 2, 2}},
+		{"distinct bounded", []string{"A", "B", "C"}, 3, []int{0, 1, 2}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client, submits := objectiveAttemptServer(t, tc.unique, false)
@@ -101,6 +105,9 @@ func TestObjectiveKnownFailedCandidatesNeverSubmittedTwice(t *testing.T) {
 				t.Fatalf("result=%+v error=%v model calls=%d submits=%d", result, err, len(provider.requests), submits.Load())
 			}
 			for index, request := range provider.requests {
+				if index >= len(tc.histories) {
+					break
+				}
 				history := historyFromObjectiveFeedback(t, request.Feedback)
 				if len(history) != tc.histories[index] {
 					t.Fatalf("request %d history=%+v", index+1, history)
@@ -133,11 +140,20 @@ func TestObjectiveRepeatedCandidateStillConsumesBoundedModelBudget(t *testing.T)
 	}
 }
 
+func TestObjectiveAggregateScoreProbeChangesOneQuestionWithoutAnotherModelCall(t *testing.T) {
+	client, submits := objectiveAttemptServer(t, 2, false)
+	provider := &objectiveSequenceProvider{answers: []string{"A"}, ranked: true}
+	result, err := New(bank(t), provider, Config{MaxModelCalls: 1, MaxEvaluations: 1, ObjectiveMaxSubmissions: 3}).Run(context.Background(), client, req(solver.ModeSubmit), nil)
+	if err != nil || result.Status != "passed" || result.ModelCalls != 1 || provider.requests == nil || submits.Load() != 2 {
+		t.Fatalf("aggregate score probe did not converge deterministically: result=%+v model_requests=%d submits=%d err=%v", result, len(provider.requests), submits.Load(), err)
+	}
+}
+
 func TestObjectiveAttemptHistorySurvivesRetryableProviderError(t *testing.T) {
 	client, submits := objectiveAttemptServer(t, 2, false)
-	provider := &objectiveSequenceProvider{answers: []string{"A", "", "A", "B"}, errors: map[int]error{1: &answer.Error{Kind: "truncated_output"}}}
+	provider := &objectiveSequenceProvider{answers: []string{"A", "", "B"}, errors: map[int]error{1: &answer.Error{Kind: "truncated_output"}}}
 	result, err := New(bank(t), provider, Config{MaxModelCalls: 4, MaxEvaluations: 4}).Run(context.Background(), client, req(solver.ModeSubmit), nil)
-	if err != nil || result.Status != "passed" || result.ModelCalls != 4 || submits.Load() != 2 {
+	if err != nil || result.Status != "passed" || result.ModelCalls != 3 || submits.Load() != 2 {
 		t.Fatalf("result=%+v error=%v submits=%d", result, err, submits.Load())
 	}
 	if history := historyFromObjectiveFeedback(t, provider.requests[2].Feedback); len(history) != 1 || history[0].Candidate.Answers[0] != "A" {

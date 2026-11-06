@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.110 - 2026-11-06
+
+- Use verified and precisely matched external objective answers as bounded first candidates without promoting them before platform proof.
+- Let one Flash call return ranked objective alternatives, then use comparable platform score deltas for bounded one-question feedback while stopping on unknown or changed evidence.
+- Preserve legacy objective records, add strict ranked-answer materialization, and tighten graphic submit baseline reads after environment handoff.
+
 ## 0.1.109 - 2026-11-06
 
 - Continue confirmed per-level failures only when the upstream task explicitly enables `skip_level` and `task_pass`; unknown writes, cancellations and unconfirmed results still stop.

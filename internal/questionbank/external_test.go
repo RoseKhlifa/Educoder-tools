@@ -156,7 +156,7 @@ func TestExternalReferencesAreNotVerifiedAnswers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report.Total != 3 || report.Reference != 2 || report.Usable != 1 || report.Kinds["objective"] != 1 {
+	if report.Total != 3 || report.Reference != 1 || report.Usable != 2 || report.Kinds["objective"] != 1 {
 		t.Fatalf("report=%+v", report)
 	}
 	p, ref := externalSnapshot(t, s, "answer.json")

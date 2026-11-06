@@ -30,6 +30,12 @@ CREATE TABLE IF NOT EXISTS external_candidate_bindings (
  external_entry_id INTEGER NOT NULL REFERENCES external_entries(id),
  created_at TEXT NOT NULL,
  PRIMARY KEY(candidate_id,external_entry_id)
+);
+CREATE TABLE IF NOT EXISTS external_objective_bindings (
+ candidate_id INTEGER NOT NULL REFERENCES objective_candidates(id),
+ external_entry_id INTEGER NOT NULL REFERENCES external_entries(id),
+ created_at TEXT NOT NULL,
+ PRIMARY KEY(candidate_id,external_entry_id)
 );`
 
 type ExternalIdentity struct {

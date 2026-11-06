@@ -569,12 +569,41 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 	var independent *objectiveIndependentReview
 	independentUsed := false
 	submissions := 0
+	var scoreFeedback *objectiveScoreFeedback
+	var external questionbank.ObjectiveCandidate
+	externalErr := questionbank.ErrNotFound
+	if cacheErr != nil && errors.Is(cacheErr, questionbank.ErrNotFound) && choice.Task != nil {
+		external, externalErr = s.store.FindExternalObjectiveCandidate(ctx, questionbank.ExternalIdentity{
+			Experiment: choice.Task.Shixun.Name,
+			Title:      choice.Task.Challenge.Subject,
+			Position:   choice.Task.Challenge.Position,
+		}, snapshot)
+		if externalErr != nil && !errors.Is(externalErr, questionbank.ErrNotFound) {
+			r.Status = "failed"
+			return r, externalErr
+		}
+	}
 	for attempt := 0; submissions < s.cfg.ObjectiveMaxSubmissions; attempt++ {
 		var c answer.ObjectiveCandidate
-		if attempt == 0 && cacheErr == nil {
+		scoreCandidate := false
+		if scoreFeedback != nil {
+			if next, ok := scoreFeedback.next(snapshot); ok {
+				c, scoreCandidate = next, true
+				r.Source = "platform_score"
+			} else if scoreFeedback.done {
+				scoreFeedback = nil
+			}
+		}
+		if scoreCandidate {
+			// Deterministic score feedback supplied this candidate; no model call.
+		} else if attempt == 0 && cacheErr == nil {
 			c = cached.Candidate
 			r.CandidateID = cached.ID
 			r.Source = "bank"
+		} else if attempt == 0 && externalErr == nil {
+			c = external.Candidate
+			r.CandidateID = external.ID
+			r.Source = external.Source
 		} else if attempt == 0 && fixedReady && len(fixedAnswers) == len(snapshot.Questions) && allObjectiveAnswersFixed(fixedAnswers) {
 			c = answer.ObjectiveCandidate{Kind: "objective", Answers: append([]string(nil), fixedAnswers...)}
 			r.Source = "question_bank"
@@ -742,6 +771,17 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			}
 			r.Source = "model"
 		}
+		materialized, e := answer.MaterializeObjectiveCandidate(snapshot, c)
+		if e != nil {
+			r.Status = "invalid_candidate"
+			return r, e
+		}
+		c = materialized
+		if !scoreCandidate && scoreFeedback == nil && len(c.RankedAnswers) == len(snapshot.Questions) {
+			if feedbackSearch, ok := newObjectiveScoreFeedback(snapshot, c, fixedAnswers); ok {
+				scoreFeedback = feedbackSearch
+			}
+		}
 		emit("validating", "正在校验客观题答案和选项")
 		if e := answer.ValidateObjectiveCandidate(snapshot, c); e != nil {
 			r.Status = "invalid_candidate"
@@ -758,6 +798,9 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 		if attemptHistory.contains(c) {
 			// Generation consumes the existing bounded budget, but a known
 			// failed answer must not consume another platform submission.
+			if scoreCandidate {
+				scoreFeedback = nil
+			}
 			previous = &c
 			feedback = []answer.Feedback{{Kind: "formal", Message: "模型重复返回了已确认未满分的完整答案，本次没有再次提交；请根据题目和选项重新推理并修正。"}}
 			emit("repairing", "答案与已知未满分尝试重复，已跳过重复提交并继续修复")
@@ -834,6 +877,21 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 		}
 		if submitted.ScoreKnown {
 			attemptHistory.remember(c, submitted.Score, submitted.MaxScore, questionResults...)
+		}
+		// A complete trusted per-question response is stronger than an
+		// aggregate score. Otherwise a ranked model candidate may be refined one
+		// slot at a time using only known, comparable platform scores.
+		if len(questionResults) == len(snapshot.Questions) {
+			scoreFeedback = nil
+		} else if scoreFeedback != nil && submitted.ScoreKnown {
+			scoreFeedback.observe(submitted.Score, submitted.MaxScore)
+			if !scoreFeedback.done {
+				previous = &c
+				feedback = []answer.Feedback{{Kind: "formal", Message: fmt.Sprintf("本关得分 %s / %s，正在按平台分数逐题定位", submitted.Score, submitted.MaxScore)}}
+				emit("repairing", "平台已返回确定分数，正在逐题定位答案")
+				continue
+			}
+			scoreFeedback = nil
 		}
 		// A current explicit failure revokes an old lock before a repair.
 		fixedAnswers, legacyFeedback, e = s.objectiveFixedAnswers(ctx, snapshot, resources, true)

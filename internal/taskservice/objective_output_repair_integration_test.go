@@ -36,15 +36,15 @@ func (p *objectiveFormatRepairProvider) GenerateObjective(_ context.Context, req
 	return result, nil
 }
 
-func TestObjectiveIndependentFormatRepairConverges(t *testing.T) {
+func TestObjectiveIndependentFormatRepairStopsAtHardCap(t *testing.T) {
 	client, submits := independentConvergenceServer(t)
 	provider := &objectiveFormatRepairProvider{}
 	store := bank(t)
 	result, err := New(store, provider, Config{MaxModelCalls: 4, MaxEvaluations: 4}).Run(context.Background(), client, req(solver.ModeSubmit), nil)
-	if err != nil || result.Status != "passed" || result.ModelCalls != 4 || result.CostMicroUSD != 8 || submits.Load() != 2 {
+	if err != nil || result.Status != "attempts_exhausted" || result.ModelCalls != 3 || result.CostMicroUSD != 6 || submits.Load() != 1 {
 		t.Fatalf("format repair: status=%s calls=%d submits=%d cost=%d err=%v", result.Status, result.ModelCalls, submits.Load(), result.CostMicroUSD, err)
 	}
-	if len(provider.requests[1].Feedback) != 0 || len(provider.requests[2].Feedback) != 1 || provider.requests[2].Feedback[0].Kind != "objective_output_contract" || len(provider.requests[3].Feedback) != 0 {
+	if len(provider.requests[1].Feedback) != 0 || len(provider.requests[2].Feedback) != 1 || provider.requests[2].Feedback[0].Kind != "objective_output_contract" {
 		t.Fatal("structural correction missing or leaked into another question")
 	}
 	for _, request := range provider.requests[1:] {
@@ -53,8 +53,8 @@ func TestObjectiveIndependentFormatRepairConverges(t *testing.T) {
 		}
 	}
 	usage, err := store.UsageForRun(context.Background(), result.RunID)
-	if err != nil || len(usage) != 4 {
+	if err != nil || len(usage) != 3 {
 		t.Fatalf("usage not preserved: entries=%d err=%v", len(usage), err)
 	}
-	t.Log("status=passed calls=4 submits=2 usage=4 cost=8 score=2/2")
+	t.Log("status=attempts_exhausted calls=3 submits=1 usage=3 cost=6; partial sweep not submitted")
 }

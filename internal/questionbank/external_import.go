@@ -227,15 +227,10 @@ func (s *Store) ImportExternalDirectory(ctx context.Context, opts ExternalImport
 			e.Reason = "unverified_external_source"
 		case "choice":
 			e.Kind = "objective"
-			e.Status = "reference"
-			e.Reason = "missing_question_and_option_identity"
-			var v struct {
-				Answer []struct {
-					Number   int      `json:"number"`
-					Selected []string `json:"selected"`
-				} `json:"answer"`
-			}
-			if json.Unmarshal(payload, &v) != nil {
+			e.Status = "candidate"
+			e.Reason = "unverified_external_source"
+			var v externalChoiceReference
+			if json.Unmarshal(payload, &v) != nil || !validExternalChoiceReference(v) {
 				e.Status = "rejected"
 				e.Reason = "invalid_choice_reference"
 			} else {
@@ -319,7 +314,16 @@ func (s *Store) ImportExternalDirectory(ctx context.Context, opts ExternalImport
 				return report, err
 			}
 			if digest != e.EntrySHA256 {
-				return report, errors.New("source content changed for pinned import identity")
+				legacy := e
+				legacy.Status, legacy.Reason = "reference", "missing_question_and_option_identity"
+				// This is only a classification migration for identical pinned
+				// bytes. Preserve the existing ID and all answer/evaluation history.
+				if e.Kind != "objective" || e.Status != "candidate" || finalizeExternalEntry(legacy).EntrySHA256 != digest {
+					return report, errors.New("source content changed for pinned import identity")
+				}
+				if _, err = tx.ExecContext(ctx, `UPDATE external_entries SET status=?,reason=?,entry_sha256=? WHERE repository=? AND source_commit=? AND source_path=?`, e.Status, e.Reason, e.EntrySHA256, e.Repository, e.Commit, e.SourcePath); err != nil {
+					return report, err
+				}
 			}
 			report.Existing++
 		}

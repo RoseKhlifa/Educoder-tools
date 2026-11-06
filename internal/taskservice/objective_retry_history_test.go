@@ -175,8 +175,8 @@ func TestObjectiveImageRepairsRetainReasoning(t *testing.T) {
 					t.Fatalf("disabled thinking retained incompatible reasoning effort: %+v", request.Profile)
 				}
 			}
-			if !tc.sharedImage && tc.providerErr == nil && provider.requests[2].Profile.Model != answer.ProProfile().Model {
-				t.Fatalf("pro escalation lost: %+v", provider.requests[2].Profile)
+			if !tc.sharedImage && tc.providerErr == nil && provider.requests[2].Profile.Model != answer.RepairProfile().Model {
+				t.Fatalf("repair unexpectedly escalated to Pro: %+v", provider.requests[2].Profile)
 			}
 		})
 	}
