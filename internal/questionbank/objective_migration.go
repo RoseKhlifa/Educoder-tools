@@ -43,9 +43,9 @@ func migrateObjectiveVerificationLayout(tx *sql.Tx) error {
 
 // migrateObjectiveQuestionContext adds the fail-closed context columns to
 // banks created before per-question fingerprints carried shared challenge
-// material. Existing rows deliberately remain context_complete=0: their old
-// question-only identity cannot prove that the shared title/statement/media
-// was read and must not be reused automatically.
+// material. Existing rows preserve their original
+// identity and evidence. The compatibility adapter then binds recoverable
+// historical context through aliases without moving or duplicating answers.
 func migrateObjectiveQuestionContext(tx *sql.Tx) error {
 	columns, err := objectiveTableColumns(tx, "objective_questions")
 	if err != nil || len(columns) == 0 {

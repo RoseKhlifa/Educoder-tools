@@ -183,7 +183,9 @@ func TestObjectiveWholeTaskLookupBridgesVerifiedSingleQuestionAnswers(t *testing
 		t.Fatal(err)
 	}
 	_, firstID := objectiveFixtureAnswer(t, s, "A")
-	if err = s.RecordObjectiveValidation(ctx, firstID, objectiveTestValidation("A")); err != nil {
+	firstProof := objectiveTestValidation("A")
+	firstProof.ScopeHash = key
+	if err = s.RecordObjectiveValidation(ctx, firstID, firstProof); err != nil {
 		t.Fatal(err)
 	}
 	secondKey, err := s.UpsertObjectiveQuestion(ctx, second)
@@ -197,7 +199,9 @@ func TestObjectiveWholeTaskLookupBridgesVerifiedSingleQuestionAnswers(t *testing
 	if _, err = s.FindObjectiveVerified(ctx, key); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("incomplete verified set became a cache hit: %v", err)
 	}
-	if err = s.RecordObjectiveValidation(ctx, secondID, objectiveTestValidation("B")); err != nil {
+	secondProof := objectiveTestValidation("B")
+	secondProof.ScopeHash = key
+	if err = s.RecordObjectiveValidation(ctx, secondID, secondProof); err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {

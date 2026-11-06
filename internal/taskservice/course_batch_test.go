@@ -67,7 +67,7 @@ func courseFixture(t *testing.T, uncertainSubmit ...bool) (*educoder.Client, *at
 			}
 			if strings.HasPrefix(r.URL.Path, "/api/tasks/G") {
 				fmt.Sscanf(r.URL.Path, "/api/tasks/G%d.json", &id)
-				fmt.Fprintf(w, `{"st":1,"homework_common_id":%d,"game":{"identifier":"G%d","id":%d,"myshixun_id":%d},"myshixun":{"id":%d,"identifier":"R%d"},"shixun":{"identifier":"S%d","challenges_count":1},"challenge":{"id":%d,"st":1,"position":1,"subject":"level %d","task_pass":"Choose the first"},"chooses":[{"challenge_choose_id":%d,"challenge_id":%d,"position":1,"category":1,"subject":"Question %d?","challenge_question":[{"option_name":"First","position":0},{"option_name":"Second","position":1}]}]}`, id, id, id+100, id+1000, id+1000, id, id, id, id, id+10000, id, id)
+				fmt.Fprintf(w, `{"st":1,"homework_common_id":%d,"game":{"identifier":"G%d","id":%d,"myshixun_id":%d},"myshixun":{"id":%d,"identifier":"R%d"},"shixun":{"identifier":"S%d","challenges_count":1},"challenge":{"id":%d,"st":1,"position":1,"subject":"level %d","task_pass":"Choose the first"},"choose_test_cases":{"challenge_chooses_count":1},"chooses":[{"challenge_choose_id":%d,"challenge_id":%d,"position":1,"question_type":0,"category":1,"subject":"Question %d?","challenge_question":[{"option_name":"First","position":0},{"option_name":"Second","position":1}]}]}`, id, id, id+100, id+1000, id+1000, id, id, id, id, id+10000, id, id)
 				return
 			}
 			t.Errorf("unexpected course route %s", r.URL.Path)

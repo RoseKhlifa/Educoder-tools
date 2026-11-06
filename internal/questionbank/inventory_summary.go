@@ -48,7 +48,9 @@ WITH local_revisions AS (
  )
 )
 SELECT
- (SELECT COUNT(*) FROM objective_questions),
+ (SELECT COUNT(*) FROM objective_questions q
+   WHERE NOT EXISTS (SELECT 1 FROM objective_legacy_context_aliases l WHERE l.context_key=q.question_key)
+      OR EXISTS (SELECT 1 FROM objective_answers a WHERE a.question_key=q.question_key)),
  (SELECT COUNT(*) FROM local_revisions WHERE graphic = 0)
   + (SELECT COUNT(*) FROM unbound_external_identities WHERE kind = 'programming'),
  (SELECT COUNT(*) FROM local_revisions WHERE graphic = 1)

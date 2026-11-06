@@ -201,6 +201,13 @@ func TestObjectiveServicePassesAllImageBytesToEstimateAndGenerateAndPersistsOnly
 	for _, unavailable := range []bool{false, true} {
 		t.Run(map[bool]string{false: "all-images-loaded", true: "image-unavailable"}[unavailable], func(t *testing.T) {
 			fixture := objectiveResourceFixture()
+			// Live protocol rosters use complete contiguous question positions and
+			// stable identities, unlike the resource-only mapping fixture above.
+			for i := range fixture.Questions {
+				fixture.Questions[i].Position = i + 1
+				fixture.Questions[i].ChallengeID = 9
+				fixture.Questions[i].ChallengeChooseID = int64(10 + i)
+			}
 			fixture.Questions[0].Subject = `<img src="/api/attachments/1?signature=fixture-private">`
 			for i := range fixture.Questions[1].Options {
 				fixture.Questions[1].Options[i].OptionName = "![option](/api/attachments/" + string(rune('2'+i)) + "?signature=fixture-private)"
@@ -210,6 +217,7 @@ func TestObjectiveServicePassesAllImageBytesToEstimateAndGenerateAndPersistsOnly
 				t.Fatal(err)
 			}
 			task.Chooses = fixture.Questions
+			task.ChooseTestCases.Count = len(task.Chooses)
 			var imageCalls, submits atomic.Int64
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch {
@@ -267,9 +275,9 @@ func TestObjectiveServicePassesAllImageBytesToEstimateAndGenerateAndPersistsOnly
 					t.Fatal("provider received missing images or a reasoning-enabled profile")
 				}
 				for i, resource := range request.Resources {
-					position, label := 5, ""
+					position, label := 1, ""
 					if i > 0 {
-						position, label = 7, string(rune('A'+i-1))
+						position, label = 2, string(rune('A'+i-1))
 					}
 					if resource.QuestionPosition != position || resource.OptionLabel != label || !bytes.Equal(resource.Content, objectiveResourcePNG(t, byte('1'+i))) || len(resource.SHA256) != 64 {
 						t.Fatal("provider image bytes or question/option mapping changed")

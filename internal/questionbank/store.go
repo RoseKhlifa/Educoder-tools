@@ -126,6 +126,16 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("migrate external source inventory: %w", err)
 	}
+	if _, err = tx.Exec(objectiveLegacyAliasSchema); err != nil {
+		tx.Rollback()
+		db.Close()
+		return nil, fmt.Errorf("migrate objective compatibility aliases: %w", err)
+	}
+	if _, err = adaptLegacyObjectiveBankTx(context.Background(), tx, ""); err != nil {
+		tx.Rollback()
+		db.Close()
+		return nil, fmt.Errorf("adapt legacy objective bank: %w", err)
+	}
 	if err = tx.Commit(); err != nil {
 		db.Close()
 		return nil, err

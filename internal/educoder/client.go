@@ -204,6 +204,9 @@ type Task struct {
 	HomeworkID       int64                    `json:"homework_common_id"`
 	NextGame         *string                  `json:"next_game"`
 	URL              string                   `json:"url"`
+	// choiceReadPresent records which required objective fields were observed
+	// on the wire. Go zero values alone cannot prove an upstream read complete.
+	choiceReadPresent bool
 }
 
 // TaskUser keeps the stable numeric identity needed by code-save extras while

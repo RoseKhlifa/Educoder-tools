@@ -104,27 +104,49 @@ func (s *Store) findObjectiveVerified(ctx context.Context, key string, resources
 			return c, ErrNotFound
 		}
 	}
-	var raw string
-	err = s.db.QueryRowContext(ctx, `SELECT c.id,c.candidate_hash,c.candidate_json,c.source
-		FROM objective_candidates c
-		JOIN objective_verifications v ON v.candidate_id=c.id AND v.result='full_score'
-		WHERE c.snapshot_hash=?
-		  AND NOT EXISTS (SELECT 1 FROM objective_verifications newer WHERE newer.candidate_id=c.id AND newer.id>v.id)
-		ORDER BY c.id DESC LIMIT 1`, key).Scan(&c.ID, &c.Hash, &raw, &c.Source)
-	if errors.Is(err, sql.ErrNoRows) {
-		if hasMedia {
-			return c, ErrNotFound
-		}
-		return s.objectiveCandidateFromAnswers(ctx, key, snapshot)
-	}
+	rows, err := s.db.QueryContext(ctx, `SELECT c.id,c.candidate_hash,c.candidate_json,c.source,v.score,v.max_score
+        FROM objective_candidates c
+        JOIN objective_verifications v ON v.candidate_id=c.id AND v.result='full_score'
+        WHERE c.snapshot_hash=?
+          AND NOT EXISTS (SELECT 1 FROM objective_verifications newer WHERE newer.candidate_id=c.id AND newer.id>v.id)
+        ORDER BY c.id DESC`, key)
 	if err != nil {
 		return c, err
 	}
-	err = json.Unmarshal([]byte(raw), &c.Candidate)
-	if err == nil {
-		err = answer.ValidateObjectiveCandidate(snapshot, c.Candidate)
+	var proven []ObjectiveCandidate
+	for rows.Next() {
+		var candidate ObjectiveCandidate
+		var raw, score, maximum string
+		if err = rows.Scan(&candidate.ID, &candidate.Hash, &raw, &candidate.Source, &score, &maximum); err != nil {
+			break
+		}
+		if !objectiveHasFullScore(score, maximum) || problem.HashContent(raw) != candidate.Hash {
+			continue
+		}
+		if json.Unmarshal([]byte(raw), &candidate.Candidate) != nil || answer.ValidateObjectiveCandidate(snapshot, candidate.Candidate) != nil {
+			continue
+		}
+		proven = append(proven, candidate)
 	}
-	return c, err
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return c, err
+	}
+	if len(proven) > 1 {
+		// Distinct full-score vectors for one immutable snapshot conflict just as
+		// distinct single-question answers do. Do not silently choose the newest.
+		return c, ErrNotFound
+	}
+	if len(proven) == 1 {
+		if err := s.objectiveVectorContextEligible(ctx, snapshot, proven[0].Candidate); err != nil {
+			return c, err
+		}
+		return proven[0], nil
+	}
+	return s.objectiveCandidateFromAnswers(ctx, key, snapshot)
 }
 
 var objectiveCanonicalImage = regexp.MustCompile(`<img src="sha256:([0-9a-f]{64})">`)
@@ -202,13 +224,20 @@ func objectiveSnapshotHasMedia(snapshot answer.ObjectiveSnapshot) bool {
 // published whole-task API. It creates no fabricated whole-task score evidence:
 // the caller still submits and verifies this candidate in its current context.
 func (s *Store) objectiveCandidateFromAnswers(ctx context.Context, key string, snapshot answer.ObjectiveSnapshot) (ObjectiveCandidate, error) {
+	if err := s.adaptObjectiveSnapshotAfterWrite(ctx, key); err != nil {
+		return ObjectiveCandidate{}, err
+	}
 	candidate := answer.ObjectiveCandidate{Kind: "objective", Answers: make([]string, len(snapshot.Questions))}
 	for i, q := range snapshot.Questions {
-		questionKey, err := ObjectiveQuestionKey(q)
+		input, complete := historicalObjectiveInput(snapshot, q)
+		if !complete {
+			return ObjectiveCandidate{}, ErrNotFound
+		}
+		questionKey, _, err := s.UpsertObjectiveQuestionWithContext(ctx, input)
 		if err != nil {
 			return ObjectiveCandidate{}, err
 		}
-		answers, err := s.LookupObjectiveAnswers(ctx, questionKey)
+		answers, err := s.LookupObjectiveAnswersWithContext(ctx, questionKey)
 		if err != nil {
 			return ObjectiveCandidate{}, err
 		}
@@ -235,5 +264,46 @@ func (s *Store) RecordObjectiveVerification(ctx context.Context, candidateID int
 		}
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO objective_verifications(candidate_id,run_id,result,score,max_score,created_at) VALUES(?,?,?,?,?,?)`, candidateID, runID, status, score, max, now())
-	return err
+	if err != nil {
+		return err
+	}
+	var snapshot string
+	if err = s.db.QueryRowContext(ctx, "SELECT snapshot_hash FROM objective_candidates WHERE id=?", candidateID).Scan(&snapshot); err != nil {
+		return err
+	}
+	return s.adaptObjectiveSnapshotAfterWrite(ctx, snapshot)
+}
+
+func (s *Store) objectiveVectorContextEligible(ctx context.Context, snapshot answer.ObjectiveSnapshot, candidate answer.ObjectiveCandidate) error {
+	for i, q := range snapshot.Questions {
+		input, complete := historicalObjectiveInput(snapshot, q)
+		if !complete {
+			return ErrNotFound
+		}
+		key, _, err := ObjectiveQuestionKeyWithContext(input)
+		if err != nil {
+			return err
+		}
+		current, err := s.withdrawObjectiveContextFailures(ctx, key, []ObjectiveAnswer{{AnswerHash: problem.HashContent(candidate.Answers[i]), Verified: true, Reusable: true}})
+		if err != nil {
+			return err
+		}
+		if len(current) != 1 || !current[0].Reusable {
+			return ErrNotFound
+		}
+		answers, err := s.LookupObjectiveAnswersWithContext(ctx, key)
+		if err != nil {
+			return err
+		}
+		proven := map[string]bool{}
+		for _, a := range answers {
+			if a.Verified {
+				proven[a.AnswerHash] = true
+			}
+		}
+		if len(proven) > 1 {
+			return ErrNotFound
+		}
+	}
+	return nil
 }

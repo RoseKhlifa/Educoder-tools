@@ -69,7 +69,9 @@ func TestObjectiveImageCacheCrossAccount(t *testing.T) {
 	if err != nil || second == nil || second.Status != "passed" || second.Source != "bank" || second.ModelCalls != 0 || second.CandidateID != first.CandidateID {
 		t.Fatalf("identical image cache missed for target account: result=%+v err=%v", second, err)
 	}
-	if provider.objectiveCalls.Load() != 1 || submits.Load() != 2 || images.Load() != 2 {
+	// Each formal submission re-fetches the bytes before writing, so a changed
+	// signed image cannot inherit a previously prepared snapshot's answer.
+	if provider.objectiveCalls.Load() != 1 || submits.Load() != 2 || images.Load() != 4 {
 		t.Fatalf("unexpected work: model=%d submissions=%d image_reads=%d", provider.objectiveCalls.Load(), submits.Load(), images.Load())
 	}
 	changed := req(solver.ModeGenerateOnly)

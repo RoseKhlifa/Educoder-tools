@@ -418,5 +418,29 @@ func (s *Store) lookupObjectiveAnswers(ctx context.Context, key string, requireC
 			return nil, fmt.Errorf("read objective validation: %w", err)
 		}
 	}
-	return out, nil
+	if requireContext {
+		aliases, err := s.lookupObjectiveLegacyAliases(ctx, key)
+		if err != nil {
+			return nil, err
+		}
+		positions := map[int64]int{}
+		for i, a := range out {
+			positions[a.ID] = i
+		}
+		for _, a := range aliases {
+			if i, ok := positions[a.ID]; ok {
+				out[i].Verified = out[i].Verified || a.Verified
+				out[i].Reusable = out[i].Reusable || a.Reusable
+				out[i].Validations = append(out[i].Validations, a.Validations...)
+			} else {
+				positions[a.ID] = len(out)
+				out = append(out, a)
+			}
+		}
+		out, err = s.withdrawObjectiveContextFailures(ctx, key, out)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return rejectObjectiveConflicts(out), nil
 }

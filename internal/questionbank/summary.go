@@ -14,8 +14,9 @@ type Summary struct {
 	TotalVerifiedQuestions      int64 `json:"total_verified_questions"`
 }
 
-// Summary reads all counters in one SQLite snapshot. Objective qualification
-// matches LookupObjectiveAnswers (verified evidence plus complete resources).
+// Summary deduplicates objective proof aliases by the original question key.
+// Objective qualification follows the active lookup evidence rather than
+// counting context rows as additional contributed or verified questions.
 // Programming qualification follows FindVerified's current status: a later
 // failed validation withdraws a pass until a subsequent formal pass. The formal
 // evidence is also checked against the immutable solution and submission bytes.
@@ -79,6 +80,68 @@ SELECT
 	if err != nil {
 		return Summary{}, err
 	}
+	out.VerifiedObjectiveQuestions, err = s.verifiedObjectiveQuestionCount(ctx)
+	if err != nil {
+		return Summary{}, err
+	}
 	out.TotalVerifiedQuestions = out.VerifiedObjectiveQuestions + out.VerifiedProgrammingProblems + out.VerifiedGraphicProblems
 	return out, nil
+}
+
+// Evidence aliases do not own another question. Include newly extracted
+// whole-vector answers, while counting an adapted old answer under its original
+// semantic key exactly once, regardless of how many contexts reference it.
+func (s *Store) verifiedObjectiveQuestionCount(ctx context.Context) (int64, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT a.question_key FROM objective_answers a JOIN objective_questions q ON q.question_key=a.question_key
+  WHERE q.resource_complete=1 AND COALESCE((SELECT v.verified FROM objective_answer_verifications v WHERE v.answer_id=a.id ORDER BY v.id DESC LIMIT 1),0)=1
+  GROUP BY a.question_key HAVING count(DISTINCT a.answer_hash)=1`)
+	if err != nil {
+		return 0, err
+	}
+	keys := map[string]bool{}
+	for rows.Next() {
+		var key string
+		if err = rows.Scan(&key); err != nil {
+			break
+		}
+		keys[key] = true
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return 0, err
+	}
+	rows, err = s.db.QueryContext(ctx, `SELECT DISTINCT context_key FROM objective_legacy_context_aliases`)
+	if err != nil {
+		return 0, err
+	}
+	var contexts []string
+	for rows.Next() {
+		var key string
+		if err = rows.Scan(&key); err != nil {
+			break
+		}
+		contexts = append(contexts, key)
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return 0, err
+	}
+	for _, key := range contexts {
+		answers, e := s.LookupObjectiveAnswersWithContext(ctx, key)
+		if e != nil {
+			return 0, e
+		}
+		for _, a := range answers {
+			if a.Reusable {
+				keys[a.QuestionKey] = true
+			}
+		}
+	}
+	return int64(len(keys)), nil
 }

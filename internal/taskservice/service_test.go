@@ -64,7 +64,7 @@ func (p *fakeProvider) GenerateObjective(ctx context.Context, r answer.Objective
 	return answer.ObjectiveResult{Candidate: answer.ObjectiveCandidate{Kind: "objective", Answers: []string{"A"}}, Model: "fake", CostKnown: !p.unknown, CostMicroUSD: 2}, nil
 }
 func objectiveJSON() string {
-	return `{"st":1,"homework_common_id":44,"game":{"identifier":"OBJGAME","id":7,"myshixun_id":8},"challenge":{"id":9,"st":1,"subject":"choice","task_pass":"Choose the first option"},"chooses":[{"challenge_choose_id":10,"challenge_id":9,"position":1,"category":1,"subject":"First?","challenge_question":[{"option_name":"First","position":0},{"option_name":"Second","position":1}]}]}`
+	return `{"st":1,"homework_common_id":44,"game":{"identifier":"OBJGAME","id":7,"myshixun_id":8},"challenge":{"id":9,"st":1,"subject":"choice","task_pass":"Choose the first option"},"choose_test_cases":{"challenge_chooses_count":1},"chooses":[{"challenge_choose_id":10,"challenge_id":9,"position":1,"question_type":0,"category":1,"subject":"First?","challenge_question":[{"option_name":"First","position":0},{"option_name":"Second","position":1}]}]}`
 }
 func programmingJSON() string {
 	return `{"st":0,"homework_common_id":44,"game":{"identifier":"PROGRAM","id":8,"myshixun_id":9},"myshixun":{"id":9},"challenge":{"id":11,"st":0,"with_code_file":true,"subject":"program","task_pass":"Return zero","path":"main.cpp"},"code_editor":{"shixun_environment_id":12,"name":"C/C++"},"test_sets":[]}`

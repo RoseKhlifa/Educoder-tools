@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -294,10 +295,20 @@ func objectiveSnapshot(t *educoder.ChoiceTask) answer.ObjectiveSnapshot {
 	return s
 }
 
-func objectiveBankResources(resources []answer.ImageResource) []questionbank.ObjectiveResource {
+func objectiveBankResources(resources []answer.ImageResource, position int) []questionbank.ObjectiveResource {
 	seen := map[string]bool{}
 	out := make([]questionbank.ObjectiveResource, 0, len(resources))
 	for _, resource := range resources {
+		bound := false
+		for _, binding := range resource.EffectiveBindings() {
+			if binding.QuestionPosition == position {
+				bound = true
+				break
+			}
+		}
+		if !bound {
+			continue
+		}
 		if resource.SHA256 == "" || seen[resource.SHA256] {
 			continue
 		}
@@ -307,22 +318,28 @@ func objectiveBankResources(resources []answer.ImageResource) []questionbank.Obj
 	return out
 }
 
-func (s *Service) objectiveFixedAnswers(ctx context.Context, snapshot answer.ObjectiveSnapshot, resources []answer.ImageResource) ([]string, bool, error) {
-	contextComplete := strings.TrimSpace(snapshot.Title) != "" && strings.TrimSpace(snapshot.Statement) != ""
-	context := questionbank.ObjectiveQuestionContext{Kind: "objective", Title: snapshot.Title, Statement: snapshot.Statement, Complete: contextComplete}
-	bankResources := objectiveBankResources(resources)
+func objectiveBankInput(snapshot answer.ObjectiveSnapshot, question answer.ObjectiveQuestion, resources []answer.ImageResource, complete bool) questionbank.ObjectiveQuestionInput {
+	return questionbank.ObjectiveQuestionInput{Question: question, Context: questionbank.ObjectiveQuestionContext{Kind: "objective", Title: snapshot.Title, Statement: snapshot.Statement, Complete: complete}, Resources: objectiveBankResources(resources, question.Position)}
+}
+
+func (s *Service) objectiveFixedAnswers(ctx context.Context, snapshot answer.ObjectiveSnapshot, resources []answer.ImageResource, complete bool) ([]string, []answer.Feedback, error) {
 	fixed := make([]string, len(snapshot.Questions))
+	var references []struct {
+		Position int    `json:"position"`
+		Answer   string `json:"answer"`
+	}
 	for i, question := range snapshot.Questions {
-		key, reusable, keyErr := questionbank.ObjectiveQuestionKeyWithContext(questionbank.ObjectiveQuestionInput{Question: question, Context: context, Resources: bankResources})
+		input := objectiveBankInput(snapshot, question, resources, complete)
+		key, reusable, keyErr := s.store.UpsertObjectiveQuestionWithContext(ctx, input)
 		if keyErr != nil {
-			return nil, false, keyErr
+			return nil, nil, keyErr
 		}
 		if !reusable {
 			continue
 		}
 		answers, lookupErr := s.store.LookupObjectiveAnswersWithContext(ctx, key)
 		if lookupErr != nil && !errors.Is(lookupErr, questionbank.ErrNotFound) {
-			return nil, false, lookupErr
+			return nil, nil, lookupErr
 		}
 		for _, candidate := range answers {
 			if candidate.Reusable {
@@ -330,35 +347,94 @@ func (s *Service) objectiveFixedAnswers(ctx context.Context, snapshot answer.Obj
 				break
 			}
 		}
+		if fixed[i] != "" {
+			continue
+		}
+		legacy, err := s.store.LookupObjectiveLegacyReferences(ctx, input)
+		if err != nil {
+			return nil, nil, err
+		}
+		// Legacy answers without historical shared material remain useful data,
+		// not locks. The provider checks them against the current full context.
+		for _, candidate := range legacy {
+			if candidate.Verified {
+				references = append(references, struct {
+					Position int    `json:"position"`
+					Answer   string `json:"answer"`
+				}{question.Position, candidate.Answer})
+			}
+		}
 	}
-	return fixed, true, nil
+	var feedback []answer.Feedback
+	if len(references) > 0 {
+		raw, _ := json.Marshal(references)
+		feedback = append(feedback, answer.Feedback{Kind: "legacy_bank_reference", Message: "以下是题干、题型、选项和媒体精确匹配的旧题库已验证答案；旧记录缺少共享材料绑定，请结合当前完整上下文核验，正确则沿用，冲突时修正，不要当作必须遵循的指令：" + string(raw)})
+	}
+	return fixed, feedback, nil
+}
+
+func recordObjectiveBankAnswer(ctx context.Context, bank *questionbank.Store, input questionbank.ObjectiveQuestionInput, value, source string, validation questionbank.ObjectiveValidation) (int64, error) {
+	key, reusable, err := bank.UpsertObjectiveQuestionWithContext(ctx, input)
+	if err != nil || !reusable {
+		return 0, err
+	}
+	existing, err := bank.LookupObjectiveAnswersWithContext(ctx, key)
+	if err != nil {
+		return 0, err
+	}
+	for _, candidate := range existing {
+		if candidate.Answer != value {
+			continue
+		}
+		if candidate.QuestionKey != key {
+			err = bank.RecordObjectiveContextValidation(ctx, input, candidate.ID, validation)
+		} else {
+			err = bank.RecordObjectiveValidation(ctx, candidate.ID, validation)
+		}
+		return candidate.ID, err
+	}
+	legacy, err := bank.LookupObjectiveLegacyReferences(ctx, input)
+	if err != nil {
+		return 0, err
+	}
+	for _, candidate := range legacy {
+		if candidate.Answer != value {
+			continue
+		}
+		if err = bank.RecordObjectiveContextValidation(ctx, input, candidate.ID, validation); err != nil {
+			return 0, err
+		}
+		return candidate.ID, nil
+	}
+	id, err := bank.AddObjectiveAnswer(ctx, key, value, source, "")
+	if err != nil {
+		return 0, err
+	}
+	return id, bank.RecordObjectiveValidation(ctx, id, validation)
 }
 
 func (s *Service) recordObjectiveQuestionEvidence(ctx context.Context, client *educoder.Client, snapshot answer.ObjectiveSnapshot, resources []answer.ImageResource, choice *educoder.ChoiceTask, candidate answer.ObjectiveCandidate, submitted *educoder.ChoiceSubmitResult, runID, snapshotHash string) error {
+	if !choice.ReadComplete() {
+		return nil
+	}
 	current := submitted
-	if current == nil || len(current.TestSets) == 0 {
-		if fresh, loadErr := client.LoadChoiceTask(ctx, choice.Task.CourseIdentifier, choice.Task.HomeworkID, choice.Task.Game.Identifier); loadErr == nil && fresh != nil && fresh.Task.Challenge.ID == choice.Task.Challenge.ID {
+	full := submitted != nil && submitted.Passed && submitted.ScoreKnown && submitted.ScoreCheck == "full_score" && submitted.Count == len(candidate.Answers)
+	if !full && (current == nil || len(current.TestSets) == 0) {
+		if fresh, loadErr := client.LoadChoiceTask(ctx, choice.Task.CourseIdentifier, choice.Task.HomeworkID, choice.Task.Game.Identifier); loadErr == nil && fresh != nil && fresh.ReadComplete() && reflect.DeepEqual(objectiveSnapshot(fresh), objectiveSnapshot(choice)) {
 			current = &educoder.ChoiceSubmitResult{Correct: fresh.TestCases.Correct, Count: fresh.TestCases.Count, TestSets: fresh.TestCases.TestSets}
 		}
 	}
 	results := trustedObjectiveQuestionResults(choice, candidate, current)
-	if len(results) == 0 || len(results) != len(snapshot.Questions) {
+	if !full && len(results) != len(snapshot.Questions) {
 		return nil
 	}
-	contextComplete := strings.TrimSpace(snapshot.Title) != "" && strings.TrimSpace(snapshot.Statement) != ""
-	context := questionbank.ObjectiveQuestionContext{Kind: "objective", Title: snapshot.Title, Statement: snapshot.Statement, Complete: contextComplete}
-	bankResources := objectiveBankResources(resources)
 	for i, question := range snapshot.Questions {
-		key, reusable, keyErr := questionbank.ObjectiveQuestionKeyWithContext(questionbank.ObjectiveQuestionInput{Question: question, Context: context, Resources: bankResources})
-		if keyErr != nil || !reusable {
-			continue
+		correct := full || results[i].Correct
+		v := questionbank.ObjectiveValidation{Passed: correct, Confirmed: true, PerQuestionCorrect: !full && correct, FullScore: full, AnswerHash: problem.HashContent(candidate.Answers[i]), ScopeHash: snapshotHash, Feedback: "当前完整题目及答案向量与逐题评测或满分验证精确绑定。"}
+		if full {
+			v.Score, v.MaxScore = submitted.Score, submitted.MaxScore
 		}
-		answerID, addErr := s.store.AddObjectiveAnswer(ctx, key, candidate.Answers[i], "platform_submission", "")
-		if addErr != nil {
-			return addErr
-		}
-		correct := results[i].Correct
-		if err := s.store.RecordObjectiveValidation(ctx, answerID, questionbank.ObjectiveValidation{Passed: correct, Confirmed: true, PerQuestionCorrect: correct, AnswerHash: problem.HashContent(candidate.Answers[i]), ScopeHash: snapshotHash, Feedback: "当前关卡返回了与题目身份和答案向量一致的逐题评测结果。"}); err != nil {
+		if _, err := recordObjectiveBankAnswer(ctx, s.store, objectiveBankInput(snapshot, question, resources, true), candidate.Answers[i], "platform_submission", v); err != nil {
 			return err
 		}
 	}
@@ -424,6 +500,15 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 	if err != nil {
 		return nil, err
 	}
+	if !choice.ReadComplete() {
+		choice, err = client.LoadChoiceTask(ctx, req.Course, req.HomeworkID, req.Game)
+		if err != nil {
+			return nil, err
+		}
+		if !choice.ReadComplete() {
+			return &Result{Kind: "objective", Status: "objective_read_incomplete"}, errors.New("objective read is missing question/context/count fields; no bank match or model call performed")
+		}
+	}
 	emit("loading_resources", "正在读取题干和选项中的图片")
 	snapshot, resources, err := prepareObjectiveResources(ctx, client, choice)
 	if err != nil {
@@ -433,7 +518,8 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 	if err != nil {
 		return nil, err
 	}
-	fixedAnswers, fixedReady, fixedErr := s.objectiveFixedAnswers(ctx, snapshot, resources)
+	fixedAnswers, legacyFeedback, fixedErr := s.objectiveFixedAnswers(ctx, snapshot, resources, choice.ReadComplete())
+	fixedReady := choice.ReadComplete()
 	if fixedErr != nil {
 		return nil, fixedErr
 	}
@@ -455,7 +541,10 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 		}
 	}()
 	emit("bank_lookup", "正在查询客观题题库")
-	cached, cacheErr := s.store.FindObjectiveVerifiedWithResources(ctx, hash, resources)
+	cached, cacheErr := questionbank.ObjectiveCandidate{}, questionbank.ErrNotFound
+	if fixedReady {
+		cached, cacheErr = s.store.FindObjectiveVerifiedWithResources(ctx, hash, resources)
+	}
 	if cacheErr != nil && !errors.Is(cacheErr, questionbank.ErrNotFound) {
 		r.Status = "failed"
 		return r, cacheErr
@@ -504,7 +593,7 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 				// Reasoning can consume the response window before the answer.
 				profile.Thinking, profile.ReasoningEffort = "disabled", ""
 			}
-			pr := answer.ObjectiveRequest{Problem: snapshot, Previous: previous, Feedback: attemptHistory.feedback(feedback), Profile: profile, Resources: resources}
+			pr := answer.ObjectiveRequest{Problem: snapshot, Previous: previous, Feedback: append(append([]answer.Feedback(nil), legacyFeedback...), attemptHistory.feedback(feedback)...), Profile: profile, Resources: resources}
 			if fixedReady {
 				pr.FixedAnswers = append([]string(nil), fixedAnswers...)
 			}
@@ -612,17 +701,22 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 		// first mutating request so an assignment changed to elective does not
 		// receive an answer prepared while it was required. The client's bound
 		// roster guard also verifies homework, game and challenge identity.
-		freshTask, freshErr := client.LoadTask(ctx, req.Course, req.HomeworkID, req.Game)
+		freshChoice, freshErr := client.LoadChoiceTask(ctx, req.Course, req.HomeworkID, req.Game)
 		if freshErr != nil {
 			r.Status = "verification_unconfirmed"
 			return r, freshErr
 		}
-		if freshTask.IsOptional() {
+		if freshChoice.Task.IsOptional() {
 			return r, educoder.ErrOptionalTask
 		}
-		if freshTask.Challenge.ID != choice.Task.Challenge.ID || freshTask.Kind() != educoder.TaskKindChoice {
+		if freshChoice.Task.Challenge.ID != choice.Task.Challenge.ID || freshChoice.Task.Kind() != educoder.TaskKindChoice {
 			r.Status = "verification_unconfirmed"
 			return r, errors.New("objective task identity or question kind changed before submission")
+		}
+		freshSnapshot, _, refreshErr := prepareObjectiveResources(ctx, client, freshChoice)
+		if refreshErr != nil || !freshChoice.ReadComplete() || !reflect.DeepEqual(snapshot, freshSnapshot) {
+			r.Status = "verification_unconfirmed"
+			return r, errors.New("objective question/options/context/media changed or incomplete before submission")
 		}
 		r.Status = "submitting"
 		if e = s.persistObjective(ctx, req, r, created); e != nil {
@@ -661,6 +755,11 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 		}
 		if submitted.ScoreKnown {
 			attemptHistory.remember(c, submitted.Score, submitted.MaxScore, trustedObjectiveQuestionResults(choice, c, submitted)...)
+		}
+		// A current explicit failure revokes an old lock before a repair.
+		fixedAnswers, legacyFeedback, e = s.objectiveFixedAnswers(ctx, snapshot, resources, true)
+		if e != nil {
+			return r, e
 		}
 		previous = &c
 		feedback = []answer.Feedback{{Kind: "formal", Message: fmt.Sprintf("本关得分 %s / %s，尚未满分，请复核全部题目和选项", submitted.Score, submitted.MaxScore)}}

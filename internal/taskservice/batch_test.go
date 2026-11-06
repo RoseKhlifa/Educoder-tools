@@ -12,7 +12,7 @@ import (
 )
 
 func batchChoiceJSON(game, title string, challenge, myshixun, pos int64) string {
-	return fmt.Sprintf(`{"st":1,"homework_common_id":44,"game":{"identifier":%q,"id":%d,"myshixun_id":%d},"myshixun":{"id":%d,"identifier":"RUNTIME"},"shixun":{"identifier":"SHIXUN","challenges_count":2},"challenge":{"id":%d,"st":1,"position":%d,"subject":%q,"task_pass":"Choose"},"chooses":[{"challenge_choose_id":10,"challenge_id":%d,"position":1,"category":1,"subject":"First?","challenge_question":[{"option_name":"First","position":0},{"option_name":"Second","position":1}]}]}`, game, gameID(pos), myshixun, myshixun, challenge, pos, title, challenge)
+	return fmt.Sprintf(`{"st":1,"homework_common_id":44,"game":{"identifier":%q,"id":%d,"myshixun_id":%d},"myshixun":{"id":%d,"identifier":"RUNTIME"},"shixun":{"identifier":"SHIXUN","challenges_count":2},"challenge":{"id":%d,"st":1,"position":%d,"subject":%q,"task_pass":"Choose"},"choose_test_cases":{"challenge_chooses_count":1},"chooses":[{"challenge_choose_id":10,"challenge_id":%d,"position":1,"question_type":0,"category":1,"subject":"First?","challenge_question":[{"option_name":"First","position":0},{"option_name":"Second","position":1}]}]}`, game, gameID(pos), myshixun, myshixun, challenge, pos, title, challenge)
 }
 
 func TestRunHomeworkPreservesKnownChildFailureAndDoesNotStartLaterLevels(t *testing.T) {

@@ -575,14 +575,13 @@ func (h *Collector) collectLevel(ctx context.Context, c CollectionReader, owner 
 			s.skip("objective_answer_changed_or_mismatched", true)
 			return nil
 		}
-		scopeBytes, _ := json.Marshal(struct {
-			Game      string
-			Challenge int64
-			Snapshot  answer.ObjectiveSnapshot
-			Answers   []string
-		}{t.Game.Identifier, t.Challenge.ID, snapshot, answers})
-		scope := problem.HashContent(string(scopeBytes))
-		contextComplete := strings.TrimSpace(snapshot.Title) != "" && strings.TrimSpace(snapshot.Statement) != ""
+		// Store the exact context that justified the read-only full-score sheet.
+		// Future upgrades can recover context without re-solving or losing IDs.
+		scope, err := h.Bank.PutObjectiveSnapshot(ctx, snapshot)
+		if err != nil {
+			return err
+		}
+		contextComplete := t.ObjectiveReadComplete() && fresh.ObjectiveReadComplete()
 		context := questionbank.ObjectiveQuestionContext{Kind: "objective", Title: snapshot.Title, Statement: snapshot.Statement, Complete: contextComplete}
 		if !contextComplete {
 			s.skip("objective_context_incomplete", true)
@@ -616,11 +615,9 @@ func (h *Collector) collectLevel(ctx context.Context, c CollectionReader, owner 
 				receipt.ObjectiveAnswerIDs = append(receipt.ObjectiveAnswerIDs, verifiedAnswerID)
 				continue
 			}
-			id, err := h.Bank.AddObjectiveAnswer(ctx, key, answers[i], "platform_collection", "")
+			validation := questionbank.ObjectiveValidation{Passed: true, Confirmed: true, FullScore: true, Score: p.GameScore, MaxScore: p.ChallengeScore, AnswerHash: problem.HashContent(answers[i]), ScopeHash: scope, Feedback: "Read-only collection: exact target full score and complete persisted answer sheet; matching question identities and answers confirmed by two task reads; no explicit conflicting correctness result."}
+			id, err := recordObjectiveBankAnswer(ctx, h.Bank, questionbank.ObjectiveQuestionInput{Question: q, Context: context}, answers[i], "platform_collection", validation)
 			if err != nil {
-				return err
-			}
-			if err = h.Bank.RecordObjectiveValidation(ctx, id, questionbank.ObjectiveValidation{Passed: true, Confirmed: true, FullScore: true, Score: p.GameScore, MaxScore: p.ChallengeScore, AnswerHash: problem.HashContent(answers[i]), ScopeHash: scope, Feedback: "Read-only collection: exact target full score and complete persisted answer sheet; matching question identities and answers confirmed by two task reads; no explicit conflicting correctness result."}); err != nil {
 				return err
 			}
 			if err = h.Bank.RecordObjectiveContribution(ctx, owner, id); err != nil {
@@ -752,7 +749,7 @@ func collectionObjective(t *educoder.Task) (answer.ObjectiveSnapshot, []string, 
 		s.Questions = append(s.Questions, x)
 		answers = append(answers, answerText)
 	}
-	if collectionMedia.MatchString(s.Statement) {
+	if collectionMedia.MatchString(s.Title) || collectionMedia.MatchString(s.Statement) {
 		return s, nil, "objective_media_content_unproven"
 	}
 	if err := answer.ValidateObjectiveCandidate(s, answer.ObjectiveCandidate{Kind: "objective", Answers: answers}); err != nil {

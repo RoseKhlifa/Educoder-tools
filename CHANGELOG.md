@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.100 - 2026-11-06
+
+- Adapt legacy objective answers non-destructively through scoped context aliases, original collection-scope recovery, and exact legacy references; preserve answer, verification, contribution and receipt identities
+- Expand verified historical answer vectors into individual questions idempotently; reject conflicting or newer-failed evidence across legacy and current IDs without inflating alias inventory
+- Validate explicit upstream field presence and complete rosters before bank matching, refresh full question and media snapshots before submission, and bind hidden-result full-score vectors to original single-answer records
+
 ## 0.1.99 - 2026-11-06
 
 - Add context-complete per-question objective reuse with fail-closed fingerprints, fixed verified answer slots, and one full-vector platform submission
