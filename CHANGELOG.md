@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.101 - 2026-11-06
+
+- Preserve objective repair reasoning with image attachments; limit compact-output fallback to the single call after an observed truncation rather than downgrading the entire run
+- Propagate exact-bound refreshed per-question grading into repair history while retaining validated answer locks and rejecting ambiguous results
+- Add independent semantic and dynamic-execution checks for objective questions without widening strict JSON output, increasing retries, or inferring answers from aggregate scores
+
 ## 0.1.100 - 2026-11-06
 
 - Adapt legacy objective answers non-destructively through scoped context aliases, original collection-scope recovery, and exact legacy references; preserve answer, verification, contribution and receipt identities

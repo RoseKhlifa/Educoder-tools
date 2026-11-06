@@ -107,23 +107,29 @@ func (p *objectiveProfileSpy) EstimateObjective(req answer.ObjectiveRequest) (an
 	return p.fakeProvider.EstimateObjective(req)
 }
 
-func TestObjectiveImageRepairsStayCompact(t *testing.T) {
+func TestObjectiveImageRepairsRetainReasoning(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
 		providerErr error
 		thinking    []string
 		passAfter   int
+		sharedImage bool
 	}{
-		{"score repair and pro", nil, []string{"disabled", "disabled", "disabled"}, 3},
-		{"malformed output stays compact", &answer.Error{Kind: "invalid_output_json"}, []string{"disabled", "disabled", "disabled"}, 2},
-		{"actual truncation uses compact output", &answer.Error{Kind: "truncated_output"}, []string{"disabled", "disabled", "disabled"}, 2},
+		{"score repair and pro", nil, []string{"disabled", "enabled", "enabled"}, 3, false},
+		{"shared tutorial does not downgrade text questions", nil, []string{"disabled", "enabled", "enabled"}, 3, true},
+		{"malformed output retains reasoning", &answer.Error{Kind: "invalid_output_json"}, []string{"disabled", "enabled", "enabled"}, 2, false},
+		{"truncation fallback is one call only", &answer.Error{Kind: "truncated_output"}, []string{"disabled", "disabled", "enabled"}, 2, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var task educoder.Task
 			if err := json.Unmarshal([]byte(objectiveJSON()), &task); err != nil {
 				t.Fatal(err)
 			}
-			task.Chooses[0].Subject = `<img src="/api/attachments/diagram"> Which option matches the diagram?`
+			if tc.sharedImage {
+				task.Challenge.Description += `<img src="/api/attachments/diagram"> General tutorial figure.`
+			} else {
+				task.Chooses[0].Subject = `<img src="/api/attachments/diagram"> Which option matches the diagram?`
+			}
 			task.Chooses[0].Options = append(task.Chooses[0].Options, educoder.ChoiceOption{OptionName: "Third", Position: 2})
 			var submits atomic.Int64
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {

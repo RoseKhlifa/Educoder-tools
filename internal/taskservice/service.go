@@ -413,9 +413,9 @@ func recordObjectiveBankAnswer(ctx context.Context, bank *questionbank.Store, in
 	return id, bank.RecordObjectiveValidation(ctx, id, validation)
 }
 
-func (s *Service) recordObjectiveQuestionEvidence(ctx context.Context, client *educoder.Client, snapshot answer.ObjectiveSnapshot, resources []answer.ImageResource, choice *educoder.ChoiceTask, candidate answer.ObjectiveCandidate, submitted *educoder.ChoiceSubmitResult, runID, snapshotHash string) error {
+func (s *Service) recordObjectiveQuestionEvidence(ctx context.Context, client *educoder.Client, snapshot answer.ObjectiveSnapshot, resources []answer.ImageResource, choice *educoder.ChoiceTask, candidate answer.ObjectiveCandidate, submitted *educoder.ChoiceSubmitResult, runID, snapshotHash string) ([]objectiveQuestionResult, error) {
 	if !choice.ReadComplete() {
-		return nil
+		return nil, nil
 	}
 	current := submitted
 	full := submitted != nil && submitted.Passed && submitted.ScoreKnown && submitted.ScoreCheck == "full_score" && submitted.Count == len(candidate.Answers)
@@ -426,7 +426,7 @@ func (s *Service) recordObjectiveQuestionEvidence(ctx context.Context, client *e
 	}
 	results := trustedObjectiveQuestionResults(choice, candidate, current)
 	if !full && len(results) != len(snapshot.Questions) {
-		return nil
+		return nil, nil
 	}
 	for i, question := range snapshot.Questions {
 		correct := full || results[i].Correct
@@ -435,10 +435,14 @@ func (s *Service) recordObjectiveQuestionEvidence(ctx context.Context, client *e
 			v.Score, v.MaxScore = submitted.Score, submitted.MaxScore
 		}
 		if _, err := recordObjectiveBankAnswer(ctx, s.store, objectiveBankInput(snapshot, question, resources, true), candidate.Answers[i], "platform_submission", v); err != nil {
-			return err
+			return nil, err
 		}
 	}
-	return nil
+	// The same exact-bound results drive both durable evidence and the next
+	// repair request. A read-only fallback must not disappear from feedback just
+	// because choose_build omitted its test_sets. Hidden standard answers never
+	// enter either result.
+	return results, nil
 }
 
 type objectiveState struct {
@@ -588,11 +592,14 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			// pro profiles can consume the entire 4096-token budget before the
 			// JSON answer is emitted. Leave enough room for a complete candidate.
 			profile.MaxTokens = 8192
-			if compactOutput || len(resources) > 0 {
-				// Image questions need the full output budget for compact JSON.
-				// Reasoning can consume the response window before the answer.
+			if compactOutput {
+				// Only an observed truncated response needs a compact retry.
+				// Images (including shared tutorial figures) are not evidence that
+				// semantic repair should lose reasoning. This fallback applies to
+				// one call, not every subsequent repair in the run.
 				profile.Thinking, profile.ReasoningEffort = "disabled", ""
 			}
+			compactOutput = false
 			pr := answer.ObjectiveRequest{Problem: snapshot, Previous: previous, Feedback: append(append([]answer.Feedback(nil), legacyFeedback...), attemptHistory.feedback(feedback)...), Profile: profile, Resources: resources}
 			if fixedReady {
 				pr.FixedAnswers = append([]string(nil), fixedAnswers...)
@@ -645,7 +652,7 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			}
 			if e != nil {
 				if retryableObjectiveModelError(e) && attempt+1 < s.cfg.MaxEvaluations && r.ModelCalls < s.cfg.MaxModelCalls && ctx.Err() == nil {
-					compactOutput = compactOutput || answer.IsTruncatedOutput(e)
+					compactOutput = answer.IsTruncatedOutput(e)
 					r.Diagnostics = append(r.Diagnostics, e.Error())
 					feedback = []answer.Feedback{{Kind: "model", Message: e.Error()}}
 					if persistErr := s.persistObjective(ctx, req, r, created); persistErr != nil {
@@ -740,7 +747,8 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			r.Status = "verification_persistence_failed"
 			return r, e
 		}
-		if e = s.recordObjectiveQuestionEvidence(ctx, client, snapshot, resources, choice, c, submitted, r.RunID, hash); e != nil {
+		questionResults, e := s.recordObjectiveQuestionEvidence(ctx, client, snapshot, resources, choice, c, submitted, r.RunID, hash)
+		if e != nil {
 			r.Status = "verification_persistence_failed"
 			return r, e
 		}
@@ -754,7 +762,7 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			return r, nil
 		}
 		if submitted.ScoreKnown {
-			attemptHistory.remember(c, submitted.Score, submitted.MaxScore, trustedObjectiveQuestionResults(choice, c, submitted)...)
+			attemptHistory.remember(c, submitted.Score, submitted.MaxScore, questionResults...)
 		}
 		// A current explicit failure revokes an old lock before a repair.
 		fixedAnswers, legacyFeedback, e = s.objectiveFixedAnswers(ctx, snapshot, resources, true)
