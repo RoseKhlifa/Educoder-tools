@@ -57,19 +57,6 @@ func progressOptional(progress *educoder.HomeworkProgress, id int64) bool {
 // The full upstream assignment roster must still be present and unambiguous.
 // Optional entries are omitted from service counts, not from identity checks.
 func requiredHomeworkCount(hw educoder.Homework, progress *educoder.HomeworkProgress) (int, bool) {
-	if progress == nil || hw.ChallengeCount < 1 || hw.ChallengeCount > 100 || len(progress.Challenges) != hw.ChallengeCount {
-		return 0, false
-	}
-	seen := map[int64]bool{}
-	required := 0
-	for _, level := range progress.Challenges {
-		if level.ChallengeID <= 0 || seen[level.ChallengeID] || level.Name == "" {
-			return 0, false
-		}
-		seen[level.ChallengeID] = true
-		if !level.IsOptional() {
-			required++
-		}
-	}
-	return required, true
+	count, _, valid := educoder.RequiredHomeworkCounts(hw, progress)
+	return count, valid
 }

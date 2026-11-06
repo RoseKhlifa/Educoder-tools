@@ -11,9 +11,19 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
+	"strings"
 )
 
 var ErrHomeworkRuntimeMissing = errors.New("homework has no existing runtime")
+var ErrHomeworkTaskIdentity = errors.New("homework task identity mismatches planned roster")
+var ErrHomeworkTaskKind = errors.New("homework task question kind is unsupported or mismatched")
+
+// HomeworkRosterPartialError isolates runtime rows that cannot be uniquely
+// bound. The returned roster retains them for accounting, but never executes
+// or picks one of their conflicting game identities.
+type HomeworkRosterPartialError struct{ Diagnostics []string }
+
+func (e *HomeworkRosterPartialError) Error() string { return strings.Join(e.Diagnostics, "; ") }
 
 // HomeworkLevel belongs to the selected assignment, rather than every level
 // in the underlying shixun. Position is the runtime's actual position and may
@@ -27,6 +37,7 @@ type HomeworkLevel struct {
 	// A status=3 runtime row has a canonical challenge and position but no
 	// game yet. Resolve it immediately before execution, never in collection.
 	RuntimePending bool
+	RosterIssue    string
 }
 
 type HomeworkRoster struct {
@@ -45,7 +56,7 @@ func (r *HomeworkRoster) RequiredLevels() []HomeworkLevel {
 	}
 	levels := make([]HomeworkLevel, 0, len(r.Levels))
 	for _, level := range r.Levels {
-		if !level.Optional {
+		if !level.Optional && level.RosterIssue == "" {
 			levels = append(levels, level)
 		}
 	}
@@ -125,9 +136,23 @@ func (c *Client) HomeworkRoster(ctx context.Context, course string, hw Homework)
 		return nil, errors.New("runtime roster exceeds limit")
 	}
 	r := &HomeworkRoster{Course: course, HomeworkID: hw.ID, Shixun: h.Shixun, MyShixun: h.MyShixun}
-	seenGame := map[string]int{}
-	seenPosition := map[int]int{}
+	// Count first, then select. Reject every participant in a collision instead
+	// of keeping whichever ambiguous row happened to arrive first.
+	gameCounts, positionCounts, selectedCounts := map[string]int{}, map[int]int{}, map[int64]int{}
+	for _, g := range games {
+		ch, selected := canonical[g.Name]
+		if !selected || ch.IsOptional() {
+			continue
+		}
+		selectedCounts[ch.ChallengeID]++
+		positionCounts[g.Position]++
+		if g.Identifier != "" {
+			gameCounts[g.Identifier]++
+		}
+	}
 	seenSelected := map[int64]bool{}
+	issues := map[int64]string{}
+	partial := &HomeworkRosterPartialError{}
 	for i, g := range games {
 		ch, selected := canonical[g.Name]
 		// Runtime lists may include other assignment levels and elective rows.
@@ -136,29 +161,31 @@ func (c *Client) HomeworkRoster(ctx context.Context, course string, hw Homework)
 			continue
 		}
 		row := i + 1
-		if g.Position < 1 || g.Position > 500 {
-			return nil, fmt.Errorf("ambiguous runtime game roster: row=%d field=position reason=out_of_range", row)
-		}
-		if previous := seenPosition[g.Position]; previous != 0 {
-			return nil, fmt.Errorf("ambiguous runtime game roster: row=%d field=position reason=duplicate previous_row=%d", row, previous)
-		}
-		if seenSelected[ch.ChallengeID] {
-			return nil, fmt.Errorf("ambiguous runtime game roster: row=%d field=name reason=duplicate_selected_challenge", row)
-		}
-		if ch.ST != nil && g.ST != nil && *ch.ST != *g.ST {
-			return nil, fmt.Errorf("ambiguous runtime game roster: row=%d field=challenge_st reason=mismatch", row)
+		issue := ""
+		switch {
+		case g.Position < 1 || g.Position > 500:
+			issue = fmt.Sprintf("ambiguous runtime game roster: row=%d field=position reason=out_of_range", row)
+		case positionCounts[g.Position] > 1:
+			issue = fmt.Sprintf("ambiguous runtime game roster: row=%d field=position reason=duplicate", row)
+		case selectedCounts[ch.ChallengeID] > 1:
+			issue = fmt.Sprintf("ambiguous runtime game roster: row=%d field=name reason=duplicate_selected_challenge", row)
+		case ch.ST != nil && g.ST != nil && *ch.ST != *g.ST:
+			issue = fmt.Sprintf("ambiguous runtime game roster: row=%d field=challenge_st reason=mismatch", row)
 		}
 		pending := g.Identifier == "" && g.Status == 3
-		if !pending {
+		if issue == "" && !pending {
 			if validIdentifier(g.Identifier) != nil {
-				return nil, fmt.Errorf("ambiguous runtime game roster: row=%d field=identifier reason=invalid_initialized_game", row)
+				issue = fmt.Sprintf("ambiguous runtime game roster: row=%d field=identifier reason=invalid_initialized_game", row)
 			}
-			if previous := seenGame[g.Identifier]; previous != 0 {
-				return nil, fmt.Errorf("ambiguous runtime game roster: row=%d field=identifier reason=duplicate previous_row=%d", row, previous)
+			if gameCounts[g.Identifier] > 1 {
+				issue = fmt.Sprintf("ambiguous runtime game roster: row=%d field=identifier reason=duplicate", row)
 			}
-			seenGame[g.Identifier] = row
 		}
-		seenPosition[g.Position] = row
+		if issue != "" {
+			issues[ch.ChallengeID] = issue
+			partial.Diagnostics = append(partial.Diagnostics, issue)
+			continue
+		}
 		seenSelected[ch.ChallengeID] = true
 		r.Levels = append(r.Levels, HomeworkLevel{ChallengeID: ch.ChallengeID, Game: g.Identifier, Title: g.Name, Position: g.Position, ST: ch.ST, RuntimePending: pending})
 	}
@@ -169,7 +196,13 @@ func (c *Client) HomeworkRoster(ctx context.Context, course string, hw Homework)
 		// An elective level does not need an executable runtime game. Its
 		// canonical identity is retained, while every required level must map.
 		if !ch.IsOptional() {
-			return nil, errors.New("homework runtime mapping is incomplete")
+			issue := issues[ch.ChallengeID]
+			if issue == "" {
+				issue = "homework runtime mapping is incomplete"
+				partial.Diagnostics = append(partial.Diagnostics, issue)
+			}
+			r.Levels = append(r.Levels, HomeworkLevel{ChallengeID: ch.ChallengeID, Title: ch.Name, ST: ch.ST, RosterIssue: issue})
+			continue
 		}
 		r.Levels = append(r.Levels, HomeworkLevel{ChallengeID: ch.ChallengeID, Title: ch.Name, ST: ch.ST, Optional: true})
 	}
@@ -185,21 +218,24 @@ func (c *Client) HomeworkRoster(ctx context.Context, course string, hw Homework)
 		}
 		return r.Levels[i].Position < r.Levels[j].Position
 	})
+	if len(partial.Diagnostics) > 0 {
+		return r, partial
+	}
 	return r, nil
 }
 
 func (r *HomeworkRoster) ValidateTask(t *Task, level HomeworkLevel) error {
-	if level.RuntimePending || validIdentifier(level.Game) != nil {
+	if level.RosterIssue != "" || level.RuntimePending || validIdentifier(level.Game) != nil {
 		return errors.New("homework level runtime has not been resolved")
 	}
 	if r == nil || t == nil || t.HomeworkID != r.HomeworkID || (t.CourseIdentifier != "" && t.CourseIdentifier != r.Course) || t.Game.Identifier != level.Game || t.Game.ID < 1 || t.Challenge.ID != level.ChallengeID || t.Challenge.Subject != level.Title || t.Challenge.Position != level.Position || t.Shixun.Identifier != r.Shixun || t.MyShixun.Identifier != r.MyShixun || t.MyShixun.ID < 1 || t.Game.MyShixunID != t.MyShixun.ID || (r.MyShixunID > 0 && t.MyShixun.ID != r.MyShixunID) {
-		return errors.New("homework task identity or question kind mismatches planned roster")
+		return ErrHomeworkTaskIdentity
 	}
 	if level.Optional || t.IsOptional() {
 		return ErrOptionalTask
 	}
 	if t.Kind() == TaskKindUnknown || (level.ST != nil && (t.Challenge.ST == nil || *t.Challenge.ST != *level.ST)) {
-		return errors.New("homework task identity or question kind mismatches planned roster")
+		return ErrHomeworkTaskKind
 	}
 	return nil
 }
@@ -215,7 +251,7 @@ func (c *Client) BindHomeworkLevel(r *HomeworkRoster, level HomeworkLevel) (*Cli
 	if level.Optional {
 		return nil, ErrOptionalTask
 	}
-	if level.RuntimePending || validIdentifier(level.Game) != nil {
+	if level.RosterIssue != "" || level.RuntimePending || validIdentifier(level.Game) != nil {
 		return nil, errors.New("homework level runtime has not been resolved")
 	}
 	clone := *c

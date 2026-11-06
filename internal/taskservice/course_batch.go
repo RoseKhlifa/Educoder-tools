@@ -239,6 +239,22 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 			emit("verified", "已完成的作业已自动跳过", nil)
 			continue
 		}
+		childRequest := Request{Owner: req.Owner, Course: p.course.Identifier, HomeworkID: p.hw.ID, Mode: solver.ModeSubmit}
+		block, fuseErr := s.homeworkFuse(ctx, childRequest, p.hw, progress, time.Now().UTC())
+		if fuseErr != nil {
+			h.Status, h.ReasonCode = "needs_service", "blocker_state_unavailable"
+			out.NeedsServiceHomeworks++
+			emit("service_pending", "这份作业的恢复状态需要核验，已保留进度", nil)
+			continue
+		}
+		if block != nil {
+			h.Status, h.ReasonCode = "needs_service", "unchanged_failure_cooldown"
+			h.Result = &BatchResult{Kind: "homework", Scope: "homework", Status: "needs_service", ReasonCode: block.Reason,
+				Diagnostics: []string{"上次已确认失败且作业进度未变化；24 小时内不重复消耗资源，可单独重试这份作业。"}}
+			out.NeedsServiceHomeworks++
+			emit("service_pending", "这份作业没有新的可用进展，已暂停重复安排", nil)
+			continue
+		}
 		remaining := budget - out.CostMicroUSD - out.ReservedMicroUSD
 		if remaining <= 0 {
 			h.Status, h.ReasonCode = "needs_service", "budget_exhausted"
@@ -247,7 +263,8 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 			continue
 		}
 		childKey := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%d", key, p.course.Identifier, p.hw.ID)))
-		batch, childErr := s.RunHomework(ctx, client, Request{Owner: req.Owner, Course: p.course.Identifier, HomeworkID: p.hw.ID, Mode: solver.ModeSubmit, IdempotencyKey: fmt.Sprintf("course-%x", childKey), BudgetMicroUSD: remaining}, func(p Progress) {
+		childRequest.IdempotencyKey, childRequest.BudgetMicroUSD = fmt.Sprintf("course-%x", childKey), remaining
+		batch, childErr := s.RunHomework(ctx, client, childRequest, func(p Progress) {
 			emit(p.Phase, "正在处理作业", p.Batch)
 		})
 		h.Result = batch
@@ -275,6 +292,15 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 			h.Status, h.ReasonCode = "needs_service", "execution_failed"
 			if batch != nil && batch.ReasonCode != "" {
 				h.ReasonCode = batch.ReasonCode
+			}
+			if deterministicHomeworkFailure(h.ReasonCode) {
+				// Persist only after an independent read proves the exact canonical
+				// score/requirement roster is unchanged. A partial read cannot fuse.
+				if after, readErr := client.HomeworkProgress(ctx, p.course.Identifier, p.hw.ID); readErr == nil {
+					if saveErr := s.rememberHomeworkFailure(ctx, childRequest, p.hw, progress, after, batch, time.Now().UTC()); saveErr != nil {
+						h.ReasonCode = "blocker_state_persistence_failed"
+					}
+				}
 			}
 			out.NeedsServiceHomeworks++
 			emit("service_pending", "这份作业已转交服务人员处理", nil)

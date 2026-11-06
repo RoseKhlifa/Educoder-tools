@@ -98,6 +98,11 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 		out.Status = "unsupported_roster"
 		return out, errors.New("selected homework is not a shixun")
 	}
+	if guardErr := s.guardPriorUnknownRuns(ctx, req); guardErr != nil {
+		out.Status, out.ReasonCode = "verification_unconfirmed", "submission_uncertain"
+		out.Diagnostics = append(out.Diagnostics, guardErr.Error())
+		return out, guardErr
+	}
 	roster, err := client.HomeworkRoster(ctx, req.Course, *hw)
 	if errors.Is(err, educoder.ErrHomeworkRuntimeMissing) {
 		// A purely elective assignment does not require a runtime at all.
@@ -121,8 +126,16 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 		}
 		roster, err = client.HomeworkRoster(ctx, req.Course, *hw)
 	}
-	if err != nil {
+	var partialRoster *educoder.HomeworkRosterPartialError
+	if err != nil && (!errors.As(err, &partialRoster) || roster == nil) {
 		return &BatchResult{Kind: "homework", Scope: "homework", Status: "unsupported_roster", Diagnostics: []string{err.Error()}}, err
+	}
+	if partialRoster != nil {
+		for _, diagnostic := range partialRoster.Diagnostics {
+			if strings.Contains(diagnostic, "homework runtime mapping is incomplete") {
+				return &BatchResult{Kind: "homework", Scope: "homework", Status: "unsupported_roster", Diagnostics: partialRoster.Diagnostics}, err
+			}
+		}
 	}
 	if len(roster.Levels) == 0 || len(roster.Levels) > 100 {
 		out.Status = "unsupported_roster"
@@ -130,38 +143,49 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 	}
 	sort.Slice(roster.Levels, func(i, j int) bool { return roster.Levels[i].Position < roster.Levels[j].Position })
 	levels := make([]educoder.HomeworkLevel, 0, len(roster.Levels))
+	tasks := map[int64]*educoder.Task{}
 	out.Levels = []BatchLevel{}
-	// Existing games are checked before the first solver call. A legitimate
-	// not-yet-created game has no task to read; preserve its canonical identity
-	// and resolve it just in time instead of rejecting the entire assignment.
+	// A read-only precheck failure excludes only this exact target. It never
+	// binds a solver client or chooses an ambiguous runtime identity.
 	for _, l := range roster.Levels {
 		if l.Optional {
 			continue
 		}
-		if l.RuntimePending {
-			levels = append(levels, l)
-			out.Levels = append(out.Levels, BatchLevel{Position: l.Position, ChallengeID: l.ChallengeID, Title: l.Title, Status: "planned", MaxModelCalls: s.cfg.MaxModelCalls})
-			continue
-		}
-		t, e := client.CollectionLoadTask(ctx, req.Course, req.HomeworkID, l.Game)
-		if e != nil {
-			if errors.Is(e, educoder.ErrOptionalTask) {
+		entry := BatchLevel{Position: l.Position, ChallengeID: l.ChallengeID, Title: l.Title, Status: "planned", MaxModelCalls: s.cfg.MaxModelCalls}
+		precheckErr := error(nil)
+		if l.RosterIssue != "" {
+			entry.Status, entry.ReasonCode = "precheck_failed", "runtime_roster_ambiguous"
+			precheckErr = errors.New(l.RosterIssue)
+		} else if !l.RuntimePending {
+			t, readErr := client.CollectionLoadTask(ctx, req.Course, req.HomeworkID, l.Game)
+			precheckErr = readErr
+			if precheckErr == nil {
+				precheckErr = roster.ValidateTask(t, l)
+			}
+			if errors.Is(precheckErr, educoder.ErrOptionalTask) {
 				continue
 			}
-			out.Status = "unsupported_roster"
-			out.Diagnostics = append(out.Diagnostics, e.Error())
-			return out, e
-		}
-		if e = roster.ValidateTask(t, l); e != nil {
-			if errors.Is(e, educoder.ErrOptionalTask) {
-				continue
+			if precheckErr == nil {
+				tasks[l.ChallengeID] = t
+			} else {
+				entry.Status, entry.ReasonCode = "precheck_failed", "task_precheck_failed"
+				if errors.Is(precheckErr, educoder.ErrHomeworkTaskIdentity) {
+					entry.ReasonCode = "task_identity_mismatch"
+				} else if errors.Is(precheckErr, educoder.ErrHomeworkTaskKind) {
+					entry.ReasonCode = "unsupported_question_kind"
+				}
 			}
-			out.Status = "unsupported_roster"
-			out.Diagnostics = append(out.Diagnostics, e.Error())
-			return out, e
+		}
+		if precheckErr != nil {
+			if ctx.Err() != nil {
+				out.Status, out.ReasonCode = "canceled", "canceled"
+				return out, ctx.Err()
+			}
+			out.Status, out.ReasonCode = "unsupported_roster", entry.ReasonCode
+			out.Diagnostics = append(out.Diagnostics, fmt.Sprintf("第 %d 关预检未通过：%s", l.Position, precheckErr.Error()))
 		}
 		levels = append(levels, l)
-		out.Levels = append(out.Levels, BatchLevel{Position: l.Position, ChallengeID: l.ChallengeID, Title: l.Title, Status: "planned", MaxModelCalls: s.cfg.MaxModelCalls})
+		out.Levels = append(out.Levels, entry)
 	}
 	out.TotalLevels = len(out.Levels)
 	if out.TotalLevels == 0 {
@@ -174,6 +198,11 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 	if err != nil {
 		return nil, err
 	}
+	if guardErr := s.guardHomeworkUnknown(ctx, req, roster, progress); guardErr != nil {
+		out.Status, out.ReasonCode = "verification_unconfirmed", "submission_uncertain"
+		out.Diagnostics = append(out.Diagnostics, guardErr.Error())
+		return out, guardErr
+	}
 	full := map[int64]educoder.ChallengeProgress{}
 	for _, p := range progress.Challenges {
 		if p.HasFullScore() {
@@ -182,6 +211,9 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 	}
 	for _, l := range levels {
 		i := batchLevelIndex(out, l.ChallengeID)
+		if out.Levels[i].Status == "precheck_failed" {
+			continue
+		}
 		if progressOptional(progress, l.ChallengeID) {
 			omitBatchLevel(out, i)
 			continue
@@ -201,7 +233,7 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 		if i < 0 {
 			continue
 		}
-		if out.Levels[i].Status == "skipped" {
+		if out.Levels[i].Status == "skipped" || out.Levels[i].Status == "precheck_failed" {
 			continue
 		}
 		if err := ctx.Err(); err != nil {
@@ -244,7 +276,7 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 		emit(BatchProgress{TotalLevels: out.TotalLevels, CompletedLevels: out.CompletedLevels, SkippedLevels: out.SkippedLevels, FailedLevels: out.FailedLevels, CurrentPosition: l.Position, CurrentTitle: l.Title}, "running", fmt.Sprintf("正在完成第 %d 关：%s", l.Position, l.Title))
 		if l.RuntimePending {
 			emit(BatchProgress{TotalLevels: out.TotalLevels, CompletedLevels: out.CompletedLevels, SkippedLevels: out.SkippedLevels, CurrentPosition: l.Position, CurrentTitle: l.Title}, "initializing", "正在准备尚未创建的关卡")
-			resolved, _, resolveErr := client.ResolveHomeworkLevel(ctx, roster, l)
+			resolved, task, resolveErr := client.ResolveHomeworkLevel(ctx, roster, l)
 			if errors.Is(resolveErr, educoder.ErrOptionalTask) {
 				omitBatchLevel(out, i)
 				continue
@@ -257,6 +289,7 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 				return out, resolveErr
 			}
 			l = resolved
+			tasks[l.ChallengeID] = task
 		}
 		bound, e := client.BindHomeworkLevel(roster, l)
 		if e != nil {
@@ -320,6 +353,15 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 			if runErr != nil {
 				appendDiagnostic(runErr.Error())
 			}
+			if mayContinueAfterLevel(tasks[l.ChallengeID], single, runErr) {
+				// Re-read explicit capabilities after a known failure. A changed
+				// or locked task cannot inherit stale preflight permission.
+				freshTask, readErr := client.CollectionLoadTask(ctx, req.Course, req.HomeworkID, l.Game)
+				if readErr == nil && roster.ValidateTask(freshTask, l) == nil && mayContinueAfterLevel(freshTask, single, runErr) {
+					emit(BatchProgress{TotalLevels: out.TotalLevels, CompletedLevels: out.CompletedLevels, SkippedLevels: out.SkippedLevels, FailedLevels: out.FailedLevels}, "service_pending", fmt.Sprintf("第 %d 关已记录失败，继续处理后续可访问关卡", l.Position))
+					continue
+				}
+			}
 			return out, runErr
 		}
 		out.Levels[i].Score = single.Score
@@ -359,34 +401,53 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 		out.Diagnostics = append(out.Diagnostics, finalErr.Error())
 		return out, finalErr
 	}
+	// Reconcile every required row; do not return at the first missing score.
+	// Counters describe final evidence, not historical preflight passes.
+	unconfirmed := false
 	for _, l := range levels {
 		i := batchLevelIndex(out, l.ChallengeID)
 		if i < 0 {
 			continue
 		}
 		if progressOptional(finalProgress, l.ChallengeID) {
-			omitBatchLevel(out, i)
+			out.Levels = append(out.Levels[:i], out.Levels[i+1:]...)
+			out.TotalLevels--
+			continue
+		}
+		entry := &out.Levels[i]
+		if entry.Status == "precheck_failed" {
+			out.FailedLevels++
 			continue
 		}
 		p, ok := findFull(finalProgress, l.ChallengeID)
 		if !ok {
-			out.Status = "verification_unconfirmed"
 			out.FailedLevels++
-			out.Levels[i].Status = "verification_unconfirmed"
+			if entry.Status == "passed" || entry.Status == "planned" || entry.Status == "skipped" {
+				entry.Status, entry.ReasonCode = "verification_unconfirmed", "verification_unconfirmed"
+				unconfirmed = true
+			}
 			out.Diagnostics = append(out.Diagnostics, fmt.Sprintf("第 %d 关最终满分状态未确认", l.Position))
-			return out, errors.New("final homework verification did not confirm every planned level")
+			continue
 		}
-		out.Levels[i].Score, out.Levels[i].MaxScore = p.GameScore, p.ChallengeScore
+		entry.Score, entry.MaxScore = p.GameScore, p.ChallengeScore
+		if entry.Status == "skipped" {
+			// Already counted during preflight.
+		} else if entry.Status != "passed" {
+			entry.Status, entry.ReasonCode = "passed", ""
+			out.CompletedLevels++
+		}
 	}
-	out.CurrentPosition = 0
-	out.CurrentTitle = ""
+	out.CurrentPosition, out.CurrentTitle = 0, ""
 	if out.CompletedLevels == out.TotalLevels && out.FailedLevels == 0 {
-		out.Status = "passed"
+		out.Status, out.ReasonCode = "passed", ""
 		if out.TotalLevels == 0 {
 			out.ReasonCode = "no_required_levels"
 		}
-	} else {
-		out.Status = "verification_unconfirmed"
+	} else if unconfirmed {
+		out.Status, out.ReasonCode = "verification_unconfirmed", "verification_unconfirmed"
+		return out, errors.New("final homework verification did not confirm every planned level")
+	} else if out.Status == "running" {
+		out.Status, out.ReasonCode = "needs_service", "service_required"
 	}
 	return out, nil
 }

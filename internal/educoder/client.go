@@ -162,11 +162,14 @@ func (h Homework) CommonSubmissionStatus() string {
 }
 
 type Task struct {
-	RequiredStatus string  `json:"status"`
-	VNCURL         VNCFlag `json:"vnc_url,omitempty"`
-	ST             *int    `json:"st"`
-	GameCount      int     `json:"game_count"`
-	Game           struct {
+	RequiredStatus string `json:"status"`
+	// Both flags must be explicit booleans before a confirmed failed level may
+	// be bypassed. challenge.task_pass remains the statement, not a permission.
+	SkipLevel *bool   `json:"skip_level,omitempty"`
+	VNCURL    VNCFlag `json:"vnc_url,omitempty"`
+	ST        *int    `json:"st"`
+	GameCount int     `json:"game_count"`
+	Game      struct {
 		ID         int64  `json:"id"`
 		Identifier string `json:"identifier"`
 		MyShixunID int64  `json:"myshixun_id"`
@@ -188,6 +191,7 @@ type Task struct {
 		Identifier      string `json:"identifier"`
 		Name            string `json:"name"`
 		ChallengesCount int    `json:"challenges_count"`
+		TaskPass        *bool  `json:"task_pass,omitempty"`
 	} `json:"shixun"`
 	MyShixun struct {
 		ID         int64  `json:"id"`

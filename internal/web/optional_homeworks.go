@@ -2,7 +2,6 @@ package web
 
 import (
 	"context"
-	"strings"
 	"sync"
 	"time"
 
@@ -75,24 +74,12 @@ send:
 }
 
 func applyRequiredProgress(dto *homeworkDTO, homework educoder.Homework, progress *educoder.HomeworkProgress) {
-	if !dto.AutomaticSupported || progress == nil || homework.ChallengeCount < 1 || homework.ChallengeCount > 100 || len(progress.Challenges) != homework.ChallengeCount {
+	if !dto.AutomaticSupported {
 		return
 	}
-	ids, names := map[int64]bool{}, map[string]bool{}
-	required, completed := 0, 0
-	for _, challenge := range progress.Challenges {
-		name := strings.TrimSpace(challenge.Name)
-		if challenge.ChallengeID <= 0 || name == "" || ids[challenge.ChallengeID] || names[name] {
-			return
-		}
-		ids[challenge.ChallengeID], names[name] = true, true
-		if challenge.IsOptional() {
-			continue
-		}
-		required++
-		if challenge.HasFullScore() {
-			completed++
-		}
+	required, completed, valid := educoder.RequiredHomeworkCounts(homework, progress)
+	if !valid {
+		return
 	}
 	dto.RequiredKnown = true
 	dto.RequiredCount, dto.FinishedRequired = &required, &completed

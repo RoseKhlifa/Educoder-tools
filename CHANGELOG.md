@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.109 - 2026-11-06
+
+- Continue confirmed per-level failures only when the upstream task explicitly enables `skip_level` and `task_pass`; unknown writes, cancellations and unconfirmed results still stop.
+- Isolate roster and preflight failures per level, reconcile every required level before reporting completion, and keep exact required/completed counters.
+- Add owner/course/homework/version/evidence-bound no-progress cooldowns and unknown-submission guards to prevent wasteful duplicate runs.
+
 ## 0.1.108 - 2026-11-06
 
 - Bound programming and objective attempts, model profiles and provider recovery to finite per-level budgets; stop repeated candidates without automatic paid continuation
