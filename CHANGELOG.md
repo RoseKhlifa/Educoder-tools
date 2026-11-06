@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.104 - 2026-11-06
+
+- Break repeated objective-answer anchoring with one bounded clean per-question review sweep inside existing model and evaluation limits
+- Retain the exact full original roster, shared material and all inspected media during focused review; assemble and submit only a complete vector while preserving verified locks
+- Keep duplicate-failure suppression, unknown-submission stops, current-snapshot revalidation, and per-call durable usage accounting unchanged
+
 ## 0.1.103 - 2026-11-06
 
 - Clarify generic decision-coverage reasoning for compound predicates, nested branches, loops and recursive re-evaluation without embedding task-specific answers

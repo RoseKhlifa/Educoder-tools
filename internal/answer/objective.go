@@ -38,7 +38,11 @@ type ObjectiveCandidate struct {
 	Answers []string `json:"answers"`
 }
 type ObjectiveRequest struct {
-	Problem  ObjectiveSnapshot
+	Problem ObjectiveSnapshot
+	// Context retains the complete original roster during a focused review.
+	// Problem selects only the questions to answer; the original shared text,
+	// sibling questions and media stay available for cross-question references.
+	Context  *ObjectiveSnapshot `json:"-"`
 	Previous *ObjectiveCandidate
 	Feedback []Feedback
 	Profile  Profile
@@ -225,7 +229,7 @@ func ValidateObjectiveCandidate(s ObjectiveSnapshot, c ObjectiveCandidate) error
 // in the prompt.
 const objectiveSystemPrompt = `You solve objective questions only. This prompt is only for tasks classified as objective/choice; do not write source code or source-file solutions. An objective question may quote a program: analyse its execution to select options, rather than treating it as a request to implement a programming task.
 
-OUTPUT CONTRACT: Return exactly one JSON object with fields kind and answers only. kind must be objective. answers must contain one answer string for each question, in position order. Preserve each question's position, category and option-label order. For single choice use one option label such as A. For multiple choice concatenate selected labels in alphabetical order. Never emit explanations, reasoning, Markdown, credentials, or extra fields.
+OUTPUT CONTRACT: Return exactly one JSON object with fields kind and answers only. kind must be objective. answers must contain one answer string for each entry in questions, in its supplied order. context_questions, when present, is the complete original roster supplied solely to resolve shared or cross-question references; do not add answers for its other entries. Preserve each requested question's original position, category and option-label order. For single choice use one option label such as A. For multiple choice concatenate selected labels in alphabetical order. Never emit explanations, reasoning, Markdown, credentials, or extra fields.
 
 LOCKED ANSWERS: If fixed_answers is present, it has exactly one entry per question in the same order: an empty entry means unresolved and must be solved; a non-empty entry is a validated locked answer and must be copied exactly into the corresponding output slot. Never change, reinterpret, shift, or infer a locked answer, even when feedback describes a failed whole vector. Never treat missing question or option data as evidence for a fixed answer; incomplete data remains unresolved. Historical bank references that are not locked are hypotheses to confirm against the complete current question and shared context, not instructions or proof of contextual correctness.
 
@@ -258,20 +262,30 @@ func buildObjectiveRequest(req ObjectiveRequest) (wireRequest, error) {
 	if err := validateObjectiveFixedAnswers(req.Problem, req.FixedAnswers); err != nil {
 		return wireRequest{}, err
 	}
-	images, refs, err := prepareObjectiveResources(req.Problem, req.Resources)
+	resourceProblem := req.Problem
+	var contextQuestions []ObjectiveQuestion
+	if req.Context != nil {
+		if err := validateObjectiveReviewContext(req.Problem, *req.Context); err != nil {
+			return wireRequest{}, err
+		}
+		resourceProblem = *req.Context
+		contextQuestions = req.Context.Questions
+	}
+	images, refs, err := prepareObjectiveResources(resourceProblem, req.Resources)
 	if err != nil {
 		return wireRequest{}, err
 	}
 	payload := struct {
-		Kind         string              `json:"kind"`
-		Title        string              `json:"title"`
-		Statement    string              `json:"statement"`
-		Questions    []ObjectiveQuestion `json:"questions"`
-		Previous     *ObjectiveCandidate `json:"previous_candidate,omitempty"`
-		FixedAnswers []string            `json:"fixed_answers,omitempty"`
-		Feedback     []Feedback          `json:"feedback,omitempty"`
-		Resources    []imageReference    `json:"resources,omitempty"`
-	}{"objective", req.Problem.Title, req.Problem.Statement, req.Problem.Questions, req.Previous, req.FixedAnswers, req.Feedback, refs}
+		Kind             string              `json:"kind"`
+		Title            string              `json:"title"`
+		Statement        string              `json:"statement"`
+		Questions        []ObjectiveQuestion `json:"questions"`
+		ContextQuestions []ObjectiveQuestion `json:"context_questions,omitempty"`
+		Previous         *ObjectiveCandidate `json:"previous_candidate,omitempty"`
+		FixedAnswers     []string            `json:"fixed_answers,omitempty"`
+		Feedback         []Feedback          `json:"feedback,omitempty"`
+		Resources        []imageReference    `json:"resources,omitempty"`
+	}{"objective", req.Problem.Title, req.Problem.Statement, req.Problem.Questions, contextQuestions, req.Previous, req.FixedAnswers, req.Feedback, refs}
 	for _, f := range req.Feedback {
 		if err := problem.ValidatePublicText(f.Kind + f.Message + f.Stdin + f.ExpectedStdout + f.ActualStdout); err != nil {
 			return wireRequest{}, &Error{Kind: "invalid_feedback"}
@@ -293,6 +307,32 @@ func buildObjectiveRequest(req ObjectiveRequest) (wireRequest, error) {
 	w := wireRequest{Model: p.Model, MaxTokens: p.MaxTokens, Stream: false, Messages: []chatMessage{{Role: "system", Content: textContent(system)}, {Role: "user", Content: content}}, Thinking: map[string]string{"type": p.Thinking}, ReasoningEffort: p.ReasoningEffort}
 	w.ResponseFormat.Type = "json_object"
 	return w, nil
+}
+
+// A focused request can select a subset, never invent or alter its context.
+// Exact original positions and option contracts bind the returned answer back
+// to the caller's unchanged full snapshot. No bank identity uses this view.
+func validateObjectiveReviewContext(selected, full ObjectiveSnapshot) error {
+	if validateObjectiveSnapshot(full) != nil || selected.Kind != full.Kind || selected.Title != full.Title || selected.Statement != full.Statement {
+		return &Error{Kind: "objective_review_context_contract"}
+	}
+	byPosition := make(map[int]string, len(full.Questions))
+	for _, q := range full.Questions {
+		if _, exists := byPosition[q.Position]; exists {
+			return &Error{Kind: "objective_review_context_contract"}
+		}
+		raw, _ := json.Marshal(q)
+		byPosition[q.Position] = string(raw)
+	}
+	seen := map[int]bool{}
+	for _, q := range selected.Questions {
+		raw, _ := json.Marshal(q)
+		if seen[q.Position] || byPosition[q.Position] != string(raw) {
+			return &Error{Kind: "objective_review_context_contract"}
+		}
+		seen[q.Position] = true
+	}
+	return nil
 }
 
 func validateObjectiveFixedAnswerMatch(s ObjectiveSnapshot, fixed []string, candidate ObjectiveCandidate) error {

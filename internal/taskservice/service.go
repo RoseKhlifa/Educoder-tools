@@ -563,6 +563,8 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 	}
 	previous = attemptHistory.restore(failed)
 	compactOutput := false
+	var independent *objectiveIndependentReview
+	independentUsed := false
 	for attempt := 0; attempt < s.cfg.MaxEvaluations; attempt++ {
 		var c answer.ObjectiveCandidate
 		if attempt == 0 && cacheErr == nil {
@@ -581,12 +583,53 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 				r.Status = "budget_exhausted"
 				return r, nil
 			}
+			// A failed whole-vector history can anchor every subsequent repair
+			// to the same misconception. Spend the existing bounded budget on
+			// one clean, question-focused sweep rather than another scored-history
+			// variation. Never start a sweep that cannot fit the remaining limits.
+			if !independentUsed && previous != nil && fixedReady && len(snapshot.Questions) > 1 {
+				review, reviewErr := newObjectiveIndependentReview(snapshot, resources, previous, fixedAnswers)
+				if reviewErr != nil {
+					r.Status = "verification_unconfirmed"
+					return r, reviewErr
+				}
+				if review.remaining > 0 && review.remaining <= s.cfg.MaxModelCalls-r.ModelCalls && review.remaining <= s.cfg.MaxEvaluations-attempt {
+					reviewProfile := answer.RepairProfile()
+					reviewProfile.MaxTokens = 8192
+					if compactOutput {
+						reviewProfile.Thinking, reviewProfile.ReasoningEffort = "disabled", ""
+					}
+					remainingBudget, fits := budget-r.CostMicroUSD, true
+					for _, reviewRequest := range review.requests(reviewProfile) {
+						estimate, estimateErr := s.provider.EstimateObjective(reviewRequest)
+						if estimateErr != nil {
+							r.Status = "budget_unavailable"
+							return r, estimateErr
+						}
+						// Subtract rather than sum so a large estimate cannot overflow.
+						if estimate.CostMicroUSD <= 0 || estimate.CostMicroUSD > remainingBudget {
+							fits = false
+							break
+						}
+						remainingBudget -= estimate.CostMicroUSD
+					}
+					if fits {
+						independent, independentUsed = review, true
+						emit("generating", "正在逐题独立复核未完成的答案")
+					}
+				}
+			}
 			profile := answer.DefaultProfile()
 			if r.ModelCalls > 0 || previous != nil {
 				profile = answer.RepairProfile()
 			}
 			if r.ModelCalls >= 2 && !compactOutput {
 				profile = answer.ProProfile()
+			}
+			if independent != nil {
+				// A focused context does not need an increasingly anchored Pro
+				// repair. Keep reasoning, and the same observed-truncation fallback.
+				profile = answer.RepairProfile()
 			}
 			// Objective answers are compact, but reasoning-enabled repair and
 			// pro profiles can consume the entire 4096-token budget before the
@@ -595,13 +638,16 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			if compactOutput {
 				// Only an observed truncated response needs a compact retry.
 				// Images (including shared tutorial figures) are not evidence that
-				// semantic repair should lose reasoning. This fallback applies to
-				// one call, not every subsequent repair in the run.
+				// semantic repair should lose reasoning. Retain the observed
+				// truncation fallback for the remainder of this run.
 				profile.Thinking, profile.ReasoningEffort = "disabled", ""
 			}
 			pr := answer.ObjectiveRequest{Problem: snapshot, Previous: previous, Feedback: append(append([]answer.Feedback(nil), legacyFeedback...), attemptHistory.feedback(feedback)...), Profile: profile, Resources: resources}
 			if fixedReady {
 				pr.FixedAnswers = append([]string(nil), fixedAnswers...)
+			}
+			if independent != nil {
+				pr, _ = independent.nextRequest(profile)
 			}
 			estimate, e := s.provider.EstimateObjective(pr)
 			if e != nil {
@@ -671,7 +717,25 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 				r.Status = "budget_exhausted"
 				return r, nil
 			}
-			c = generated.Candidate
+			if independent != nil {
+				var done bool
+				c, done, e = independent.accept(generated.Candidate)
+				if e != nil {
+					r.Status = "invalid_candidate"
+					return r, e
+				}
+				if !done {
+					if persistErr := s.persistObjective(ctx, req, r, created); persistErr != nil {
+						r.Status = "checkpoint_persistence_failed"
+						return r, persistErr
+					}
+					emit("generating", "单题独立复核已完成，正在复核其余题目")
+					continue
+				}
+				independent = nil
+			} else {
+				c = generated.Candidate
+			}
 			r.Source = "model"
 		}
 		emit("validating", "正在校验客观题答案和选项")

@@ -27,6 +27,9 @@ func (p *objectiveRepairEvidenceProvider) GenerateObjective(_ context.Context, r
 	if len(p.requests) > 1 {
 		answers[1] = "B"
 	}
+	if len(request.Problem.Questions) == 1 && request.Problem.Questions[0].Position == 2 {
+		answers = []string{"B"}
+	}
 	return answer.ObjectiveResult{
 		Candidate: answer.ObjectiveCandidate{Kind: "objective", Answers: answers},
 		Model:     "fake", CostKnown: true, CostMicroUSD: 2,
@@ -62,7 +65,16 @@ func objectiveRepairEvidenceServer(t *testing.T, mutate func(*educoder.ChoiceTes
 			}
 			fmt.Fprintf(w, `{"st":1,"homework_common_id":44,"game":{"identifier":"OBJGAME","id":7,"myshixun_id":8},"challenge":{"id":9,"st":1,"subject":"Local evidence quiz","task_pass":"Choose the matching local label."},"choose_test_cases":%s,"chooses":[{"challenge_choose_id":10,"challenge_id":9,"position":1,"question_name":"first-local","question_type":0,"category":1,"subject":"First local question?","challenge_question":[{"option_name":"First value","position":0},{"option_name":"Second value","position":1}]},{"challenge_choose_id":11,"challenge_id":9,"position":2,"question_name":"second-local","question_type":0,"category":1,"subject":"Second local question?","challenge_question":[{"option_name":"Left value","position":0},{"option_name":"Right value","position":1}]}]}`, encoded)
 		case "/api/tasks/OBJGAME/choose_build.json":
-			submits.Add(1)
+			attempt := submits.Add(1)
+			var body struct {
+				Answer []string `json:"answer"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			if attempt > 1 && !reflect.DeepEqual(body.Answer, []string{"A", "B"}) {
+				t.Errorf("repair lost locked answer: %v", body.Answer)
+			}
 			fmt.Fprint(w, `{"status":0,"choose_correct_num":null,"challenge_chooses_count":2}`)
 		case "/api/homework_commons/44/shixun_challenge_data.json":
 			score := "1"
@@ -79,7 +91,7 @@ func objectiveRepairEvidenceServer(t *testing.T, mutate func(*educoder.ChoiceTes
 	return educoder.New(server.URL), &submits
 }
 
-func TestObjectiveRefreshBoundResultsReachRepairHistoryAndLockCorrectAnswers(t *testing.T) {
+func TestObjectiveRefreshBoundResultsLockCorrectAnswerDuringIndependentReview(t *testing.T) {
 	client, submits := objectiveRepairEvidenceServer(t, nil)
 	provider := &objectiveRepairEvidenceProvider{}
 	result, err := New(bank(t), provider, Config{MaxModelCalls: 2, MaxEvaluations: 2}).Run(context.Background(), client, req(solver.ModeSubmit), nil)
@@ -87,13 +99,8 @@ func TestObjectiveRefreshBoundResultsReachRepairHistoryAndLockCorrectAnswers(t *
 		t.Fatalf("bound-refresh repair failed: result=%+v err=%v submits=%d requests=%d", result, err, submits.Load(), len(provider.requests))
 	}
 	repair := provider.requests[1]
-	wantResults := []objectiveQuestionResult{{Position: 1, Answer: "A", Correct: true}, {Position: 2, Answer: "A", Correct: false}}
-	history := historyFromObjectiveFeedback(t, repair.Feedback)
-	if len(history) != 1 || !reflect.DeepEqual(history[0].QuestionResults, wantResults) {
-		t.Fatalf("refresh-bound correct/wrong evidence missing from next repair: %+v", history)
-	}
-	if !reflect.DeepEqual(repair.FixedAnswers, []string{"A", ""}) {
-		t.Fatalf("refresh result did not lock only the explicitly correct answer: %v", repair.FixedAnswers)
+	if len(repair.Problem.Questions) != 1 || repair.Problem.Questions[0].Position != 2 || repair.Context == nil || len(repair.Context.Questions) != 2 || repair.Previous != nil || len(repair.Feedback) != 0 {
+		t.Fatalf("correct answer was re-solved or failed history anchored independent review: %+v", repair)
 	}
 	feedback, err := json.Marshal(repair.Feedback)
 	if err != nil || strings.Contains(string(feedback), "private-key-sentinel") || strings.Contains(string(feedback), "standard_answer") {
