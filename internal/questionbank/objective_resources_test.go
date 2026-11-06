@@ -231,3 +231,15 @@ func TestObjectiveBoundImageLookupKeepsUnverifiedWholeSnapshotAMiss(t *testing.T
 		t.Fatalf("image lookup fabricated whole-snapshot verification: count=%d err=%v", count, err)
 	}
 }
+
+func TestObjectiveVerifiedLookupRejectsCandidateAfterLaterPartialVerification(t *testing.T) {
+	ctx := context.Background()
+	snapshot, resources := objectiveBoundSnapshot(t)
+	store, key, candidate := objectiveBoundStore(t, snapshot)
+	if err := store.RecordObjectiveVerification(ctx, candidate.ID, "fixture-later-partial", "not_full_score", "10.71", "14.28"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.FindObjectiveVerifiedWithResources(ctx, key, resources); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("stale full-score candidate was reused after current partial verification: %v", err)
+	}
+}

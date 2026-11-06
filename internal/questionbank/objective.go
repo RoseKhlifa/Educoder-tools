@@ -105,7 +105,12 @@ func (s *Store) findObjectiveVerified(ctx context.Context, key string, resources
 		}
 	}
 	var raw string
-	err = s.db.QueryRowContext(ctx, `SELECT c.id,c.candidate_hash,c.candidate_json,c.source FROM objective_candidates c WHERE c.snapshot_hash=? AND EXISTS(SELECT 1 FROM objective_verifications v WHERE v.candidate_id=c.id AND v.result='full_score') ORDER BY c.id DESC LIMIT 1`, key).Scan(&c.ID, &c.Hash, &raw, &c.Source)
+	err = s.db.QueryRowContext(ctx, `SELECT c.id,c.candidate_hash,c.candidate_json,c.source
+		FROM objective_candidates c
+		JOIN objective_verifications v ON v.candidate_id=c.id AND v.result='full_score'
+		WHERE c.snapshot_hash=?
+		  AND NOT EXISTS (SELECT 1 FROM objective_verifications newer WHERE newer.candidate_id=c.id AND newer.id>v.id)
+		ORDER BY c.id DESC LIMIT 1`, key).Scan(&c.ID, &c.Hash, &raw, &c.Source)
 	if errors.Is(err, sql.ErrNoRows) {
 		if hasMedia {
 			return c, ErrNotFound

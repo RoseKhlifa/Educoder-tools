@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.98 - 2026-11-06
+
+- Stop reusing objective candidates after a later current-run partial score invalidates their historical full-score verification
+
 ## 0.1.97 - 2026-11-06
 
 - Keep image objective repairs in compact answer mode so reasoning cannot consume the JSON response window
