@@ -37,6 +37,9 @@ type ProgrammingEnvironment struct {
 	TabType       int     `json:"tab_type"`
 	Name          string  `json:"name"`
 	VNCURL        VNCFlag `json:"vnc_url,omitempty"`
+	// is_start is observed on official task responses. Missing is not false:
+	// a runtime with unknown ownership must never be released by this worker.
+	IsStart *bool `json:"is_start,omitempty"`
 }
 
 // Kind requires every observed discriminator. Missing zero-valued fields do

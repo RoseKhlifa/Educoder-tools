@@ -14,7 +14,7 @@ import (
 // Graphic files share the bank's versioned file contract, but use a separate
 // runtime adapter. There is no stdout self-test for a StarUML document.
 func (a *EducoderAdapter) loadGraphic(ctx context.Context, task *educoder.Task, target Target) (LoadedProblem, error) {
-	doc, err := a.graphic.Read(ctx, task)
+	doc, err := a.graphic.Describe(task)
 	if err != nil {
 		return LoadedProblem{}, err
 	}
@@ -43,12 +43,34 @@ func (a *EducoderAdapter) submitGraphic(ctx context.Context, task *educoder.Task
 	if hashErr != nil {
 		return Evaluation{Status: "save_error"}, hashErr
 	}
-	result := Evaluation{Status: "error"}
-	if r != nil && r.ContentHash == problem.HashContent(file.Content) {
+	result := Evaluation{Status: "prewrite_error"}
+	if r != nil && r.Saved && r.ContentHash == problem.HashContent(file.Content) {
 		result.SavedFilesHash = hash
-		result.SubmittedFilesHash = hash
+		if r.SubmissionAttempted {
+			result.SubmittedFilesHash = hash
+		}
+	}
+	if r != nil {
+		switch r.Stage {
+		case educoder.GraphicStageSavedNotSubmitted:
+			result.Status = "saved_not_submitted"
+		case educoder.GraphicStageSaveUnconfirmed:
+			result.Status = "save_unverified"
+		case educoder.GraphicStageBuildSent, educoder.GraphicStageBuildAccepted, educoder.GraphicStageCompleted:
+			result.Status = "error"
+		}
+	}
+	var quota *educoder.GraphicEnvironmentQuotaError
+	var resource *educoder.GraphicRuntimeResourceError
+	if errors.As(err, &quota) || errors.As(err, &resource) {
+		if r == nil || !r.SubmissionAttempted {
+			result.Status = "resource_unavailable"
+		}
 	}
 	if err != nil {
+		if errors.Is(err, educoder.ErrGraphicChanged) {
+			result.Status = "editor_changed"
+		}
 		return result, err
 	}
 	if r == nil || r.Evaluation == nil || result.SavedFilesHash == "" {
@@ -74,4 +96,17 @@ func (a *EducoderAdapter) submitGraphic(ctx context.Context, task *educoder.Task
 		return result, errors.New("graphic build has not been confirmed as completed by the task and classroom progress")
 	}
 	return result, nil
+}
+
+// graphicBuildNotSent depends on explicit adapter status, not empty hashes.
+// Unknown build delivery deliberately remains status=error and fails closed.
+func graphicBuildNotSent(snapshot problem.Snapshot, evaluation Evaluation) bool {
+	if snapshot.EditMode != "graphic" {
+		return false
+	}
+	switch evaluation.Status {
+	case "prewrite_error", "resource_unavailable", "saved_not_submitted", "save_unverified", "save_error", "editor_changed":
+		return true
+	}
+	return false
 }

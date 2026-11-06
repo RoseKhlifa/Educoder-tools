@@ -314,7 +314,7 @@ type MySQLArtifactResult struct {
 	Stage              *MySQLArtifactStage `json:"stage,omitempty"`
 }
 
-func (p *GraphicProtocol) RunMySQLArtifact(ctx context.Context, t *Task, plan *MySQLArtifactPlan, options PollOptions) (*MySQLArtifactResult, error) {
+func (p *GraphicProtocol) RunMySQLArtifact(ctx context.Context, t *Task, plan *MySQLArtifactPlan, options PollOptions) (result *MySQLArtifactResult, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -335,17 +335,24 @@ func (p *GraphicProtocol) RunMySQLArtifact(ctx context.Context, t *Task, plan *M
 	if err = plan.validate(current); err != nil {
 		return nil, err
 	}
-	session, err := p.openEnvironment(ctx, current, env)
+	session, cleanup, err := p.acquireEnvironment(ctx, current, env)
 	if err != nil {
 		return nil, err
 	}
+	defer func() {
+		if result != nil {
+			cleanup(result.GraphicSubmitResult)
+		} else {
+			cleanup(nil)
+		}
+	}()
 	sqlSession, ok := session.(MySQLArtifactSession)
 	if !ok {
 		return nil, errors.New("VNC 会话不支持真实 MySQL 结构执行")
 	}
 	login := mysqlPublicCommand.FindStringSubmatch(current.Challenge.Description)
 	stage := &MySQLArtifactStage{ExecutionAttempted: true}
-	result := &MySQLArtifactResult{GraphicSubmitResult: &GraphicSubmitResult{}, SchemaSHA256: plan.SchemaSHA256, Source: plan.Source, ExecutionAttempted: true, Stage: stage}
+	result = &MySQLArtifactResult{GraphicSubmitResult: &GraphicSubmitResult{Stage: GraphicStageSaveUnconfirmed}, SchemaSHA256: plan.SchemaSHA256, Source: plan.Source, ExecutionAttempted: true, Stage: stage}
 	commit, err := sqlSession.ExecuteMySQLArtifact(ctx, plan, login[1], login[2])
 	if err != nil {
 		return result, fmt.Errorf("MySQL 结构执行结果未确认，不重放执行: %w", err)
@@ -364,18 +371,7 @@ func (p *GraphicProtocol) RunMySQLArtifact(ctx context.Context, t *Task, plan *M
 	stage.ExecutionConfirmed = true
 	stage.ArtifactHash = graphicHash(data)
 	stage.CommitID = commit
-	result.GraphicSubmitResult = &GraphicSubmitResult{ContentHash: stage.ArtifactHash, CommitID: commit, Saved: true}
+	result.GraphicSubmitResult = &GraphicSubmitResult{ContentHash: stage.ArtifactHash, CommitID: commit, Saved: true, Stage: GraphicStageSavedNotSubmitted}
 	result.GraphicSubmitResult, err = p.evaluateWorkspace(ctx, current, current, env, target, sqlSession.ReadMySQLArtifact, result.GraphicSubmitResult, options, requireMySQLArtifact, stage)
-	if result.GraphicSubmitResult != nil && result.GraphicSubmitResult.Confirmed {
-		if closeErr := session.Close(); closeErr != nil {
-			result.GraphicSubmitResult.CleanupError = closeErr.Error()
-		} else if releaseErr := p.Client.ReleaseGraphicEnvironment(ctx, current, env.EnvironmentID); releaseErr != nil {
-			result.GraphicSubmitResult.CleanupError = releaseErr.Error()
-		} else {
-			result.GraphicSubmitResult.EnvironmentReleased = true
-		}
-	} else {
-		_ = session.Close()
-	}
 	return result, err
 }

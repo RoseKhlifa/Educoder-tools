@@ -24,7 +24,7 @@ func TestObjectiveAvailabilityBackoffPersistsUsageBeforeWaiting(t *testing.T) {
 	calls, waits := 0, 0
 	p := &fakeProvider{generate: func(context.Context) error {
 		calls++
-		if calls <= 3 {
+		if calls <= 2 {
 			return availabilityFailure(503)
 		}
 		return nil
@@ -47,7 +47,7 @@ func TestObjectiveAvailabilityBackoffPersistsUsageBeforeWaiting(t *testing.T) {
 		return nil
 	}
 	r, err := New(store, p, Config{ProviderRetryWait: wait}).Run(context.Background(), client, request, nil)
-	if err != nil || r.Status != "passed" || r.ModelCalls != 4 || r.CostMicroUSD != 32 || waits != 3 || submits.Load() != 1 {
+	if err != nil || r.Status != "passed" || r.ModelCalls != 3 || r.CostMicroUSD != 22 || waits != 2 || submits.Load() != 1 {
 		t.Fatalf("result=%+v err=%v waits=%d submits=%d", r, err, waits, submits.Load())
 	}
 	record, err := store.GetRun(context.Background(), r.RunID)
@@ -82,7 +82,7 @@ func TestObjectiveAvailabilityWaitCancellationDoesNotSubmitOrDispatchAgain(t *te
 func TestObjectiveAvailabilityBackoffResetsForRealOutputAndHonorsBudget(t *testing.T) {
 	t.Run("output reset", func(t *testing.T) {
 		client, _ := objectiveServer(t, `"13.30"`, false)
-		p := &objectiveSequenceProvider{answers: []string{"", "", "", "A"}, errors: map[int]error{0: availabilityFailure(503), 1: &answer.Error{Kind: "truncated_output"}, 2: availabilityFailure(503)}}
+		p := &objectiveSequenceProvider{answers: []string{"", "", "A"}, errors: map[int]error{0: availabilityFailure(503), 1: &answer.Error{Kind: "truncated_output"}}}
 		waits := 0
 		r, err := New(bank(t), p, Config{ProviderRetryWait: func(_ context.Context, delay time.Duration) error {
 			waits++
@@ -91,7 +91,7 @@ func TestObjectiveAvailabilityBackoffResetsForRealOutputAndHonorsBudget(t *testi
 			}
 			return nil
 		}}).Run(context.Background(), client, req(solver.ModeSubmit), nil)
-		if err != nil || r.Status != "passed" || r.ModelCalls != 4 || waits != 2 {
+		if err != nil || r.Status != "passed" || r.ModelCalls != 3 || waits != 1 {
 			t.Fatalf("result=%+v err=%v waits=%d", r, err, waits)
 		}
 	})

@@ -71,7 +71,7 @@ func TestModelOutputRetriesRespectCallAndMoneyBudgets(t *testing.T) {
 	}
 }
 
-func TestConfirmedSelfTestFailuresRepairWithinFiveAttempts(t *testing.T) {
+func TestConfirmedSelfTestFailuresStopWithinThreeAttempts(t *testing.T) {
 	store := &fakeStore{}
 	adapter := &fakeAdapter{snap: testSnapshot()}
 	provider := &scriptedProvider{estimateCost: 10, generate: func(_ context.Context, req answer.Request, n int) (answer.Result, error) {
@@ -87,10 +87,10 @@ func TestConfirmedSelfTestFailuresRepairWithinFiveAttempts(t *testing.T) {
 	req.Mode = ModeSubmit
 	req.MaxModelCalls, req.MaxEvaluations = 5, 5
 	r, err := New(store, provider, Config{}).Run(context.Background(), adapter, req)
-	if err != nil || r.Status != "passed" || r.ModelCalls != 5 || adapter.selfTests != 5 || adapter.submits != 1 {
+	if err != nil || r.Status != "selftest_failed" || r.ModelCalls != 3 || adapter.selfTests != 3 || adapter.submits != 0 {
 		t.Fatalf("result=%+v err=%v selftests=%d submits=%d", r, err, adapter.selfTests, adapter.submits)
 	}
-	if len(store.candidates) != 5 || len(store.validations) != 6 {
+	if len(store.candidates) != 3 || len(store.validations) != 3 {
 		t.Fatalf("candidates=%d validations=%+v", len(store.candidates), store.validations)
 	}
 }

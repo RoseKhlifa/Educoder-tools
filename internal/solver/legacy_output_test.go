@@ -130,7 +130,7 @@ func TestLegacyRetestDoesNotBypassRepeatedSourceGuardAfterNewFailure(t *testing.
 	req := recoveryRequest()
 	req.Mode, req.MaxModelCalls, req.MaxEvaluations = ModeSubmit, 1, 2
 	r, err := New(store, provider, Config{}).Run(context.Background(), adapter, req)
-	if err != nil || r.Status != "attempts_exhausted" || r.ModelCalls != 1 || adapter.selfTests != 1 || adapter.submits != 0 {
+	if err != nil || r.Status != "generation_stalled" || r.ModelCalls != 1 || adapter.selfTests != 1 || adapter.submits != 0 {
 		t.Fatalf("result=%+v err=%v selftests=%d submits=%d", r, err, adapter.selfTests, adapter.submits)
 	}
 }

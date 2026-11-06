@@ -45,7 +45,7 @@ func TestAllModelProfilesAreEstimatedAndCharged(t *testing.T) {
 		}
 		return solved("good", 4), nil
 	}}
-	svc := New(store, p, Config{})
+	svc := New(store, p, Config{EnableProFreshSolve: true})
 	r, err := svc.Run(context.Background(), &fakeAdapter{snap: testSnapshot()}, recoveryRequest())
 	if err != nil || r.Status != "selftest_passed" || r.ModelCalls != 3 || r.CostMicroUSD != 10 || r.ReservedMicroUSD != 0 {
 		t.Fatalf("result=%+v err=%v", r, err)

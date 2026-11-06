@@ -46,15 +46,15 @@ type Profile struct {
 }
 
 func DefaultProfile() Profile {
-	return Profile{Model: "deepseek-flash", Thinking: "disabled", MaxTokens: 4096}
+	return Profile{Model: "deepseek-flash", Thinking: "disabled", MaxTokens: 8192}
 }
 
 func RepairProfile() Profile {
-	return Profile{Model: "deepseek-flash", Thinking: "enabled", ReasoningEffort: "low", MaxTokens: 4096}
+	return Profile{Model: "deepseek-flash", Thinking: "enabled", ReasoningEffort: "low", MaxTokens: 8192}
 }
 
 func ProProfile() Profile {
-	return Profile{Model: "deepseek-v4-pro", Thinking: "enabled", ReasoningEffort: "low", MaxTokens: 4096}
+	return Profile{Model: "deepseek-v4-pro", Thinking: "enabled", ReasoningEffort: "low", MaxTokens: 8192}
 }
 
 type Request struct {

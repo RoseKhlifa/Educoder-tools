@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.108 - 2026-11-06
+
+- Bound programming and objective attempts, model profiles and provider recovery to finite per-level budgets; stop repeated candidates without automatic paid continuation
+- Reuse one owned graphic or MySQL runtime per account, classify pre-write and saved-not-submitted outcomes, and release owned environments on every path
+- Add cancelable resource backoff and preserve unknown submissions as non-replayable
+
 ## 0.1.107 - 2026-11-06
 
 - Align deployment JOB_TIMEOUT defaults and documentation with production two-hour batch limit

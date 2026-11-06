@@ -42,7 +42,7 @@ func TestDeepSeekWireAndStrictCandidate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ResponseFormat.Type != "json_object" || got.Thinking["type"] != "disabled" || got.MaxTokens != 4096 || got.Stream {
+	if got.ResponseFormat.Type != "json_object" || got.Thinking["type"] != "disabled" || got.MaxTokens != 8192 || got.Stream {
 		t.Fatalf("wire defaults not preserved: %#v", got)
 	}
 	if !strings.Contains(got.Messages[0].Content.textOnly(), "only for tasks classified as programming") || !strings.Contains(got.Messages[0].Content.textOnly(), "turn a header into a source file") || !strings.Contains(got.Messages[0].Content.textOnly(), "exact filename and extension") {

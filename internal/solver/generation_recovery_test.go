@@ -34,11 +34,11 @@ func TestTruncationRecoverySurvivesExplicitContinuation(t *testing.T) {
 	}
 }
 
-func TestRepeatedRejectedOutputEscalatesAndStopsBeforeSpendingAllCalls(t *testing.T) {
+func TestRepeatedRejectedOutputStopsWithoutEscalating(t *testing.T) {
 	store := &fakeStore{}
 	a := &fakeAdapter{snap: testSnapshot()}
 	p := &scriptedProvider{estimateCost: 10, generate: func(_ context.Context, req answer.Request, n int) (answer.Result, error) {
-		if n >= 3 && (req.Profile.Model != answer.ProProfile().Model || req.Profile.MaxTokens != 8192 || req.Profile.Thinking != "disabled") {
+		if req.Profile.Model != answer.DefaultProfile().Model || req.Profile.MaxTokens != 8192 {
 			t.Fatalf("unchanged failed answer did not escalate: %+v", req.Profile)
 		}
 		return solved("bad", 2), nil
@@ -46,19 +46,19 @@ func TestRepeatedRejectedOutputEscalatesAndStopsBeforeSpendingAllCalls(t *testin
 	req := recoveryRequest()
 	req.MaxModelCalls, req.MaxEvaluations, req.BudgetMicroUSD = 40, 40, 1000
 	r, err := New(store, p, Config{}).Run(context.Background(), a, req)
-	if err != nil || r.Status != "generation_stalled" || r.ModelCalls != 4 || r.CostMicroUSD != 8 || a.selfTests != 1 || a.submits != 0 {
+	if err != nil || r.Status != "generation_stalled" || r.ModelCalls != 2 || r.CostMicroUSD != 4 || a.selfTests != 1 || a.submits != 0 {
 		t.Fatalf("result=%+v err=%v selftests=%d submits=%d", r, err, a.selfTests, a.submits)
 	}
-	if len(store.usages) != 4 || len(store.candidates) != 1 {
+	if len(store.usages) != 2 || len(store.candidates) != 1 {
 		t.Fatalf("usage or source duplication: usage=%d candidates=%d", len(store.usages), len(store.candidates))
 	}
 	var state runState
-	if err := json.Unmarshal(store.runs[r.RunID].Data, &state); err != nil || state.GenerationRecovery.RepeatedCandidates != 3 || !state.GenerationRecovery.CompactOutput {
+	if err := json.Unmarshal(store.runs[r.RunID].Data, &state); err != nil || state.GenerationRecovery.RepeatedCandidates != 1 || !state.GenerationRecovery.CompactOutput {
 		t.Fatalf("recovery checkpoint=%+v err=%v", state.GenerationRecovery, err)
 	}
 }
 
-func TestRepeatedOutputRecoveryCanProduceNewPassingSource(t *testing.T) {
+func TestRepeatedOutputDoesNotSpendMoreCallsWaitingForNewSource(t *testing.T) {
 	store := &fakeStore{}
 	p := &scriptedProvider{estimateCost: 10, generate: func(_ context.Context, _ answer.Request, n int) (answer.Result, error) {
 		if n <= 3 {
@@ -69,12 +69,12 @@ func TestRepeatedOutputRecoveryCanProduceNewPassingSource(t *testing.T) {
 	req := recoveryRequest()
 	req.MaxModelCalls, req.MaxEvaluations = 6, 6
 	r, err := New(store, p, Config{}).Run(context.Background(), &fakeAdapter{snap: testSnapshot()}, req)
-	if err != nil || r.Status != "selftest_passed" || r.ModelCalls != 4 {
+	if err != nil || r.Status != "generation_stalled" || r.ModelCalls != 2 {
 		t.Fatalf("result=%+v err=%v", r, err)
 	}
 	var state runState
 	json.Unmarshal(store.runs[r.RunID].Data, &state)
-	if state.GenerationRecovery.RepeatedCandidates != 0 {
+	if state.GenerationRecovery.RepeatedCandidates != 1 {
 		t.Fatalf("new evaluated source retained duplicate streak: %+v", state.GenerationRecovery)
 	}
 }
@@ -104,11 +104,11 @@ func TestRepeatedCandidateCounterSurvivesContinuation(t *testing.T) {
 	req := recoveryRequest()
 	req.MaxModelCalls, req.MaxEvaluations, req.BudgetMicroUSD = 2, 2, 100
 	r, err := New(store, p, Config{}).Run(context.Background(), &fakeAdapter{snap: testSnapshot()}, req)
-	if err != nil || r.Status != "attempts_exhausted" || r.ModelCalls != 2 {
+	if err != nil || r.Status != "generation_stalled" || r.ModelCalls != 2 {
 		t.Fatalf("first=%+v err=%v", r, err)
 	}
 	r, err = New(store, p, Config{}).ContinueRun(context.Background(), &fakeAdapter{snap: testSnapshot()}, req, r.RunID, Continuation{AdditionalModelCalls: 20, AdditionalEvaluations: 20})
-	if err != nil || r.Status != "generation_stalled" || r.ModelCalls != 4 || r.CostMicroUSD != 8 || len(store.usages) != 4 {
+	if err == nil || r != nil || len(store.usages) != 2 {
 		t.Fatalf("continuation reset ineffective generation count: %+v err=%v", r, err)
 	}
 }

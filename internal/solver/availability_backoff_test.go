@@ -30,7 +30,7 @@ func TestAvailabilityBackoffFollowsDurableUsageAndStopsAfterSuccess(t *testing.T
 		return nil
 	}
 	p := &scriptedProvider{estimateCost: 10, generate: func(_ context.Context, _ answer.Request, n int) (answer.Result, error) {
-		if n <= 3 {
+		if n <= 2 {
 			return answer.Result{}, availabilityError(503)
 		}
 		return solved("good", 3), nil
@@ -38,11 +38,11 @@ func TestAvailabilityBackoffFollowsDurableUsageAndStopsAfterSuccess(t *testing.T
 	req := recoveryRequest()
 	req.MaxModelCalls, req.MaxEvaluations = 5, 5
 	r, err := New(store, p, Config{ProviderRetryWait: wait}).Run(context.Background(), &fakeAdapter{snap: testSnapshot()}, req)
-	if err != nil || r.Status != "selftest_passed" || waits != 3 || r.ModelCalls != 4 || r.ReservedMicroUSD != 30 || r.CostMicroUSD != 3 {
+	if err != nil || r.Status != "selftest_passed" || waits != 2 || r.ModelCalls != 3 || r.ReservedMicroUSD != 20 || r.CostMicroUSD != 3 {
 		t.Fatalf("result=%+v err=%v waits=%d", r, err, waits)
 	}
 	var saved runState
-	if json.Unmarshal(store.runs[r.RunID].Data, &saved) != nil || saved.GenerationRecovery.ProviderRetry.Streak != 0 || saved.GenerationRecovery.ProviderAvailabilityFailures != 3 {
+	if json.Unmarshal(store.runs[r.RunID].Data, &saved) != nil || saved.GenerationRecovery.ProviderRetry.Streak != 0 || saved.GenerationRecovery.ProviderAvailabilityFailures != 2 {
 		t.Fatalf("success did not reset streak independently of total failures: %+v", saved.GenerationRecovery)
 	}
 }
@@ -87,7 +87,7 @@ func TestAvailabilityBackoffSurvivesContinuationAndResetsOnOutputDefect(t *testi
 	}
 	p := &scriptedProvider{estimateCost: 10, generate: func(_ context.Context, _ answer.Request, n int) (answer.Result, error) {
 		switch n {
-		case 1, 3:
+		case 1:
 			return answer.Result{}, availabilityError(503)
 		case 2:
 			return solved("partial", 2), &answer.Error{Kind: "truncated_output"}
@@ -102,7 +102,7 @@ func TestAvailabilityBackoffSurvivesContinuationAndResetsOnOutputDefect(t *testi
 		t.Fatalf("initial budget should stop without waiting: result=%+v err=%v waits=%d", r, err, waits)
 	}
 	r, err = New(store, p, Config{ProviderRetryWait: wait}).ContinueRun(context.Background(), &fakeAdapter{snap: testSnapshot()}, req, r.RunID, Continuation{AdditionalModelCalls: 4, AdditionalEvaluations: 4})
-	if err != nil || r.Status != "selftest_passed" || waits != 2 || r.ModelCalls != 4 || r.ReservedMicroUSD != 20 || r.CostMicroUSD != 5 {
+	if err != nil || r.Status != "selftest_passed" || waits != 1 || r.ModelCalls != 3 || r.ReservedMicroUSD != 10 || r.CostMicroUSD != 5 {
 		t.Fatalf("continued=%+v err=%v waits=%d", r, err, waits)
 	}
 }

@@ -109,8 +109,10 @@ func (s *Service) reconcileClient(ctx context.Context, client *educoder.Client, 
 	if (questionbank.Ref{RevisionHash: snapshot.RevisionHash, ContractHash: snapshot.ContractHash}) != state.SnapshotRef {
 		return result, errors.New("current problem revision or execution contract differs from saved run")
 	}
-	if err := matchingSnapshotHash(snapshot, result.CodeHash); err != nil {
-		return result, err
+	if snapshot.EditMode != "graphic" {
+		if err := matchingSnapshotHash(snapshot, result.CodeHash); err != nil {
+			return result, err
+		}
 	}
 	task, err := client.LoadTask(ctx, state.Target.Course, state.Target.HomeworkID, state.Target.Game)
 	if err != nil {
@@ -140,13 +142,26 @@ func (s *Service) reconcileClient(ctx context.Context, client *educoder.Client, 
 	}
 	// Re-read the exact bytes after score/evaluation reads. A full-score record
 	// from older code must never promote a different current editor candidate.
-	finalFiles, err := client.ReadProgramming(ctx, task)
-	if err != nil {
-		return result, err
-	}
-	files := make([]problem.SolutionFile, 0, len(finalFiles.Files))
-	for _, file := range finalFiles.Files {
-		files = append(files, problem.SolutionFile{Path: file.Path, Content: file.Content})
+	var files []problem.SolutionFile
+	if snapshot.EditMode == "graphic" {
+		// Graphic files live in the VNC workspace, never in rep_content. This
+		// reads exact source only; no save, update_file or game_build is replayed.
+		doc, readErr := educoder.NewGraphicProtocol(client, nil).Read(ctx, task)
+		if readErr != nil {
+			return result, readErr
+		}
+		if !doc.Exists {
+			return result, errors.New("graphic reconciliation file is missing")
+		}
+		files = []problem.SolutionFile{{Path: doc.Path, Content: doc.Content}}
+	} else {
+		finalFiles, readErr := client.ReadProgramming(ctx, task)
+		if readErr != nil {
+			return result, readErr
+		}
+		for _, file := range finalFiles.Files {
+			files = append(files, problem.SolutionFile{Path: file.Path, Content: file.Content})
+		}
 	}
 	finalHash, err := problem.HashFiles(files)
 	if err != nil || finalHash != result.CodeHash {

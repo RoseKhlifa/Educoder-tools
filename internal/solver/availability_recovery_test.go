@@ -41,8 +41,8 @@ func TestAvailabilityFailuresKeepSelectedProfileAndUnknownCharges(t *testing.T) 
 	}
 }
 
-func TestAvailabilityFailuresDoNotSuppressRealRepairEscalation(t *testing.T) {
-	want := []answer.Profile{answer.DefaultProfile(), answer.DefaultProfile(), answer.RepairProfile(), answer.ProProfile()}
+func TestAvailabilityFailuresKeepRepairWithinLifetimeCap(t *testing.T) {
+	want := []answer.Profile{answer.DefaultProfile(), answer.DefaultProfile(), answer.RepairProfile()}
 	store := &fakeStore{}
 	p := &scriptedProvider{estimateCost: 10, generate: func(_ context.Context, req answer.Request, n int) (answer.Result, error) {
 		if n > len(want) || req.Profile != want[n-1] {
@@ -51,7 +51,7 @@ func TestAvailabilityFailuresDoNotSuppressRealRepairEscalation(t *testing.T) {
 		if n == 1 {
 			return answer.Result{}, availabilityError(503)
 		}
-		if n < 4 {
+		if n < 3 {
 			return solved(fmt.Sprintf("bad%d", n), 3), nil
 		}
 		return solved("good", 3), nil
@@ -60,7 +60,7 @@ func TestAvailabilityFailuresDoNotSuppressRealRepairEscalation(t *testing.T) {
 	req.MaxModelCalls, req.MaxEvaluations = 5, 5
 	a := &fakeAdapter{snap: testSnapshot()}
 	r, err := New(store, p, Config{ProviderRetryWait: skipProviderRetryWait}).Run(context.Background(), a, req)
-	if err != nil || r.Status != "selftest_passed" || r.ModelCalls != 4 || a.selfTests != 3 || r.ReservedMicroUSD != 10 || r.CostMicroUSD != 9 {
+	if err != nil || r.Status != "selftest_passed" || r.ModelCalls != 3 || a.selfTests != 2 || r.ReservedMicroUSD != 10 || r.CostMicroUSD != 6 {
 		t.Fatalf("result=%+v err=%v tests=%d", r, err, a.selfTests)
 	}
 }

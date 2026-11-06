@@ -71,10 +71,10 @@ func TestRepairHistoryBlocksRepeatedFailedSourceBeforeAnyNewSelfTest(t *testing.
 	req := recoveryRequest()
 	req.Mode, req.MaxModelCalls, req.MaxEvaluations = ModeSubmit, 3, 3
 	r, err := New(store, provider, Config{}).Run(context.Background(), adapter, req)
-	if err != nil || r.Status != "passed" || adapter.selfTests != 4 || adapter.submits != 1 || r.ModelCalls != 3 || r.CostMicroUSD != 3 || len(store.candidates) != 2 {
+	if err != nil || r.Status != "generation_stalled" || adapter.selfTests != 2 || adapter.submits != 0 || r.ModelCalls != 2 || r.CostMicroUSD != 2 || len(store.candidates) != 1 {
 		t.Fatalf("result=%+v err=%v tested=%v candidates=%d", r, err, adapter.seen, len(store.candidates))
 	}
-	if strings.Join(adapter.seen, ",") != "A:1,A:2,C:1,C:2" {
+	if strings.Join(adapter.seen, ",") != "A:1,A:2" {
 		t.Fatalf("failed source was saved/tested again: %v", adapter.seen)
 	}
 }
@@ -125,7 +125,7 @@ func TestContinuationRetainsRejectionHistoryEvenWithoutBankStatus(t *testing.T) 
 	// a fresh Lookup happening to reproduce the candidate's rejected status.
 	store.candidates[0].Status, store.candidates[0].Validations = "candidate", nil
 	continued, err := New(store, provider, Config{}).ContinueRun(context.Background(), adapter, recoveryRequest(), r.RunID, Continuation{AdditionalModelCalls: 2, AdditionalEvaluations: 2})
-	if err != nil || continued.Status != "selftest_passed" || continued.ModelCalls != 3 || continued.CostMicroUSD != 6 || continued.ReservedMicroUSD != 0 || adapter.selfTests != 4 || len(store.usages) != 3 {
+	if err != nil || continued.Status != "generation_stalled" || continued.ModelCalls != 2 || continued.CostMicroUSD != 4 || continued.ReservedMicroUSD != 0 || adapter.selfTests != 2 || len(store.usages) != 2 {
 		t.Fatalf("continued=%+v err=%v tested=%v usage=%d", continued, err, adapter.seen, len(store.usages))
 	}
 }
@@ -190,7 +190,7 @@ func TestConfirmedFormalFailureAlsoBlocksIdenticalResubmission(t *testing.T) {
 	req := recoveryRequest()
 	req.Mode, req.MaxModelCalls, req.MaxEvaluations = ModeSubmit, 3, 3
 	r, err := New(store, provider, Config{}).Run(context.Background(), adapter, req)
-	if err != nil || r.Status != "passed" || adapter.submits != 2 || provider.calls != 3 || len(store.validations) != 2 {
+	if err != nil || r.Status != "generation_stalled" || adapter.submits != 1 || provider.calls != 2 || len(store.validations) != 1 {
 		t.Fatalf("same formal failure was submitted again: result=%+v err=%v submits=%d", r, err, adapter.submits)
 	}
 }

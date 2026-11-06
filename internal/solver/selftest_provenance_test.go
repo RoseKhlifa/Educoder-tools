@@ -39,7 +39,7 @@ func TestSelfTestProvenanceSurvivesDifferentRepeatedCandidate(t *testing.T) {
 				}
 				r, err = New(store, provider, Config{}).ContinueRun(context.Background(), adapter, req, r.RunID, Continuation{AdditionalModelCalls: 8, AdditionalEvaluations: 8})
 			}
-			if err != nil || r.Status != "generation_stalled" || r.ModelCalls != 5 || r.CostMicroUSD != 5 || adapter.selfTests != 4 || adapter.submits != 0 || len(store.candidates) != 2 {
+			if err != nil || r.Status != "generation_stalled" || r.ModelCalls != 3 || r.CostMicroUSD != 3 || adapter.selfTests != 4 || adapter.submits != 0 || len(store.candidates) != 2 {
 				t.Fatalf("result=%+v err=%v tested=%v candidates=%d", r, err, adapter.seen, len(store.candidates))
 			}
 			// B is the final generated candidate, but A owns the last actual
@@ -98,24 +98,16 @@ func TestLegacySelfTestDoesNotInferProvenanceFromCurrentResult(t *testing.T) {
 	}
 }
 
-func TestRepeatedSourceDiagnosticsDoNotClaimEnhancedModelAfterFallback(t *testing.T) {
+func TestRepeatedSourceDiagnosticsDoNotClaimEnhancedModel(t *testing.T) {
 	store := &fakeStore{}
 	adapter := &fakeAdapter{snap: testSnapshot()}
-	provider := deadlineFallbackProvider(func(_ context.Context, req answer.Request, n int) (answer.Result, error) {
-		if n == 3 {
-			return answer.Result{}, proBodyDeadlineError()
-		}
-		assertDeadlineFallbackProfile(t, req)
-		return solved("bad1", 1), nil
-	})
-	req := deadlineFallbackRequest()
-	req.MaxModelCalls, req.MaxEvaluations = 10, 10
-	r, err := New(store, provider, Config{}).Run(context.Background(), adapter, req)
-	if err != nil || r.Status != "generation_stalled" || r.ModelCalls != 6 || adapter.selfTests != 2 || adapter.submits != 0 {
-		t.Fatalf("fallback repetition policy changed: result=%+v err=%v tests=%d", r, err, adapter.selfTests)
+	provider := &scriptedProvider{estimateCost: 10, generate: func(context.Context, answer.Request, int) (answer.Result, error) { return solved("bad", 1), nil }}
+	r, err := New(store, provider, Config{}).Run(context.Background(), adapter, recoveryRequest())
+	if err != nil || r.Status != "generation_stalled" || r.ModelCalls != 2 || adapter.selfTests != 1 || adapter.submits != 0 {
+		t.Fatalf("repeat did not stop: result=%+v err=%v", r, err)
 	}
 	diagnostics := strings.Join(r.Diagnostics, "\n")
-	if strings.Contains(diagnostics, "使用增强模型及完整输出额度继续修复") || strings.Contains(diagnostics, "增强修复后仍") || !strings.Contains(diagnostics, "已拦截重复失败代码") || !strings.Contains(diagnostics, "调整生成策略后仍") {
-		t.Fatalf("diagnostics misreported fallback profile: %s", diagnostics)
+	if strings.Contains(diagnostics, "增强") || !strings.Contains(diagnostics, "立即停止重复付费") {
+		t.Fatalf("diagnostic misreported model: %s", diagnostics)
 	}
 }

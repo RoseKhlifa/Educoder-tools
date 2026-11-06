@@ -29,7 +29,7 @@ var graphicTags = regexp.MustCompile(`<[^>]*>`)
 var graphicFullPath = regexp.MustCompile(`(?:/data/workspace/myshixun/|/home/headless/Desktop/workspace/myshixun/|workspace/myshixun/)[^\s\x60"'<>，。；（）)]+(?i:\.mdj)`)
 var graphicQuotedDir = regexp.MustCompile(`["“]([^"”]+)["”]\s*目录下`)
 var graphicSaveDir = regexp.MustCompile(`(?:保存在|保存到)[^，。；\n]*?((?:/data/workspace/myshixun/|/home/headless/Desktop/workspace/myshixun/|workspace/myshixun/)[^\s\x60"'“”<>，。；（）)]+)`)
-var graphicName = regexp.MustCompile(`(?:命名为|名称为|文件名改为)\s*[\x60"“']?([A-Za-z0-9_-]+(?:\.[A-Za-z0-9]+)?)`)
+var graphicName = regexp.MustCompile(`(?:命名为|名称为|文件名改为)\s*[\x60"“']?([\p{L}\p{N}_-]+(?:\.[A-Za-z0-9]+)?)`)
 var graphicFormat = regexp.MustCompile(`格式为\s*[\x60"“']?\.?([A-Za-z0-9]+)`)
 
 func normalizeGraphicPath(value string) (string, error) {
@@ -261,28 +261,33 @@ type GraphicSession interface {
 }
 
 type GraphicDocument struct {
-	Path       string `json:"path"`
-	Content    string `json:"content"`
-	Hash       string `json:"hash"`
-	Exists     bool   `json:"exists"`
-	game       string
-	myshixunID int64
-	userID     int64
+	Path         string `json:"path"`
+	Content      string `json:"content"`
+	Hash         string `json:"hash"`
+	Exists       bool   `json:"exists"`
+	game         string
+	myshixunID   int64
+	userID       int64
+	deferredRead bool
 }
 type GraphicSubmitResult struct {
-	ContentHash         string            `json:"content_hash"`
-	CommitID            string            `json:"commit_id"`
-	Saved               bool              `json:"saved"`
-	Submitted           bool              `json:"submitted"`
-	Document            *GraphicDocument  `json:"-"`
-	Evaluation          *EvaluationResult `json:"evaluation,omitempty"`
-	Confirmed           bool              `json:"confirmed"`
-	EnvironmentReleased bool              `json:"environment_released"`
-	CleanupError        string            `json:"cleanup_error,omitempty"`
+	Stage               GraphicMutationStage `json:"stage"`
+	SubmissionAttempted bool                 `json:"submission_attempted"`
+	ContentHash         string               `json:"content_hash"`
+	CommitID            string               `json:"commit_id"`
+	Saved               bool                 `json:"saved"`
+	Submitted           bool                 `json:"submitted"`
+	Document            *GraphicDocument     `json:"-"`
+	Evaluation          *EvaluationResult    `json:"evaluation,omitempty"`
+	Confirmed           bool                 `json:"confirmed"`
+	EnvironmentReleased bool                 `json:"environment_released"`
+	CleanupError        string               `json:"cleanup_error,omitempty"`
 }
 type GraphicProtocol struct {
 	Client    *Client
 	Transport GraphicTransport
+	// retryWait is injected only by deterministic offline tests.
+	retryWait func(context.Context, time.Duration) error
 }
 type GraphicEnvironmentQuotaError struct {
 	Message string
@@ -298,40 +303,19 @@ func (e *GraphicEnvironmentQuotaError) Error() string {
 	if e == nil || strings.TrimSpace(e.Message) == "" {
 		return "图形实验环境数量已达上限"
 	}
-	return "图形实验环境数量已达上限: " + strings.TrimSpace(e.Message)
+	return "图形实验环境数量已达上限"
 }
 
-// Graphic startup is eventually consistent upstream.  A successful start
-// request can briefly return an empty or stale runtime binding while the
-// workspace is being materialized.  These retries are deliberately small and
-// bounded: they only repeat idempotent reads/connection attempts and never
-// repeat a file save or a formal build.
-const (
-	graphicReadinessAttempts     = 6
-	graphicReadinessDelay        = 250 * time.Millisecond
-	graphicResourceRetryAttempts = 4
-	graphicResourceRetryDelay    = 2 * time.Second
-)
+// Startup retries only repeat idempotent start/read/connection operations, never
+// a save or formal build. Resource pressure has a separate three-step cooldown;
+// readiness gets 69 seconds for an accepted cold runtime to materialize.
+var graphicResourceDelays = []time.Duration{15 * time.Second, 45 * time.Second, 120 * time.Second}
+var graphicReadinessDelays = []time.Duration{3 * time.Second, 6 * time.Second, 12 * time.Second, 18 * time.Second, 30 * time.Second}
 
-func waitGraphicResourceRetry(ctx context.Context, attempt int) error {
-	if attempt >= graphicResourceRetryAttempts-1 {
-		return nil
+func (p *GraphicProtocol) waitRetry(ctx context.Context, delay time.Duration) error {
+	if p.retryWait != nil {
+		return p.retryWait(ctx, delay)
 	}
-	timer := time.NewTimer(graphicResourceRetryDelay * time.Duration(attempt+1))
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
-}
-
-func waitGraphicRetry(ctx context.Context, attempt int) error {
-	if attempt >= graphicReadinessAttempts-1 {
-		return nil
-	}
-	delay := graphicReadinessDelay * time.Duration(attempt+1)
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
@@ -349,23 +333,19 @@ func NewGraphicProtocol(client *Client, transport GraphicTransport) *GraphicProt
 	return &GraphicProtocol{Client: client, Transport: transport}
 }
 
-func (p *GraphicProtocol) open(ctx context.Context, t *Task) (GraphicSession, error) {
-	_, env, err := requireGraphic(t)
-	if err != nil {
-		return nil, err
-	}
-	return p.openEnvironment(ctx, t, env)
-}
-
-// openEnvironment is shared by source-bound VNC artifact routes. Every caller
-// validates its own public task contract before requesting this runtime.
-func (p *GraphicProtocol) openEnvironment(ctx context.Context, t *Task, env ProgrammingEnvironment) (GraphicSession, error) {
+// openEnvironment is shared by graphical and MySQL artifact routes. owned is
+// set at the accepted-start boundary, even when SSH readiness later fails.
+func (p *GraphicProtocol) openEnvironment(ctx context.Context, t *Task, env ProgrammingEnvironment, owned *bool) (GraphicSession, error) {
 	if p == nil || p.Client == nil || p.Transport == nil {
 		return nil, errors.New("图形协议未初始化")
 	}
 	query := url.Values{"shixun_environment_id": {strconv.FormatInt(env.EnvironmentID, 10)}, "tab_type": {"3"}, "game_id": {strconv.FormatInt(t.Game.ID, 10)}, "homework_common_id": {strconv.FormatInt(t.HomeworkID, 10)}}
 	var lastErr error
-	for attempt := 0; attempt < graphicReadinessAttempts; attempt++ {
+	resourceAttempt, readinessAttempt := 0, 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		var response struct {
 			Data struct {
 				SSHAddress string          `json:"ssh_address"`
@@ -374,52 +354,77 @@ func (p *GraphicProtocol) openEnvironment(ctx context.Context, t *Task, env Prog
 				Password   string          `json:"password"`
 				MyShixunID *int64          `json:"myshixun_id"`
 				Code       *int            `json:"code"`
-				Message    string          `json:"msg"`
+				DataList   json.RawMessage `json:"data_list"`
 			} `json:"data"`
 		}
-		if err := p.Client.request(ctx, http.MethodGet, "/api/myshixuns/"+t.MyShixun.Identifier+"/start.json", query, nil, taskRef(t), &response); err != nil {
-			var apiErr *APIStatusError
-			if errors.As(err, &apiErr) && apiErr.Code == -1 {
-				lastErr = &GraphicRuntimeResourceError{}
-				if waitErr := waitGraphicResourceRetry(ctx, attempt); waitErr != nil {
-					return nil, waitErr
+		err := p.Client.request(ctx, http.MethodGet, "/api/myshixuns/"+t.MyShixun.Identifier+"/start.json", query, nil, taskRef(t), &response)
+		busy := false
+		if err != nil {
+			var status *APIStatusError
+			if errors.As(err, &status) {
+				if status.Code == -3 || status.Code == -5 {
+					return nil, &GraphicEnvironmentQuotaError{}
 				}
-				continue
+				busy = status.Code == -1
 			}
-			lastErr = err
+			if busy {
+				lastErr = &GraphicRuntimeResourceError{}
+			} else {
+				lastErr = err
+			}
 		} else {
 			d := response.Data
-			var port int
-			if json.Unmarshal(d.Port, &port) != nil {
-				var text string
-				if json.Unmarshal(d.Port, &text) == nil {
-					port, _ = strconv.Atoi(text)
-				}
+			if d.Code != nil && (*d.Code == -3 || *d.Code == -5) || len(d.DataList) > 0 && string(d.DataList) != "null" {
+				return nil, &GraphicEnvironmentQuotaError{}
 			}
-			if d.Code != nil && *d.Code == -5 {
-				return nil, &GraphicEnvironmentQuotaError{Message: d.Message}
-			}
-			if d.Code != nil && *d.Code != 0 || d.MyShixunID != nil && *d.MyShixunID != t.MyShixun.ID || port <= 0 || port > 65535 || d.SSHAddress == "" || d.Username == "" || d.Password == "" {
-				lastErr = errors.New("图形环境未就绪或返回不匹配的运行实例")
+			busy = d.Code != nil && *d.Code == -1
+			if busy {
+				lastErr = &GraphicRuntimeResourceError{}
 			} else {
-				session, openErr := p.Transport.Open(ctx, GraphicConnection{Host: d.SSHAddress, Port: port, Username: d.Username, Password: d.Password})
-				if openErr == nil {
-					return session, nil
+				var port int
+				if json.Unmarshal(d.Port, &port) != nil {
+					var text string
+					if json.Unmarshal(d.Port, &text) == nil {
+						port, _ = strconv.Atoi(text)
+					}
 				}
-				if ctx.Err() != nil {
-					return nil, ctx.Err()
+				matching := d.MyShixunID == nil || *d.MyShixunID == t.MyShixun.ID
+				accepted := (d.Code == nil || *d.Code == 0) && matching
+				if accepted && env.IsStart != nil && !*env.IsStart && owned != nil {
+					*owned = true
 				}
-				lastErr = errors.New("图形环境 SSH 连接失败")
+				if !accepted || port <= 0 || port > 65535 || d.SSHAddress == "" || d.Username == "" || d.Password == "" {
+					lastErr = errors.New("图形环境未就绪或返回不匹配的运行实例")
+				} else {
+					session, openErr := p.Transport.Open(ctx, GraphicConnection{Host: d.SSHAddress, Port: port, Username: d.Username, Password: d.Password})
+					if openErr == nil {
+						return session, nil
+					}
+					if ctx.Err() != nil {
+						return nil, ctx.Err()
+					}
+					lastErr = errors.New("图形环境 SSH 连接失败")
+				}
 			}
 		}
-		if err := waitGraphicRetry(ctx, attempt); err != nil {
-			return nil, err
+		if busy {
+			if resourceAttempt >= len(graphicResourceDelays) {
+				return nil, lastErr
+			}
+			if err := p.waitRetry(ctx, graphicResourceDelays[resourceAttempt]); err != nil {
+				return nil, err
+			}
+			resourceAttempt++
+		} else {
+			if readinessAttempt >= len(graphicReadinessDelays) {
+				return nil, lastErr
+			}
+			if err := p.waitRetry(ctx, graphicReadinessDelays[readinessAttempt]); err != nil {
+				return nil, err
+			}
+			readinessAttempt++
 		}
 	}
-	if lastErr != nil {
-		return nil, lastErr
-	}
-	return nil, errors.New("图形环境未就绪或返回不匹配的运行实例")
 }
 
 // ReleaseGraphicEnvironment releases exactly one worker-owned graphical environment
@@ -433,35 +438,43 @@ func (c *Client) ReleaseGraphicEnvironment(ctx context.Context, t *Task, environ
 	return c.request(ctx, http.MethodPost, "/api/myshixuns/"+t.MyShixun.Identifier+"/exit_delete_pod.json", nil, body, taskRef(t), &struct{}{})
 }
 
+// Describe binds the public file contract without creating or reading a
+// runtime. The solver calls Load twice; neither call should consume a VNC pod.
+func (p *GraphicProtocol) Describe(t *Task) (*GraphicDocument, error) {
+	file, _, err := requireGraphic(t)
+	if err != nil {
+		return nil, err
+	}
+	return &GraphicDocument{Path: file, Hash: graphicHash(nil), game: t.Game.Identifier, myshixunID: t.MyShixun.ID, userID: t.User.UserID, deferredRead: true}, nil
+}
+
+func readGraphicDocument(ctx context.Context, session GraphicSession, t *Task, file string) (*GraphicDocument, error) {
+	content, exists, err := session.ReadFile(ctx, file)
+	if err != nil {
+		return nil, errors.New("图形文件读取失败")
+	}
+	if len(content) > MaxGraphicBytes || !utf8.Valid(content) {
+		return nil, errors.New("图形文件不是支持范围内的 UTF-8 内容")
+	}
+	return &GraphicDocument{Path: file, Content: string(content), Hash: graphicHash(content), Exists: exists, game: t.Game.Identifier, myshixunID: t.MyShixun.ID, userID: t.User.UserID}, nil
+}
+
+// Read is reserved for explicit read/reconciliation callers. Solver discovery
+// uses Describe instead. Any runtime acquired here is cleaned on every path.
 func (p *GraphicProtocol) Read(ctx context.Context, t *Task) (*GraphicDocument, error) {
 	file, env, err := requireGraphic(t)
 	if err != nil {
 		return nil, err
 	}
-	session, err := p.open(ctx, t)
+	session, cleanup, err := p.acquireEnvironment(ctx, t, env)
 	if err != nil {
 		return nil, err
 	}
-	content, exists, err := session.ReadFile(ctx, file)
-	if err != nil {
-		_ = session.Close()
-		return nil, errors.New("图形文件读取失败")
-	}
-	if len(content) > MaxGraphicBytes || !utf8.Valid(content) {
-		_ = session.Close()
-		return nil, errors.New("图形文件不是支持范围内的 UTF-8 内容")
-	}
-	doc := &GraphicDocument{Path: file, Content: string(content), Hash: graphicHash(content), Exists: exists, game: t.Game.Identifier, myshixunID: t.MyShixun.ID, userID: t.User.UserID}
-	if err := session.Close(); err != nil {
-		return nil, err
-	}
-	if err := p.Client.ReleaseGraphicEnvironment(ctx, t, env.EnvironmentID); err != nil {
-		return nil, err
-	}
-	return doc, nil
+	defer cleanup(nil)
+	return readGraphicDocument(ctx, session, t, file)
 }
 
-func (p *GraphicProtocol) Submit(ctx context.Context, t *Task, document *GraphicDocument, content string, options PollOptions) (*GraphicSubmitResult, error) {
+func (p *GraphicProtocol) Submit(ctx context.Context, t *Task, document *GraphicDocument, content string, options PollOptions) (result *GraphicSubmitResult, err error) {
 	if p == nil || p.Client == nil || p.Transport == nil {
 		return nil, errors.New("图形协议未初始化")
 	}
@@ -475,46 +488,56 @@ func (p *GraphicProtocol) Submit(ctx context.Context, t *Task, document *Graphic
 	if document == nil || document.Path != file || document.game != t.Game.Identifier || document.myshixunID != t.MyShixun.ID || document.userID != t.User.UserID || document.Hash != graphicHash([]byte(document.Content)) {
 		return nil, errors.New("图形提交必须绑定本次读取的任务和文件版本")
 	}
+	result = &GraphicSubmitResult{Stage: GraphicStagePrewrite}
+	defer func() {
+		if err != nil {
+			var boundary *GraphicMutationError
+			if !errors.As(err, &boundary) {
+				err = &GraphicMutationError{Stage: result.Stage, Cause: err}
+			}
+		}
+	}()
 	current, err := p.Client.LoadTask(ctx, t.CourseIdentifier, t.HomeworkID, t.Game.Identifier)
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 	currentFile, currentEnv, err := requireGraphic(current)
 	if err != nil || currentFile != file || current.User.UserID != t.User.UserID || current.MyShixun.ID != t.MyShixun.ID || current.Game.ID != t.Game.ID || current.MyShixun.Identifier != t.MyShixun.Identifier || currentEnv.EnvironmentID != env.EnvironmentID {
-		return nil, errors.New("图形任务身份或目标路径在提交前发生变化")
+		return result, errors.New("图形任务身份或目标路径在提交前发生变化")
 	}
-	session, err := p.open(ctx, current)
+	session, cleanup, err := p.acquireEnvironment(ctx, current, currentEnv)
 	if err != nil {
-		return nil, err
+		return result, err
 	}
+	defer func() { cleanup(result) }()
+	if document.deferredRead {
+		document, err = readGraphicDocument(ctx, session, current, file)
+		if err != nil {
+			return result, err
+		}
+	}
+	// The same SSH session reads the baseline and performs the guarded save. No
+	// release/restart gap exists between reading the file and its compare-write.
+	result.Stage = GraphicStageSaveUnconfirmed
 	commit, err := session.SaveAndCommit(ctx, file, document.Hash, document.Exists, []byte(content))
 	if err != nil {
 		if errors.Is(err, ErrGraphicChanged) {
-			return nil, ErrGraphicChanged
+			return result, ErrGraphicChanged
 		}
 		if ctx.Err() != nil {
-			return nil, ctx.Err()
+			return result, ctx.Err()
 		}
-		return nil, errors.New("图形文件保存或版本核对失败")
+		return result, errors.New("图形文件保存或版本核对失败")
 	}
 	if !graphicCommit.MatchString(commit) {
-		return nil, errors.New("图形环境没有返回有效 Git 提交版本")
+		return result, errors.New("图形环境没有返回有效 Git 提交版本")
 	}
-	result := &GraphicSubmitResult{ContentHash: graphicHash([]byte(content)), CommitID: commit, Saved: true}
+	result.ContentHash = graphicHash([]byte(content))
+	result.CommitID = commit
+	result.Saved = true
+	result.Stage = GraphicStageSavedNotSubmitted
 	result.Document = &GraphicDocument{Path: file, Content: content, Hash: result.ContentHash, Exists: true, game: t.Game.Identifier, myshixunID: t.MyShixun.ID, userID: t.User.UserID}
-	result, err = p.evaluateWorkspace(ctx, current, t, env, file, session.ReadFile, result, options, requireGraphic, nil)
-	if result != nil && result.Confirmed {
-		if closeErr := session.Close(); closeErr != nil {
-			result.CleanupError = closeErr.Error()
-		} else if releaseErr := p.Client.ReleaseGraphicEnvironment(ctx, current, env.EnvironmentID); releaseErr != nil {
-			result.CleanupError = releaseErr.Error()
-		} else {
-			result.EnvironmentReleased = true
-		}
-	} else {
-		_ = session.Close()
-	}
-	return result, err
+	return p.evaluateWorkspace(ctx, current, t, env, file, session.ReadFile, result, options, requireGraphic, nil)
 }
 
 // evaluateWorkspace submits exactly one ordinary VNC build after an artifact
@@ -562,6 +585,8 @@ func (p *GraphicProtocol) evaluateWorkspace(ctx context.Context, current, t *Tas
 	body := map[string]any{"sec_key": preparation.SecKey, "resubmit": preparation.Resubmit, "first": 1,
 		"content_modified": preparation.ContentModified, "shixun_environment_id": env.EnvironmentID, "tab_type": env.TabType, "extras": extras}
 	var build BuildResult
+	result.SubmissionAttempted = true
+	result.Stage = GraphicStageBuildSent
 	if evidence != nil {
 		evidence.BuildAttempted = true
 	}
@@ -577,6 +602,7 @@ func (p *GraphicProtocol) evaluateWorkspace(ctx context.Context, current, t *Tas
 		evidence.EvaluationAttempted = true
 	}
 	result.Submitted = true
+	result.Stage = GraphicStageBuildAccepted
 	query := url.Values{"resubmit": {preparation.Resubmit}, "time_out": {"false"}, "port": {strconv.Itoa(build.Port)}, "sec_key": {preparation.SecKey}, "challenge_id": {strconv.FormatInt(t.Challenge.ID, 10)}, "subject_id": {""}, "homework_common_id": {strconv.FormatInt(t.HomeworkID, 10)}}
 	result.Evaluation, err = p.wait(ctx, current, query, baseline, options)
 	if result.Evaluation != nil && evidence != nil {
@@ -587,11 +613,12 @@ func (p *GraphicProtocol) evaluateWorkspace(ctx context.Context, current, t *Tas
 	if err != nil {
 		return result, err
 	}
+	result.Stage = GraphicStageCompleted
 	stored, exists, readErr := read(ctx, file)
-	if readErr != nil {
+	if readErr != nil && !result.Evaluation.Passed {
 		return result, errors.New("图形评测后文件复核失败")
 	}
-	if !exists || graphicHash(stored) != result.ContentHash {
+	if readErr == nil && (!exists || graphicHash(stored) != result.ContentHash) {
 		return result, ErrGraphicChanged
 	}
 	if result.Evaluation.Passed {

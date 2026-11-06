@@ -16,14 +16,14 @@ import (
 const maxUnproductiveGenerations = 3
 
 // These controls belong to the durable run, just like charged usage and failed
-// hashes. Continuation grants more capacity without resetting an ineffective
-// profile or endlessly repeating an identical failed answer.
+// hashes. Continuation never resets charged usage or an ineffective strategy.
 type generationRecovery struct {
 	CompactOutput                bool                     `json:"compact_output,omitempty"`
 	RepeatedCandidates           int                      `json:"repeated_candidates,omitempty"`
 	OutputFailures               int                      `json:"output_failures,omitempty"`
 	ProviderAvailabilityFailures int                      `json:"provider_availability_failures,omitempty"`
 	ProBodyDeadlineFallbackUsed  bool                     `json:"pro_body_deadline_fallback_used,omitempty"`
+	ProFreshSolveUsed            bool                     `json:"pro_fresh_solve_used,omitempty"`
 	ProviderRetry                answer.AvailabilityRetry `json:"provider_retry,omitempty"`
 }
 
@@ -50,7 +50,7 @@ func (g generationRecovery) profile(cfg Config, calls int) answer.Profile {
 	if calls > 0 {
 		p = cfg.RepairProfile
 	}
-	if calls >= 2 || g.RepeatedCandidates > 0 {
+	if cfg.EnableProFreshSolve && calls >= 2 && !g.ProFreshSolveUsed {
 		p = cfg.ProProfile
 	}
 	if g.CompactOutput {

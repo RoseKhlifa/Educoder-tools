@@ -60,14 +60,17 @@ func stage(req Request, phase, message string) {
 // mutation. One exact pre-execution environment-start failure may retry the
 // same self-test; other retries are model generation and confirmed-code repair.
 type Config struct {
-	MaxModelCalls     int
-	MaxEvaluations    int
-	BudgetMicroUSD    int64
-	Timeout           time.Duration
-	Profile           answer.Profile
-	RepairProfile     answer.Profile
-	ProProfile        answer.Profile
-	ProviderRetryWait answer.RetryWait `json:"-"`
+	MaxModelCalls  int
+	MaxEvaluations int
+	BudgetMicroUSD int64
+	Timeout        time.Duration
+	Profile        answer.Profile
+	RepairProfile  answer.Profile
+	ProProfile     answer.Profile
+	// EnableProFreshSolve permits one explicitly enabled third-call solve from
+	// the original problem, without failed source or repair history. Default off.
+	EnableProFreshSolve bool
+	ProviderRetryWait   answer.RetryWait `json:"-"`
 }
 
 func defaultConfig() Config {
@@ -216,7 +219,27 @@ func New(store Store, provider answer.Provider, cfg Config) *Service {
 		d.ProProfile = cfg.ProProfile
 	}
 	d.ProviderRetryWait = cfg.ProviderRetryWait
+	d.EnableProFreshSolve = cfg.EnableProFreshSolve
+	d.MaxModelCalls = boundedProgrammingLimit(d.MaxModelCalls)
+	d.MaxEvaluations = boundedProgrammingLimit(d.MaxEvaluations)
 	return &Service{store: store, provider: provider, cfg: d, generations: make(map[string]*generationCall), locks: make(map[string]*runtimeLock)}
+}
+
+const maxProgrammingCalls = 3
+
+func boundedProgrammingLimit(value int) int {
+	if value <= 0 || value > maxProgrammingCalls {
+		return maxProgrammingCalls
+	}
+	return value
+}
+
+func cappedProgrammingGrant(current, additional int) int {
+	current = boundedProgrammingLimit(current)
+	if additional >= maxProgrammingCalls-current {
+		return maxProgrammingCalls
+	}
+	return current + additional
 }
 
 // generateOnce coalesces concurrent model requests for the same problem,
@@ -427,6 +450,8 @@ func (s *Service) Run(ctx context.Context, adapter Adapter, req Request) (*Resul
 	if req.MaxEvaluations <= 0 {
 		req.MaxEvaluations = s.cfg.MaxEvaluations
 	}
+	req.MaxModelCalls = boundedProgrammingLimit(req.MaxModelCalls)
+	req.MaxEvaluations = boundedProgrammingLimit(req.MaxEvaluations)
 	if req.BudgetMicroUSD <= 0 {
 		req.BudgetMicroUSD = s.cfg.BudgetMicroUSD
 	}
@@ -720,6 +745,10 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				}
 			}
 			providerReq := answer.Request{Problem: snap, Previous: previous, Feedback: feedback, RepairHistory: boundedRepairHistory(state.RepairHistory), Profile: profile}
+			freshPro := s.cfg.EnableProFreshSolve && profile.Model == s.cfg.ProProfile.Model && !state.GenerationRecovery.ProFreshSolveUsed
+			if freshPro {
+				providerReq.Previous, providerReq.Feedback, providerReq.RepairHistory = nil, nil, nil
+			}
 			estimate, ee := s.provider.Estimate(providerReq)
 			if ee != nil {
 				result.Status = "budget_unavailable"
@@ -751,10 +780,16 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			gen, ge, billed := s.generateOnce(ctx, generationKey(providerReq), providerReq, func() error {
 				result.ModelCalls++
 				result.ReservedMicroUSD += estimate.CostMicroUSD
+				if freshPro {
+					state.GenerationRecovery.ProFreshSolveUsed = true
+				}
 				state.Result = *result
 				if err := s.persist(ctx, result.RunID, state, "running", created); err != nil {
 					result.ModelCalls--
 					result.ReservedMicroUSD -= estimate.CostMicroUSD
+					if freshPro {
+						state.GenerationRecovery.ProFreshSolveUsed = false
+					}
 					return err
 				}
 				dispatched = true
@@ -924,13 +959,9 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			result.CandidateID = rejected.ID
 			state.GenerationRecovery.RepeatedCandidates++
 			state.GenerationRecovery.CompactOutput = true
-			result.Diagnostics = append(result.Diagnostics, "已拦截重复失败代码；后续修复保留完整输出额度")
-			if state.GenerationRecovery.RepeatedCandidates >= maxUnproductiveGenerations {
-				result.Status = "generation_stalled"
-				result.Diagnostics = append(result.Diagnostics, "调整生成策略后仍连续返回已失败的代码，停止重复付费；需要补充题目证据或新的候选答案")
-				return result, nil
-			}
-			continue
+			result.Status = "generation_stalled"
+			result.Diagnostics = append(result.Diagnostics, "模型重复返回已失败代码，立即停止重复付费；需要补充题目证据或新的候选答案")
+			return result, nil
 		}
 		state.GenerationRecovery.RepeatedCandidates = 0
 		if req.Mode == ModeGenerateOnly {
@@ -1168,15 +1199,18 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			}
 			if ee != nil {
 				vr = "unknown"
+				if graphicBuildNotSent(snap, eval) {
+					vr = "error"
+				}
 				result.Diagnostics = append(result.Diagnostics, ee.Error())
 			}
 			savedHash, submittedHash := eval.SavedFilesHash, eval.SubmittedFilesHash
 			// Legacy adapters return no explicit hash. Their contract is to save the
 			// exact supplied file. Production returns hashes from read-back checks.
-			if savedHash == "" {
+			if savedHash == "" && snap.EditMode != "graphic" {
 				savedHash = result.CodeHash
 			}
-			if submittedHash == "" {
+			if submittedHash == "" && snap.EditMode != "graphic" {
 				submittedHash = result.CodeHash
 			}
 			cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
@@ -1229,6 +1263,14 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			return result, nil
 		}
 		if ee != nil {
+			if graphicBuildNotSent(snap, eval) {
+				result.Status = eval.Status
+				state.Result = *result
+				if persistErr := s.persist(ctx, result.RunID, state, result.Status, created); persistErr != nil {
+					return result, persistErr
+				}
+				return result, ee
+			}
 			result.Status = "uncertain"
 			state.Result = *result
 			_ = s.persist(ctx, result.RunID, state, result.Status, created)
@@ -1722,8 +1764,10 @@ func (s *Service) resumeRun(ctx context.Context, adapter Adapter, req Request, r
 		limits.BudgetMicroUSD = s.cfg.BudgetMicroUSD
 	}
 	if grant != nil {
-		limits.MaxModelCalls += grant.AdditionalModelCalls
-		limits.MaxEvaluations += grant.AdditionalEvaluations
+		// Explicit continuation can use remaining capacity, never exceed the
+		// per-level lifetime ceiling (including historical larger limits).
+		limits.MaxModelCalls = cappedProgrammingGrant(limits.MaxModelCalls, grant.AdditionalModelCalls)
+		limits.MaxEvaluations = cappedProgrammingGrant(limits.MaxEvaluations, grant.AdditionalEvaluations)
 		limits.BudgetMicroUSD += grant.AdditionalBudgetMicroUSD
 		if limits.MaxModelCalls <= 0 || limits.MaxEvaluations <= 0 || limits.BudgetMicroUSD <= 0 {
 			return nil, errors.New("continuation limits overflow")
@@ -1741,6 +1785,8 @@ func (s *Service) resumeRun(ctx context.Context, adapter Adapter, req Request, r
 	if req.BudgetMicroUSD <= 0 {
 		req.BudgetMicroUSD = limits.BudgetMicroUSD
 	}
+	req.MaxModelCalls = boundedProgrammingLimit(req.MaxModelCalls)
+	req.MaxEvaluations = boundedProgrammingLimit(req.MaxEvaluations)
 	if req.Timeout <= 0 {
 		req.Timeout = s.cfg.Timeout
 	}

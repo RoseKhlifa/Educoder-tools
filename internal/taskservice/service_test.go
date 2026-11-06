@@ -151,7 +151,7 @@ func TestObjectiveIncompleteOrUncertainNeverPromotesOrRetries(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			store := bank(t)
 			client, submits := objectiveServer(t, tc.score, tc.fail)
-			service := New(store, &fakeProvider{}, Config{MaxEvaluations: 1})
+			service := New(store, &fakeProvider{}, Config{MaxEvaluations: 1, ObjectiveMaxSubmissions: 1})
 			r, err := service.Run(context.Background(), client, req(solver.ModeSubmit), nil)
 			if r == nil || r.Status != tc.status || submits.Load() != 1 {
 				t.Fatalf("result=%+v err=%v submits=%d", r, err, submits.Load())

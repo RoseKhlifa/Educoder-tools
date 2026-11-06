@@ -20,7 +20,7 @@ func graphicTaskFixture(t *testing.T) *Task {
 	f := programmingTaskFixture("GRAPHIC1", 1)
 	f["vnc_url"] = "https://runtime.educoder.net/desktop"
 	f["challenge"] = map[string]any{"id": 201, "st": 0, "with_code_file": false, "path": "pingce/readme.txt", "task_pass": "答案保存为：/data/workspace/myshixun/answer/step1/step1.mdj"}
-	f["shixun_environments"] = []any{map[string]any{"shixun_environment_id": 23, "tab_type": 3, "vnc_url": "https://runtime.educoder.net/desktop"}}
+	f["shixun_environments"] = []any{map[string]any{"shixun_environment_id": 23, "tab_type": 3, "vnc_url": "https://runtime.educoder.net/desktop", "is_start": false}}
 	return decodeTaskFixture(t, f)
 }
 
@@ -230,6 +230,7 @@ func TestGraphicReadRetriesEventuallyConsistentRuntimeBinding(t *testing.T) {
 	}))
 	defer server.Close()
 	protocol := NewGraphicProtocol(New(server.URL), &fakeGraphicTransport{session: &fakeGraphicSession{content: []byte(graphicProject), exists: true}})
+	protocol.retryWait = func(context.Context, time.Duration) error { return nil }
 	if _, err := protocol.Read(context.Background(), task); err != nil {
 		t.Fatal(err)
 	}
@@ -261,6 +262,7 @@ func TestGraphicReadRetriesRuntimeBindingBeyondThirdAttempt(t *testing.T) {
 	defer server.Close()
 	transport := &fakeGraphicTransport{session: &fakeGraphicSession{content: []byte(graphicProject), exists: true}}
 	protocol := NewGraphicProtocol(New(server.URL), transport)
+	protocol.retryWait = func(context.Context, time.Duration) error { return nil }
 	document, err := protocol.Read(context.Background(), task)
 	if err != nil {
 		t.Fatalf("runtime ready on fourth attempt was rejected after %d starts: %v", starts, err)
@@ -338,7 +340,9 @@ func TestGraphicRuntimeCredentialsNeverBecomeTaskJSONOrErrors(t *testing.T) {
 		ioJSON(w, `{"status":-1,"message":"password=secret-do-not-log"}`)
 	}))
 	defer server.Close()
-	if _, err := NewGraphicProtocol(New(server.URL), &fakeGraphicTransport{}).Read(context.Background(), task); err == nil || strings.Contains(err.Error(), "secret-do-not-log") {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := NewGraphicProtocol(New(server.URL), &fakeGraphicTransport{}).Read(ctx, task); err == nil || strings.Contains(err.Error(), "secret-do-not-log") {
 		t.Fatalf("start error leaked: %v", err)
 	}
 }

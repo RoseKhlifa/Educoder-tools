@@ -30,6 +30,8 @@ type Config struct {
 	Timeout                 time.Duration
 	MaxModelCalls           int
 	MaxEvaluations          int
+	ObjectiveMaxSubmissions int
+	EnableProFreshSolve     bool
 	ProgrammingRepairRounds int
 	BudgetMicroUSD          int64
 	ProviderRetryWait       answer.RetryWait `json:"-"`
@@ -98,15 +100,16 @@ func New(store *questionbank.Store, provider Provider, cfg Config) *Service {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 5 * time.Minute
 	}
-	if cfg.MaxModelCalls <= 0 || cfg.MaxModelCalls > 10 {
-		cfg.MaxModelCalls = 10
+	if cfg.MaxModelCalls <= 0 || cfg.MaxModelCalls > 3 {
+		cfg.MaxModelCalls = 3
 	}
-	if cfg.MaxEvaluations <= 0 || cfg.MaxEvaluations > 10 {
-		cfg.MaxEvaluations = 10
+	if cfg.MaxEvaluations <= 0 || cfg.MaxEvaluations > 3 {
+		cfg.MaxEvaluations = 3
 	}
-	if cfg.ProgrammingRepairRounds <= 0 || cfg.ProgrammingRepairRounds > 10 {
-		cfg.ProgrammingRepairRounds = 4
+	if cfg.ObjectiveMaxSubmissions <= 0 || cfg.ObjectiveMaxSubmissions > 15 {
+		cfg.ObjectiveMaxSubmissions = 15
 	}
+	cfg.ProgrammingRepairRounds = 1
 	if cfg.BudgetMicroUSD <= 0 || cfg.BudgetMicroUSD > 50000 {
 		cfg.BudgetMicroUSD = 50000
 	}
@@ -121,7 +124,7 @@ func New(store *questionbank.Store, provider Provider, cfg Config) *Service {
 			exerciseProvider = limited
 		}
 	}
-	return &Service{store: store, provider: wrapped, exerciseProvider: exerciseProvider, programming: solver.New(store, prog, solver.Config{Timeout: cfg.Timeout, MaxModelCalls: cfg.MaxModelCalls, MaxEvaluations: cfg.MaxEvaluations, BudgetMicroUSD: cfg.BudgetMicroUSD, ProviderRetryWait: cfg.ProviderRetryWait}), cfg: cfg, targets: make(map[string]*targetLock)}
+	return &Service{store: store, provider: wrapped, exerciseProvider: exerciseProvider, programming: solver.New(store, prog, solver.Config{Timeout: cfg.Timeout, MaxModelCalls: cfg.MaxModelCalls, MaxEvaluations: cfg.MaxEvaluations, EnableProFreshSolve: cfg.EnableProFreshSolve, BudgetMicroUSD: cfg.BudgetMicroUSD, ProviderRetryWait: cfg.ProviderRetryWait}), cfg: cfg, targets: make(map[string]*targetLock)}
 }
 func (s *Service) lock(ctx context.Context, key string) (func(), error) {
 	s.targetMu.Lock()
@@ -555,7 +558,7 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 	}
 	var previous *answer.ObjectiveCandidate
 	var feedback []answer.Feedback
-	attemptHistory := newObjectiveAttemptHistory(s.cfg.MaxEvaluations)
+	attemptHistory := newObjectiveAttemptHistory(s.cfg.ObjectiveMaxSubmissions)
 	failed, historyErr := s.store.ObjectiveFailedAttempts(ctx, hash, 10)
 	if historyErr != nil {
 		r.Status = "failed"
@@ -565,7 +568,8 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 	compactOutput := false
 	var independent *objectiveIndependentReview
 	independentUsed := false
-	for attempt := 0; attempt < s.cfg.MaxEvaluations; attempt++ {
+	submissions := 0
+	for attempt := 0; submissions < s.cfg.ObjectiveMaxSubmissions; attempt++ {
 		var c answer.ObjectiveCandidate
 		if attempt == 0 && cacheErr == nil {
 			c = cached.Candidate
@@ -580,7 +584,7 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 				return r, errors.New("model provider is required for a cache miss")
 			}
 			if r.ModelCalls >= s.cfg.MaxModelCalls {
-				r.Status = "budget_exhausted"
+				r.Status = "attempts_exhausted"
 				return r, nil
 			}
 			// A failed whole-vector history can anchor every subsequent repair
@@ -593,7 +597,7 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 					r.Status = "verification_unconfirmed"
 					return r, reviewErr
 				}
-				if review.remaining > 0 && review.remaining <= s.cfg.MaxModelCalls-r.ModelCalls && review.remaining <= s.cfg.MaxEvaluations-attempt {
+				if review.remaining > 0 && review.remaining <= s.cfg.MaxModelCalls-r.ModelCalls {
 					reviewProfile := answer.RepairProfile()
 					reviewProfile.MaxTokens = 8192
 					if compactOutput {
@@ -622,9 +626,6 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			profile := answer.DefaultProfile()
 			if r.ModelCalls > 0 || previous != nil {
 				profile = answer.RepairProfile()
-			}
-			if r.ModelCalls >= 2 && !compactOutput {
-				profile = answer.ProProfile()
 			}
 			if independent != nil {
 				// A focused context does not need an increasingly anchored Pro
@@ -696,7 +697,7 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 				r.providerRetry.Observe(nil)
 			}
 			if e != nil {
-				if retryableObjectiveModelError(e) && attempt+1 < s.cfg.MaxEvaluations && r.ModelCalls < s.cfg.MaxModelCalls && ctx.Err() == nil {
+				if retryableObjectiveModelError(e) && r.ModelCalls < s.cfg.MaxModelCalls && ctx.Err() == nil {
 					if independent != nil {
 						independent.observeModelError(e)
 					}
@@ -800,6 +801,7 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 		}
 		emit("submitting", "正在提交客观题答案")
 		emit("verifying", "正在复核当前关卡实际得分")
+		submissions++
 		submitted, e := client.ObjectiveSubmit(ctx, choice, c.Answers)
 		if e != nil {
 			r.Status = "uncertain"

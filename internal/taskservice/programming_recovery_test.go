@@ -48,14 +48,14 @@ func (f *recoveryFixture) ContinueRun(_ context.Context, _ solver.Adapter, req s
 	return &solver.Result{RunID: runID, Status: status, ModelCalls: 2 * (f.continues + 1), CostMicroUSD: int64(3 * (f.continues + 1))}, nil
 }
 
-func TestProgrammingRecoveryContinuesSameCheckpointWithoutResettingUsage(t *testing.T) {
+func TestProgrammingRecoveryKeepsOriginalCheckpointWithoutGrantingBudget(t *testing.T) {
 	f := &recoveryFixture{t: t, initial: &solver.Result{RunID: "same-run", Status: "selftest_failed", ModelCalls: 2, CostMicroUSD: 3}}
 	req := solver.Request{Owner: "owner", Course: "course", HomeworkID: 11, Game: "game", Mode: solver.ModeSubmit, MaxModelCalls: 2, MaxEvaluations: 2, BudgetMicroUSD: 20}
 	var phases []string
 	req.OnProgress = func(st solver.Stage) { phases = append(phases, st.Phase) }
 	r, err := runProgrammingRecovery(context.Background(), f, nil, req, 4, func() (bool, error) { return true, nil })
-	if err != nil || r.Status != "passed" || f.continues != 1 || r.ModelCalls != 4 || r.CostMicroUSD != 6 || len(phases) != 1 || phases[0] != "repairing" {
-		t.Fatalf("confirmed code failure was not automatically continued: %+v continues=%d phases=%v err=%v", r, f.continues, phases, err)
+	if err != nil || r.Status != "selftest_failed" || f.continues != 0 || r.ModelCalls != 2 || r.CostMicroUSD != 3 || len(phases) != 0 {
+		t.Fatalf("confirmed code failure automatically expanded its budget: %+v continues=%d phases=%v err=%v", r, f.continues, phases, err)
 	}
 }
 
@@ -75,7 +75,7 @@ func TestProgrammingRecoveryStopsAtPassAndPreservesAdmissionAndUnknownResults(t 
 		{"real cost budget spent", &solver.Result{RunID: "same-run", Status: "selftest_failed", CostMicroUSD: 19, ReservedMicroUSD: 1}, solver.ModeSubmit, nil, true, "selftest_failed"},
 		{"editor conflict", &solver.Result{RunID: "same-run", Status: "selftest_failed"}, solver.ModeSubmit, errors.New("editor changed"), true, "selftest_failed"},
 		{"generate only", &solver.Result{RunID: "same-run", Status: "selftest_failed"}, solver.ModeGenerateOnly, nil, true, "selftest_failed"},
-		{"closed before continuation", &solver.Result{RunID: "same-run", Status: "selftest_failed"}, solver.ModeSubmit, nil, false, "deadline_passed"},
+		{"closed before continuation", &solver.Result{RunID: "same-run", Status: "selftest_failed"}, solver.ModeSubmit, nil, false, "selftest_failed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &recoveryFixture{t: t, initial: tc.result, initialErr: tc.err}
@@ -89,9 +89,9 @@ func TestProgrammingRecoveryStopsAtPassAndPreservesAdmissionAndUnknownResults(t 
 
 func TestProgrammingRecoveryBoundedRoundsAndCancellation(t *testing.T) {
 	req := solver.Request{Owner: "owner", Game: "game", Mode: solver.ModeSubmit, MaxModelCalls: 2, MaxEvaluations: 2, BudgetMicroUSD: 100}
-	f := &recoveryFixture{t: t, initial: &solver.Result{RunID: "same-run", Status: "attempts_exhausted"}, finalStatus: "attempts_exhausted"}
+	f := &recoveryFixture{t: t, initial: &solver.Result{RunID: "same-run", Status: "attempts_exhausted", ModelCalls: 2, CostMicroUSD: 3}, finalStatus: "attempts_exhausted"}
 	r, err := runProgrammingRecovery(context.Background(), f, nil, req, 3, func() (bool, error) { return true, nil })
-	if err != nil || f.continues != 2 || r.ModelCalls != 6 || r.CostMicroUSD != 9 {
+	if err != nil || f.continues != 0 || r.ModelCalls != 2 || r.CostMicroUSD != 3 {
 		t.Fatalf("repair round cap or lifetime usage wrong: %+v continues=%d err=%v", r, f.continues, err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -108,7 +108,7 @@ func TestProgrammingRecoveryKeepsCheckpointWhenContinuationReadFails(t *testing.
 	last := &solver.Result{RunID: "same-run", Status: "selftest_failed", ModelCalls: 10, CostMicroUSD: 17, ReservedMicroUSD: 5}
 	f := &recoveryFixture{t: t, initial: last, continueErr: readErr}
 	r, err := runProgrammingRecovery(context.Background(), f, nil, solver.Request{Mode: solver.ModeSubmit, BudgetMicroUSD: 100}, 4, func() (bool, error) { return true, nil })
-	if !errors.Is(err, readErr) || r != last || r.RunID != "same-run" || r.ModelCalls != 10 || r.CostMicroUSD != 17 || r.ReservedMicroUSD != 5 || f.continues != 1 {
+	if err != nil || r != last || r.RunID != "same-run" || r.ModelCalls != 10 || r.CostMicroUSD != 17 || r.ReservedMicroUSD != 5 || f.continues != 0 {
 		t.Fatalf("continuation read error discarded charged work: result=%+v continues=%d err=%v", r, f.continues, err)
 	}
 }
