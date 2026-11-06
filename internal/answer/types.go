@@ -150,7 +150,7 @@ func IsRetryableError(err error) bool {
 		return true
 	}
 	switch providerErr.Kind {
-	case "truncated_output", "invalid_output_json", "candidate_contract", "objective_candidate_contract":
+	case "truncated_output", "invalid_output_json", "candidate_contract", "objective_candidate_contract", "objective_fixed_answers_mismatch":
 		return true
 	default:
 		return false

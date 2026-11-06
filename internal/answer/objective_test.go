@@ -57,3 +57,72 @@ func TestObjectiveValidationRejectsWrongKindAndDuplicateAnswers(t *testing.T) {
 		t.Fatal("accepted unknown field")
 	}
 }
+
+func TestObjectiveFixedAnswersArePositionalAndPreserved(t *testing.T) {
+	var wire wireRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(responseFor(`{"kind":"objective","answers":["B","AB"]}`, "stop")))
+	}))
+	defer server.Close()
+	p, err := NewDeepSeek(Config{APIKey: "local-test", BaseURL: server.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := p.GenerateObjective(context.Background(), ObjectiveRequest{
+		Problem:      objectiveFixture(),
+		FixedAnswers: []string{"B", ""},
+		Profile:      DefaultProfile(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(result.Candidate.Answers, ","); got != "B,AB" {
+		t.Fatalf("candidate=%s", got)
+	}
+	var payload struct {
+		FixedAnswers []string `json:"fixed_answers"`
+	}
+	if err := json.Unmarshal([]byte(wire.Messages[1].Content.textOnly()), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(payload.FixedAnswers, ",") != "B," {
+		t.Fatalf("fixed_answers payload=%q", payload.FixedAnswers)
+	}
+	if !strings.Contains(wire.Messages[0].Content.textOnly(), "validated locked answer") || !strings.Contains(wire.Messages[0].Content.textOnly(), "incomplete data remains unresolved") {
+		t.Fatalf("locked-answer prompt missing safeguards: %s", wire.Messages[0].Content.textOnly())
+	}
+}
+
+func TestObjectiveFixedAnswersRejectIncompleteQuestionData(t *testing.T) {
+	s := objectiveFixture()
+	s.Questions[0].Options[0].Text = ""
+	if err := ValidateObjectiveFixedAnswers(s, []string{"A", ""}); err == nil {
+		t.Fatal("accepted a fixed answer for an incomplete question")
+	} else if got := err.(*Error).Kind; got != "objective_fixed_answers_contract" {
+		t.Fatalf("error kind=%q", got)
+	}
+	// An unresolved slot remains explicitly unresolved even when its question
+	// data is incomplete; it must not be converted into a positional lock.
+	if err := ValidateObjectiveFixedAnswers(s, []string{"", ""}); err != nil {
+		t.Fatalf("rejected explicit unresolved slots: %v", err)
+	}
+	if err := ValidateObjectiveFixedAnswers(objectiveFixture(), []string{"A"}); err == nil {
+		t.Fatal("accepted a vector with the wrong length")
+	}
+}
+
+func TestObjectiveFixedAnswerMismatchIsRetryable(t *testing.T) {
+	s := objectiveFixture()
+	candidate := ObjectiveCandidate{Kind: "objective", Answers: []string{"A", "AB"}}
+	err := validateObjectiveFixedAnswerMatch(s, []string{"B", ""}, candidate)
+	if err == nil || err.(*Error).Kind != "objective_fixed_answers_mismatch" {
+		t.Fatalf("mismatch error=%v", err)
+	}
+	if !IsRetryableError(err) {
+		t.Fatal("fixed-answer mismatch is not retryable")
+	}
+}
