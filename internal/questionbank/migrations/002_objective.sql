@@ -4,6 +4,9 @@ CREATE TABLE IF NOT EXISTS objective_questions (
  question_json TEXT NOT NULL,
  resources_json TEXT NOT NULL,
  resource_complete INTEGER NOT NULL,
+ context_json TEXT NOT NULL DEFAULT '{}',
+ context_complete INTEGER NOT NULL DEFAULT 0,
+ fingerprint_version INTEGER NOT NULL DEFAULT 1,
  created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS objective_answers (

@@ -41,6 +41,33 @@ func migrateObjectiveVerificationLayout(tx *sql.Tx) error {
 	return err
 }
 
+// migrateObjectiveQuestionContext adds the fail-closed context columns to
+// banks created before per-question fingerprints carried shared challenge
+// material. Existing rows deliberately remain context_complete=0: their old
+// question-only identity cannot prove that the shared title/statement/media
+// was read and must not be reused automatically.
+func migrateObjectiveQuestionContext(tx *sql.Tx) error {
+	columns, err := objectiveTableColumns(tx, "objective_questions")
+	if err != nil || len(columns) == 0 {
+		return err
+	}
+	for _, spec := range []struct {
+		name string
+		ddl  string
+	}{
+		{"context_json", `ALTER TABLE objective_questions ADD COLUMN context_json TEXT NOT NULL DEFAULT '{}'`},
+		{"context_complete", `ALTER TABLE objective_questions ADD COLUMN context_complete INTEGER NOT NULL DEFAULT 0`},
+		{"fingerprint_version", `ALTER TABLE objective_questions ADD COLUMN fingerprint_version INTEGER NOT NULL DEFAULT 1`},
+	} {
+		if columns[spec.name] {
+			continue
+		}
+		if _, err = tx.Exec(spec.ddl); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 func objectiveTableColumns(tx *sql.Tx, table string) (map[string]bool, error) {
 	rows, err := tx.Query("SELECT name FROM pragma_table_info(?)", table)
 	if err != nil {

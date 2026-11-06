@@ -23,6 +23,29 @@ type ObjectiveResource struct {
 	SHA256  string `json:"sha256"`
 }
 
+// ObjectiveQuestionContext is the shared material that applies to every
+// question in a challenge. A question answer is reusable only when the
+// collector explicitly confirms that this context was read completely. The
+// explicit flag is intentional: an empty title or statement can be valid
+// upstream data, while an omitted field is indistinguishable from an empty
+// field unless the reader records completeness separately.
+type ObjectiveQuestionContext struct {
+	Kind      string `json:"kind"`
+	Title     string `json:"title"`
+	Statement string `json:"statement"`
+	Complete  bool   `json:"complete"`
+}
+
+// ObjectiveQuestionInput is the only context-aware collection input. The
+// old question-only API remains for compatibility, but production collection
+// should use this form so a partial upstream read becomes non-reusable rather
+// than accidentally matching a complete historical question.
+type ObjectiveQuestionInput struct {
+	Question  answer.ObjectiveQuestion `json:"question"`
+	Context   ObjectiveQuestionContext `json:"context"`
+	Resources []ObjectiveResource      `json:"resources"`
+}
+
 type ObjectiveAnswer struct {
 	ID               int64                 `json:"id"`
 	QuestionKey      string                `json:"question_key"`
@@ -139,6 +162,93 @@ func ObjectiveQuestionKey(q answer.ObjectiveQuestion) (string, error) {
 	return key, err
 }
 
+// ObjectiveQuestionKeyWithContext fingerprints one question together with the
+// complete shared challenge context and inspected media. The boolean result is
+// false whenever any part of the read is incomplete. Incomplete keys are still
+// persisted for auditability, but they are deliberately different from the
+// legacy question-only key and can never yield a reusable answer.
+func ObjectiveQuestionKeyWithContext(in ObjectiveQuestionInput) (string, bool, error) {
+	q, resources, _, questionResourcesComplete, err := prepareObjectiveQuestion(in.Question, in.Resources)
+	if err != nil {
+		return "", false, err
+	}
+	if err = validateObjectiveQuestionContext(in.Context); err != nil {
+		return "", false, err
+	}
+	contextComplete := in.Context.Complete
+	questionComplete := objectiveQuestionFieldsComplete(q)
+	sharedResourcesComplete := objectiveObjectiveMediaComplete([]string{in.Context.Title, in.Context.Statement}, resources)
+	complete := contextComplete && questionComplete && questionResourcesComplete && sharedResourcesComplete
+	encoded, err := json.Marshal(struct {
+		Version   int                      `json:"version"`
+		Complete  bool                     `json:"complete"`
+		Context   ObjectiveQuestionContext `json:"context"`
+		Question  answer.ObjectiveQuestion `json:"question"`
+		Resources []ObjectiveResource      `json:"resources"`
+	}{2, complete, in.Context, q, resources})
+	if err != nil {
+		return "", false, err
+	}
+	return problem.HashContent(string(encoded)), complete, nil
+}
+
+func validateObjectiveQuestionContext(ctx ObjectiveQuestionContext) error {
+	if ctx.Kind != "" && ctx.Kind != "objective" {
+		return errors.New("objective context kind is invalid")
+	}
+	for _, text := range []string{ctx.Kind, ctx.Title, ctx.Statement} {
+		if err := problem.ValidatePublicText(text); err != nil {
+			return err
+		}
+	}
+	if ctx.Complete && ctx.Kind != "objective" {
+		return errors.New("complete objective context must declare kind")
+	}
+	return nil
+}
+
+func objectiveQuestionFieldsComplete(q answer.ObjectiveQuestion) bool {
+	if strings.TrimSpace(q.Question) == "" || len(q.Options) == 0 {
+		return false
+	}
+	for i, option := range q.Options {
+		if strings.TrimSpace(option.Text) == "" || option.Position != i || option.Label != string(rune('A'+i)) {
+			return false
+		}
+	}
+	return true
+}
+
+// objectiveObjectiveMediaComplete checks shared title/statement media with
+// the same content-hash contract as question and option media. It is kept
+// separate from prepareObjectiveQuestion so the legacy question-only key does
+// not silently acquire a context it never received.
+func objectiveObjectiveMediaComplete(texts []string, resources []ObjectiveResource) bool {
+	hashes := make(map[string]string, len(resources))
+	for _, resource := range resources {
+		hashes[resource.Locator] = resource.SHA256
+	}
+	for _, text := range texts {
+		if !objectiveMediaPattern.MatchString(text) {
+			continue
+		}
+		matches := objectiveMediaLocatorPattern.FindAllStringSubmatch(text, -1)
+		if len(matches) == 0 || objectiveEmbeddedMediaPattern.MatchString(text) {
+			return false
+		}
+		for _, match := range matches {
+			locator := match[1]
+			if locator == "" {
+				locator = match[2]
+			}
+			if hashes[locator] == "" {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func (s *Store) UpsertObjectiveQuestion(ctx context.Context, q answer.ObjectiveQuestion) (string, error) {
 	return s.UpsertObjectiveQuestionWithResources(ctx, q, nil)
 }
@@ -150,6 +260,27 @@ func (s *Store) UpsertObjectiveQuestionWithResources(ctx context.Context, in ans
 	}
 	_, err = s.db.ExecContext(ctx, "INSERT OR IGNORE INTO objective_questions(question_key,question_json,resources_json,resource_complete,created_at) VALUES(?,?,?,?,?)", key, marshal(q), marshal(resources), complete, now())
 	return key, err
+}
+
+// UpsertObjectiveQuestionWithContext stores the context-aware fingerprint and
+// returns whether it is safe for automatic reuse. A partial read is retained
+// so the collector can diagnose it later, but context_complete/resource_complete
+// remain false and lookup will not promote any answer under that key.
+func (s *Store) UpsertObjectiveQuestionWithContext(ctx context.Context, in ObjectiveQuestionInput) (string, bool, error) {
+	key, reusable, err := ObjectiveQuestionKeyWithContext(in)
+	if err != nil {
+		return "", false, err
+	}
+	q, resources, _, questionResourcesComplete, err := prepareObjectiveQuestion(in.Question, in.Resources)
+	if err != nil {
+		return "", false, err
+	}
+	sharedResourcesComplete := objectiveObjectiveMediaComplete([]string{in.Context.Title, in.Context.Statement}, resources)
+	contextComplete := in.Context.Complete && in.Context.Kind == "objective"
+	_, err = s.db.ExecContext(ctx, `INSERT OR IGNORE INTO objective_questions(
+		question_key,question_json,resources_json,resource_complete,context_json,context_complete,fingerprint_version,created_at
+	) VALUES(?,?,?,?,?,?,?,?)`, key, marshal(q), marshal(resources), questionResourcesComplete && sharedResourcesComplete, marshal(in.Context), contextComplete, 2, now())
+	return key, reusable, err
 }
 
 func (s *Store) AddObjectiveAnswer(ctx context.Context, key, answerText, source, model string) (int64, error) {
@@ -220,10 +351,26 @@ func (s *Store) RecordObjectiveValidation(ctx context.Context, id int64, v Objec
 // LookupObjectiveAnswers preserves failed and unconfirmed candidates. Only
 // Verified && Reusable answers are eligible for automatic cache reuse.
 func (s *Store) LookupObjectiveAnswers(ctx context.Context, key string) ([]ObjectiveAnswer, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT a.id,a.question_key,a.answer,a.answer_hash,a.source,a.model,a.created_at,q.resource_complete,
- EXISTS(SELECT 1 FROM objective_answer_verifications v WHERE v.answer_id=a.id AND v.verified=1)
+	return s.lookupObjectiveAnswers(ctx, key, false)
+}
+
+// LookupObjectiveAnswersWithContext requires the v2 context-aware fingerprint
+// and complete shared context before exposing any answer as reusable. It still
+// returns validation history for diagnostics, but callers must use Reusable.
+func (s *Store) LookupObjectiveAnswersWithContext(ctx context.Context, key string) ([]ObjectiveAnswer, error) {
+	return s.lookupObjectiveAnswers(ctx, key, true)
+}
+
+func (s *Store) lookupObjectiveAnswers(ctx context.Context, key string, requireContext bool) ([]ObjectiveAnswer, error) {
+	query := `SELECT a.id,a.question_key,a.answer,a.answer_hash,a.source,a.model,a.created_at,q.resource_complete,
+ COALESCE((SELECT v.verified FROM objective_answer_verifications v WHERE v.answer_id=a.id ORDER BY v.id DESC LIMIT 1),0)
  FROM objective_answers a JOIN objective_questions q ON q.question_key=a.question_key
- WHERE a.question_key=? ORDER BY 9 DESC,a.id DESC`, key)
+ WHERE a.question_key=?`
+	if requireContext {
+		query += ` AND q.context_complete=1 AND q.fingerprint_version>=2`
+	}
+	query += ` ORDER BY 9 DESC,a.id DESC`
+	rows, err := s.db.QueryContext(ctx, query, key)
 	if err != nil {
 		return nil, err
 	}
