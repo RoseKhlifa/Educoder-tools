@@ -60,6 +60,27 @@ func TestObjectivePromptSeparatesCoverageCriteriaAndDynamicExecutions(t *testing
 	)
 }
 
+func TestObjectivePromptSeparatesFeasiblePredicateCombinations(t *testing.T) {
+	wire := objectivePromptFixture(t)
+	requireObjectivePromptRules(t, wire.Messages[0].Content.textOnly(),
+		"combinations within each explicitly supplied decision",
+		"all input predicates in a prose-only business-rule specification",
+		"Do not invent unstated nesting, early returns or evaluation order",
+		"partition each input domain into regions with constant predicate truth values",
+		"enumerate only feasible truth vectors",
+		"stricter thresholds imply weaker thresholds",
+		"disjoint intervals exclude each other",
+		"Do not blindly use a power of two",
+		"concrete input witness for every counted feasible combination",
+		"compare both with the current question's wording, supplied definitions and available options",
+		"not a ban on abstract input truth assignments",
+		"do not discard a logically valid input combination solely because a short-circuit implementation skips an operand",
+	)
+	if wire.ResponseFormat.Type != "json_object" {
+		t.Fatal("semantic clarification widened output contract")
+	}
+}
+
 func TestObjectivePromptFailureFeedbackDoesNotBlameEveryComponentOrUnlockAnswers(t *testing.T) {
 	wire := objectivePromptFixture(t)
 	prompt := wire.Messages[0].Content.textOnly()

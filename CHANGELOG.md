@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.106 - 2026-11-06
+
+- Distinguish per-decision combinations, feasible global input-predicate combinations and runtime short-circuit observations in objective coverage analysis
+- Require domain partitions, dependency constraints, concrete witnesses and explicit local/global interpretation checks instead of assuming independent predicates or inventing control flow for prose specifications
+- Preserve strict output slots, prior full-score skips, complete question context, hard budgets and normal platform score verification
+
 ## 0.1.105 - 2026-11-06
 
 - Make objective output slots explicit for focused review, including original positions, exact array length and single/multiple-choice string shapes
