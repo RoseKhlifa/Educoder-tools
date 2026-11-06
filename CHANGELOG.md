@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.103 - 2026-11-06
+
+- Clarify generic decision-coverage reasoning for compound predicates, nested branches, loops and recursive re-evaluation without embedding task-specific answers
+
 ## 0.1.102 - 2026-11-06
 
 - Keep objective repair in a compact Flash profile after any observed truncation, preventing Pro reasoning from alternating back into repeated 8192-token failures

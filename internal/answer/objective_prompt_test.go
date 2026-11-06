@@ -52,6 +52,11 @@ func TestObjectivePromptSeparatesCoverageCriteriaAndDynamicExecutions(t *testing
 		"feasible witness set of inputs", "a smaller set cannot do so",
 		"count of syntactic branches is not a proof of the minimum", "infeasible paths",
 		"unbounded path requirement",
+		"Treat each complete boolean decision as one decision",
+		"not every operand combination",
+		"do not demand all combinations unless the question explicitly asks",
+		"trace the condition again after the body or recursive return",
+		"cover every feasible branch represented by the supplied options",
 	)
 }
 
