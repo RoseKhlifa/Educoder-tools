@@ -137,6 +137,10 @@ func (s *objectiveScoreFeedback) next(snapshot answer.ObjectiveSnapshot) (answer
 		}
 		trial := s.base
 		trial.Answers = replaceObjectiveAnswer(s.base.Answers, question.index, question.choices[question.next])
+		// Ranked alternatives describe the historical/model baseline only. A
+		// platform-score probe is a concrete vector and must not persist stale
+		// rankings that could be mistaken for a new model answer.
+		trial.RankedAnswers = nil
 		if answer.ValidateObjectiveCandidate(snapshot, trial) != nil {
 			return answer.ObjectiveCandidate{}, false
 		}
@@ -286,6 +290,32 @@ func (h *objectiveAttemptHistory) restore(failed []questionbank.ObjectiveFailedA
 	previous := h.prior[len(h.prior)-1].Candidate
 	previous.Answers = append([]string(nil), previous.Answers...)
 	return &previous
+}
+
+// scoreFeedback reuses a durable ranked failure as a comparable platform
+// baseline. The vector has already been submitted and its aggregate score
+// was confirmed, so the next run can start with a one-question probe instead
+// of paying for (and potentially resubmitting) an identical model baseline.
+// Legacy rows without ranked alternatives remain ordinary repair history.
+func (h *objectiveAttemptHistory) scoreFeedback(snapshot answer.ObjectiveSnapshot, fixed []string) (*objectiveScoreFeedback, bool) {
+	if h == nil {
+		return nil, false
+	}
+	for index := len(h.prior) - 1; index >= 0; index-- {
+		prior := h.prior[index]
+		search, ok := newObjectiveScoreFeedback(snapshot, prior.Candidate, fixed)
+		if !ok {
+			continue
+		}
+		// observe enforces the same submitted-vector invariant used by a live
+		// baseline while accepting this exact durable historical observation.
+		search.observe(prior.Candidate, prior.Score, prior.MaxScore)
+		if search.done || search.baseline == nil {
+			continue
+		}
+		return search, true
+	}
+	return nil, false
 }
 
 func (h *objectiveAttemptHistory) contains(candidate answer.ObjectiveCandidate) bool {

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.113 - 2026-11-07
+
+- Reuse ranked historical score baselines for one-question objective probes
+
 ## 0.1.112 - 2026-11-07
 
 - Align objective failure history with bounded submission budget

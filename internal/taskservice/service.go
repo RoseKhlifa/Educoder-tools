@@ -629,6 +629,9 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			return r, historyErr
 		}
 		previous = attemptHistory.restore(failed)
+		if seeded, ok := attemptHistory.scoreFeedback(snapshot, fixedAnswers); ok {
+			scoreFeedback = seeded
+		}
 	}
 	for attempt := 0; submissions < s.cfg.ObjectiveMaxSubmissions; attempt++ {
 		var c answer.ObjectiveCandidate

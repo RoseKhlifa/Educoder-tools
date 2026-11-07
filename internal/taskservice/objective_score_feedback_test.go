@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"educoder-cli/internal/answer"
+	"educoder-cli/internal/questionbank"
 )
 
 func scoreFeedbackSnapshot() answer.ObjectiveSnapshot {
@@ -118,5 +119,26 @@ func TestObjectiveScoreFeedbackRejectsUnsubmittedBaselineAndProbe(t *testing.T) 
 	search.observe(wrong, "2", "2")
 	if !search.done {
 		t.Fatal("unsubmitted probe was accepted")
+	}
+}
+
+func TestObjectiveScoreFeedbackSeedsFromConfirmedHistoricalFailure(t *testing.T) {
+	snapshot := scoreFeedbackSnapshot()
+	candidate := answer.ObjectiveCandidate{Kind: "objective", Answers: []string{"A", "A"}, RankedAnswers: []answer.ObjectiveRankedSlot{
+		{QuestionPosition: 1, Choices: []string{"A", "B"}},
+		{QuestionPosition: 2, Choices: []string{"A", "B", "C"}},
+	}}
+	history := newObjectiveAttemptHistory(15)
+	history.restore([]questionbank.ObjectiveFailedAttempt{{
+		Candidate: questionbank.ObjectiveCandidate{Candidate: candidate},
+		Score:     "1", MaxScore: "2",
+	}})
+	search, ok := history.scoreFeedback(snapshot, nil)
+	if !ok || search.baseline == nil {
+		t.Fatal("confirmed ranked history was not accepted as a baseline")
+	}
+	probe, ok := search.next(snapshot)
+	if !ok || probe.Answers[0] != "B" || probe.Answers[1] != "A" || len(probe.RankedAnswers) != 0 {
+		t.Fatalf("historical baseline did not produce a clean one-question probe: %+v ok=%v", probe, ok)
 	}
 }
