@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"educoder-cli/internal/educoder"
+	"educoder-cli/internal/questionbank"
 )
 
 func TestTaskContinueRequiresTwoExplicitUpstreamBooleans(t *testing.T) {
@@ -87,5 +88,30 @@ func TestFuseOwnerIsolationAndManualSingleHomeworkBypass(t *testing.T) {
 	// the deterministic cooldown; its separate unknown-write guard still does.
 	if _, err := s.homeworkFuse(context.Background(), Request{Owner: "owner-b", Course: "C", HomeworkID: hw.ID}, hw, p, when.Add(time.Minute)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestGuardHomeworkUnknownReturnsOnlyFormalUnknownGames(t *testing.T) {
+	store := bank(t)
+	s := New(store, nil, Config{})
+	ctx := context.Background()
+	roster := &educoder.HomeworkRoster{Levels: []educoder.HomeworkLevel{{ChallengeID: 1, Game: "G1"}, {ChallengeID: 2, Game: "G2"}}}
+	progress := &educoder.HomeworkProgress{Challenges: []educoder.ChallengeProgress{{ChallengeID: 1, GameScore: "0", ChallengeScore: "10"}, {ChallengeID: 2, GameScore: "0", ChallengeScore: "10"}}}
+	record := questionbank.RunRecord{ID: "formal-unknown", Owner: ownerHash("owner"), Status: "uncertain", Data: []byte(`{"result":{"kind":"objective","status":"uncertain"},"target":{"Course":"C","HomeworkID":9,"Game":"G1"}}`), CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	if err := store.PutRun(ctx, record); err != nil {
+		t.Fatal(err)
+	}
+	blocked, err := s.guardHomeworkUnknown(ctx, Request{Owner: "owner", Course: "C", HomeworkID: 9}, roster, progress)
+	if err != nil || !blocked["G1"] || blocked["G2"] {
+		t.Fatalf("blocked=%v err=%v", blocked, err)
+	}
+	// A self-test uncertainty for another level remains auditable but does not
+	// block a fresh formal write because no evaluator mutation was attempted.
+	if err := store.PutRun(ctx, questionbank.RunRecord{ID: "selftest-unknown", Owner: ownerHash("owner"), Status: "uncertain", Data: []byte(`{"result":{"kind":"programming","status":"uncertain","programming":{"self_test_status":"unknown"}},"target":{"Course":"C","HomeworkID":9,"Game":"G2"}}`), CreatedAt: time.Now(), UpdatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	blocked, err = s.guardHomeworkUnknown(ctx, Request{Owner: "owner", Course: "C", HomeworkID: 9}, roster, progress)
+	if err != nil || !blocked["G1"] || blocked["G2"] {
+		t.Fatalf("self-test uncertainty blocked unrelated level: blocked=%v err=%v", blocked, err)
 	}
 }

@@ -2,6 +2,7 @@ package questionbank
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -23,9 +24,30 @@ func TestExternalObjectiveCandidateIsUnverifiedAndShapeBound(t *testing.T) {
 	}
 	defer s.Close()
 	root := t.TempDir()
-	externalFixture(t, root, "choice", "choice", "Example", "Example level", "answer.json", "answer.json", `{"answer":[{"number":1,"selected":["B"],"category":1},{"number":2,"selected":["C","A"],"category":2}]}`)
+	// Older inventories compact multi-select answers into one string and may
+	// repeat a letter across selected elements. Import canonicalizes both forms.
+	externalFixture(t, root, "choice", "choice", "Example", "Example level", "answer.json", "answer.json", `{"answer":[{"number":1,"selected":["B"],"category":1},{"number":2,"selected":["CA","A"],"category":2}]}`)
 	if _, err = s.ImportExternalDirectory(ctx, externalOptions(root)); err != nil {
 		t.Fatal(err)
+	}
+	if report, err := s.ImportExternalDirectory(ctx, externalOptions(root)); err != nil || report.Existing != 1 {
+		t.Fatalf("pinned compact multi-select reimport failed: %+v %v", report, err)
+	}
+	// Emulate a record imported by the pre-canonicalization release. The same
+	// pinned source must migrate in place rather than being rejected as changed.
+	entries, err := s.ExternalEntries(ctx)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("entries=%+v %v", entries, err)
+	}
+	legacy := entries[0]
+	legacy.Status, legacy.Reason = "rejected", "invalid_choice_reference"
+	legacy.Reference = json.RawMessage(`null`)
+	legacy = finalizeExternalEntry(legacy)
+	if _, err = s.db.Exec(`UPDATE external_entries SET status=?,reason=?,reference_json=?,entry_sha256=? WHERE id=?`, legacy.Status, legacy.Reason, string(legacy.Reference), legacy.EntrySHA256, entries[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if report, err := s.ImportExternalDirectory(ctx, externalOptions(root)); err != nil || report.Existing != 1 {
+		t.Fatalf("legacy compact import migration failed: %+v %v", report, err)
 	}
 	snapshot := externalObjectiveFixture()
 	identity := ExternalIdentity{Experiment: "Example", Title: "Example level"}

@@ -10,7 +10,7 @@ import (
 
 func TestCostFunnelNeverAutomaticallyGrantsContinuationBudget(t *testing.T) {
 	f := &recoveryFixture{t: t, initial: &solver.Result{RunID: "same-run", Status: "attempts_exhausted", ModelCalls: 3, CostMicroUSD: 3}}
-	r, err := runProgrammingRecovery(context.Background(), f, nil, solver.Request{Owner: "owner", Game: "game", Mode: solver.ModeSubmit, MaxModelCalls: 3, MaxEvaluations: 3, BudgetMicroUSD: 100}, 40, func() (bool, error) { t.Fatal("automatic continuation checked admission"); return true, nil })
+	r, err := runProgrammingRecovery(context.Background(), f, nil, solver.Request{Owner: "owner", Game: "game", Mode: solver.ModeSubmit, MaxModelCalls: 3, MaxEvaluations: 3, BudgetMicroUSD: 100})
 	if err != nil || r.ModelCalls != 3 || f.continues != 0 {
 		t.Fatalf("automatic continuation expanded budget: result=%+v continues=%d err=%v", r, f.continues, err)
 	}
@@ -29,8 +29,8 @@ func TestCostFunnelObjectiveCallsAndSubmissionsAreIndependent(t *testing.T) {
 			t.Fatalf("implicit pro dispatch: %+v", request.Profile)
 		}
 	}
-	s := New(nil, nil, Config{MaxModelCalls: 99, MaxEvaluations: 99, ObjectiveMaxSubmissions: 99, ProgrammingRepairRounds: 99})
-	if s.cfg.MaxModelCalls != 3 || s.cfg.MaxEvaluations != 3 || s.cfg.ObjectiveMaxSubmissions != 15 || s.cfg.ProgrammingRepairRounds != 1 {
+	s := New(nil, nil, Config{MaxModelCalls: 99, MaxEvaluations: 99, ObjectiveMaxSubmissions: 99})
+	if s.cfg.MaxModelCalls != 3 || s.cfg.MaxEvaluations != 3 || s.cfg.ObjectiveMaxSubmissions != 15 {
 		t.Fatalf("hard caps=%+v", s.cfg)
 	}
 }

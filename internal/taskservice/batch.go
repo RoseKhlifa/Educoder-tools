@@ -73,20 +73,28 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 		}
 	}
 	emit(BatchProgress{}, "loading", "正在读取作业关卡清单")
-	hws, err := client.Homeworks(ctx, req.Course, "")
-	if err != nil {
-		return nil, err
-	}
 	var hw *educoder.Homework
-	for i := range hws {
-		if hws[i].ID == req.HomeworkID {
-			x := hws[i]
-			hw = &x
-			break
+	if req.Homework != nil {
+		// Course batches already resolved this exact homework from the
+		// authenticated list. Copy it so later roster/enter code cannot mutate
+		// the caller's plan.
+		copy := *req.Homework
+		hw = &copy
+	} else {
+		hws, err := client.Homeworks(ctx, req.Course, "")
+		if err != nil {
+			return nil, err
 		}
-	}
-	if hw == nil {
-		return nil, fmt.Errorf("课堂中没有作业 %d", req.HomeworkID)
+		for i := range hws {
+			if hws[i].ID == req.HomeworkID {
+				x := hws[i]
+				hw = &x
+				break
+			}
+		}
+		if hw == nil {
+			return nil, fmt.Errorf("课堂中没有作业 %d", req.HomeworkID)
+		}
 	}
 	// The assignment can still be present in the upstream history list after
 	// its deadline. Do this check before roster resolution or Enter so a direct
@@ -97,11 +105,6 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 	if !hw.IsShixun || hw.ShixunIdentifier == "" {
 		out.Status = "unsupported_roster"
 		return out, errors.New("selected homework is not a shixun")
-	}
-	if guardErr := s.guardPriorUnknownRuns(ctx, req); guardErr != nil {
-		out.Status, out.ReasonCode = "verification_unconfirmed", "submission_uncertain"
-		out.Diagnostics = append(out.Diagnostics, guardErr.Error())
-		return out, guardErr
 	}
 	roster, err := client.HomeworkRoster(ctx, req.Course, *hw)
 	if errors.Is(err, educoder.ErrHomeworkRuntimeMissing) {
@@ -198,7 +201,8 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 	if err != nil {
 		return nil, err
 	}
-	if guardErr := s.guardHomeworkUnknown(ctx, req, roster, progress); guardErr != nil {
+	blockedGames, guardErr := s.guardHomeworkUnknown(ctx, req, roster, progress)
+	if guardErr != nil {
 		out.Status, out.ReasonCode = "verification_unconfirmed", "submission_uncertain"
 		out.Diagnostics = append(out.Diagnostics, guardErr.Error())
 		return out, guardErr
@@ -211,6 +215,16 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 	}
 	for _, l := range levels {
 		i := batchLevelIndex(out, l.ChallengeID)
+		if i < 0 {
+			continue
+		}
+		if blockedGames[l.Game] {
+			out.Levels[i].Status = "verification_unconfirmed"
+			out.Levels[i].ReasonCode = "submission_uncertain"
+			out.FailedLevels++
+			out.Diagnostics = append(out.Diagnostics, fmt.Sprintf("第 %d 关存在未核验的正式提交结果，已跳过该关并继续其他关卡", l.Position))
+			continue
+		}
 		if out.Levels[i].Status == "precheck_failed" {
 			continue
 		}
@@ -228,12 +242,18 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 		}
 	}
 	emit(BatchProgress{TotalLevels: out.TotalLevels, CompletedLevels: out.CompletedLevels, SkippedLevels: out.SkippedLevels}, "preflight", "已确认作业关卡身份和初始满分状态")
-	for _, l := range levels {
+	// Keep pre-write graphical failures in a bounded retry queue. Unrelated
+	// levels continue immediately; the failed level is retried once after the
+	// rest of the batch instead of aborting the homework.
+	pendingLevels := append([]educoder.HomeworkLevel(nil), levels...)
+	deferredGraphic := make(map[int64]bool)
+	for cursor := 0; cursor < len(pendingLevels); cursor++ {
+		l := pendingLevels[cursor]
 		i := batchLevelIndex(out, l.ChallengeID)
 		if i < 0 {
 			continue
 		}
-		if out.Levels[i].Status == "skipped" || out.Levels[i].Status == "precheck_failed" {
+		if out.Levels[i].Status == "skipped" || out.Levels[i].Status == "precheck_failed" || (blockedGames[l.Game] && out.Levels[i].ReasonCode == "submission_uncertain") {
 			continue
 		}
 		if err := ctx.Err(); err != nil {
@@ -249,20 +269,15 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 			out.ReasonCode = "deadline_passed"
 			return out, nil
 		}
-		// Skip decisions are rechecked immediately before each mutation.
-		fresh, e := client.HomeworkProgress(ctx, req.Course, req.HomeworkID)
-		if e != nil {
-			out.Status = "verification_unconfirmed"
-			out.FailedLevels++
-			out.Levels[i].Status = "verification_unconfirmed"
-			out.Diagnostics = append(out.Diagnostics, e.Error())
-			return out, e
-		}
-		if progressOptional(fresh, l.ChallengeID) {
+		// Reuse the latest progress snapshot. It is the preflight read for the
+		// first level and the post-submit verification read for later levels;
+		// this avoids an identical GET immediately before every mutation while
+		// the final reconciliation below remains authoritative.
+		if progressOptional(progress, l.ChallengeID) {
 			omitBatchLevel(out, i)
 			continue
 		}
-		if p, ok := findFull(fresh, l.ChallengeID); ok {
+		if p, ok := findFull(progress, l.ChallengeID); ok {
 			out.Levels[i].Status = "skipped"
 			out.Levels[i].Kind = "verified"
 			out.Levels[i].Score = p.GameScore
@@ -314,7 +329,7 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 			out.ReservedMicroUSD += single.ReservedMicroUSD
 			out.Levels[i].Kind = single.Kind
 			if single.Kind == "programming" {
-				out.Levels[i].MaxModelCalls = s.cfg.MaxModelCalls * s.cfg.ProgrammingRepairRounds
+				out.Levels[i].MaxModelCalls = s.cfg.MaxModelCalls
 			}
 			out.Levels[i].ModelCalls = single.ModelCalls
 			out.Levels[i].Score = single.Score
@@ -358,7 +373,13 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 				// or locked task cannot inherit stale preflight permission.
 				freshTask, readErr := client.CollectionLoadTask(ctx, req.Course, req.HomeworkID, l.Game)
 				if readErr == nil && roster.ValidateTask(freshTask, l) == nil && mayContinueAfterLevel(freshTask, single, runErr) {
-					emit(BatchProgress{TotalLevels: out.TotalLevels, CompletedLevels: out.CompletedLevels, SkippedLevels: out.SkippedLevels, FailedLevels: out.FailedLevels}, "service_pending", fmt.Sprintf("第 %d 关已记录失败，继续处理后续可访问关卡", l.Position))
+					if graphicFailureBeforeWrite(single, runErr) && !deferredGraphic[l.ChallengeID] {
+						deferredGraphic[l.ChallengeID] = true
+						pendingLevels = append(pendingLevels, l)
+						emit(BatchProgress{TotalLevels: out.TotalLevels, CompletedLevels: out.CompletedLevels, SkippedLevels: out.SkippedLevels, FailedLevels: out.FailedLevels}, "service_pending", fmt.Sprintf("第 %d 关图形环境未完成写入，已延后重试并继续后续关卡", l.Position))
+					} else {
+						emit(BatchProgress{TotalLevels: out.TotalLevels, CompletedLevels: out.CompletedLevels, SkippedLevels: out.SkippedLevels, FailedLevels: out.FailedLevels}, "service_pending", fmt.Sprintf("第 %d 关已记录失败，继续处理后续可访问关卡", l.Position))
+					}
 					continue
 				}
 			}
@@ -385,6 +406,7 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 			out.Status = "verification_unconfirmed"
 			return out, errors.New("level did not reach exact full score after submission")
 		}
+		progress = verify
 		out.Levels[i].Status = "passed"
 		out.Levels[i].Score = p.GameScore
 		out.Levels[i].MaxScore = p.ChallengeScore
@@ -402,39 +424,51 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 		return out, finalErr
 	}
 	// Reconcile every required row; do not return at the first missing score.
-	// Counters describe final evidence, not historical preflight passes.
+	// Counters are derived exactly once from the final per-level states. This
+	// prevents a failed level that is later revisited (or an optional level
+	// omitted at the final read) from being counted twice.
 	unconfirmed := false
+	byChallenge := make(map[int64]BatchLevel, len(out.Levels))
+	for _, entry := range out.Levels {
+		byChallenge[entry.ChallengeID] = entry
+	}
+	finalLevels := make([]BatchLevel, 0, len(levels))
 	for _, l := range levels {
-		i := batchLevelIndex(out, l.ChallengeID)
-		if i < 0 {
+		entry, ok := byChallenge[l.ChallengeID]
+		if !ok || progressOptional(finalProgress, l.ChallengeID) {
 			continue
 		}
-		if progressOptional(finalProgress, l.ChallengeID) {
-			out.Levels = append(out.Levels[:i], out.Levels[i+1:]...)
-			out.TotalLevels--
-			continue
-		}
-		entry := &out.Levels[i]
 		if entry.Status == "precheck_failed" {
-			out.FailedLevels++
+			finalLevels = append(finalLevels, entry)
 			continue
 		}
-		p, ok := findFull(finalProgress, l.ChallengeID)
-		if !ok {
-			out.FailedLevels++
-			if entry.Status == "passed" || entry.Status == "planned" || entry.Status == "skipped" {
-				entry.Status, entry.ReasonCode = "verification_unconfirmed", "verification_unconfirmed"
-				unconfirmed = true
+		if p, full := findFull(finalProgress, l.ChallengeID); full {
+			entry.Score, entry.MaxScore = p.GameScore, p.ChallengeScore
+			if entry.Status != "skipped" {
+				entry.Status, entry.ReasonCode = "passed", ""
 			}
-			out.Diagnostics = append(out.Diagnostics, fmt.Sprintf("第 %d 关最终满分状态未确认", l.Position))
+			finalLevels = append(finalLevels, entry)
 			continue
 		}
-		entry.Score, entry.MaxScore = p.GameScore, p.ChallengeScore
-		if entry.Status == "skipped" {
-			// Already counted during preflight.
-		} else if entry.Status != "passed" {
-			entry.Status, entry.ReasonCode = "passed", ""
+		if entry.Status == "passed" || entry.Status == "planned" || entry.Status == "skipped" || entry.Status == "verification_unconfirmed" {
+			entry.Status, entry.ReasonCode = "verification_unconfirmed", "verification_unconfirmed"
+			unconfirmed = true
+			out.Diagnostics = append(out.Diagnostics, fmt.Sprintf("第 %d 关最终满分状态未确认", l.Position))
+		}
+		finalLevels = append(finalLevels, entry)
+	}
+	out.Levels = finalLevels
+	out.TotalLevels = len(finalLevels)
+	out.CompletedLevels, out.SkippedLevels, out.FailedLevels = 0, 0, 0
+	for _, entry := range out.Levels {
+		switch entry.Status {
+		case "passed":
 			out.CompletedLevels++
+		case "skipped":
+			out.CompletedLevels++
+			out.SkippedLevels++
+		default:
+			out.FailedLevels++
 		}
 	}
 	out.CurrentPosition, out.CurrentTitle = 0, ""

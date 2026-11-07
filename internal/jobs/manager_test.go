@@ -380,6 +380,18 @@ func TestRunningCancellationAndMutationUncertainty(t *testing.T) {
 	}
 }
 
+func TestPrewriteGraphicFailureIsRetryableNotUncertain(t *testing.T) {
+	m := testManager(t, Config{Workers: 1})
+	j := submit(t, m, "a", request("graphic"), func(_ context.Context, _ Request, report func(Event)) (Outcome, error) {
+		report(Event{Phase: "submitting", Message: "graphic"})
+		return Outcome{Result: json.RawMessage(`{"programming":{"evaluation":{"status":"saved_not_submitted"}}}`)}, errors.New("graphic file saved before formal build")
+	})
+	finished := waitJob(t, m, "a", j.ID, Failed)
+	if finished.ErrorCode != "saved_not_submitted" {
+		t.Fatalf("pre-write graphic result was not retryable: %+v", finished)
+	}
+}
+
 func TestTimeoutPanicAndSubsequentWork(t *testing.T) {
 	m := testManager(t, Config{Workers: 1, Timeout: 30 * time.Millisecond})
 	j := submit(t, m, "a", request("timeout"), func(ctx context.Context, _ Request, _ func(Event)) (Outcome, error) {

@@ -295,6 +295,14 @@ type GraphicEnvironmentQuotaError struct {
 
 type GraphicRuntimeResourceError struct{}
 
+func graphicQuotaDataList(raw json.RawMessage) bool {
+	if len(raw) == 0 || string(raw) == "null" {
+		return false
+	}
+	var items []json.RawMessage
+	return json.Unmarshal(raw, &items) == nil && len(items) > 0
+}
+
 func (e *GraphicRuntimeResourceError) Error() string {
 	return "图形环境上游资源暂不可用"
 }
@@ -374,7 +382,7 @@ func (p *GraphicProtocol) openEnvironment(ctx context.Context, t *Task, env Prog
 			}
 		} else {
 			d := response.Data
-			if d.Code != nil && (*d.Code == -3 || *d.Code == -5) || len(d.DataList) > 0 && string(d.DataList) != "null" {
+			if d.Code != nil && (*d.Code == -3 || *d.Code == -5) || graphicQuotaDataList(d.DataList) {
 				return nil, &GraphicEnvironmentQuotaError{}
 			}
 			busy = d.Code != nil && *d.Code == -1

@@ -10,13 +10,16 @@ import (
 	"sort"
 	"time"
 
-	buildinfo "educoder-cli"
 	"educoder-cli/internal/answer"
 	"educoder-cli/internal/educoder"
 	"educoder-cli/internal/questionbank"
 )
 
 const noProgressFuseTTL = 24 * time.Hour
+
+// noProgressPolicyVersion changes only when fuse semantics change. Ordinary
+// patch releases must not silently erase a valid no-progress cooldown.
+const noProgressPolicyVersion = "scheduler-policy-2"
 
 type homeworkBlock struct {
 	Kind         string    `json:"kind"`
@@ -80,10 +83,10 @@ func (s *Service) homeworkFuse(ctx context.Context, req Request, hw educoder.Hom
 	if err = json.Unmarshal(record.Data, &block); err != nil {
 		return nil, err
 	}
-	if block.Kind != "homework_no_progress" || block.Course != req.Course || block.HomeworkID != req.HomeworkID || !deterministicHomeworkFailure(block.Reason) || block.Version != buildinfo.Current() || block.Fingerprint != fingerprint || now.Before(block.BlockedAt) || !now.Before(block.BlockedUntil) {
+	if block.Kind != "homework_no_progress" || block.Course != req.Course || block.HomeworkID != req.HomeworkID || !deterministicHomeworkFailure(block.Reason) || block.Version != noProgressPolicyVersion || block.Fingerprint != fingerprint || now.Before(block.BlockedAt) || !now.Before(block.BlockedUntil) {
 		return nil, nil
 	}
-	revision, err := s.store.ReusableEvidenceRevision(ctx)
+	revision, err := s.store.ReusableEvidenceRevisionForHomework(ctx, ownerHash(req.Owner), req.Course, req.HomeworkID)
 	if err != nil {
 		return nil, err
 	}
@@ -101,11 +104,11 @@ func (s *Service) rememberHomeworkFailure(ctx context.Context, req Request, hw e
 	if fingerprint == "" || fingerprint != homeworkProgressFingerprint(hw, after) {
 		return nil
 	}
-	revision, err := s.store.ReusableEvidenceRevision(ctx)
+	revision, err := s.store.ReusableEvidenceRevisionForHomework(ctx, ownerHash(req.Owner), req.Course, req.HomeworkID)
 	if err != nil {
 		return err
 	}
-	block := homeworkBlock{Kind: "homework_no_progress", Course: req.Course, HomeworkID: req.HomeworkID, Reason: batch.ReasonCode, Fingerprint: fingerprint, Version: buildinfo.Current(), BankRevision: revision, BlockedAt: now, BlockedUntil: now.Add(noProgressFuseTTL)}
+	block := homeworkBlock{Kind: "homework_no_progress", Course: req.Course, HomeworkID: req.HomeworkID, Reason: batch.ReasonCode, Fingerprint: fingerprint, Version: noProgressPolicyVersion, BankRevision: revision, BlockedAt: now, BlockedUntil: now.Add(noProgressFuseTTL)}
 	raw, err := json.Marshal(block)
 	if err != nil {
 		return err
@@ -114,16 +117,21 @@ func (s *Service) rememberHomeworkFailure(ctx context.Context, req Request, hw e
 	return s.store.PutRun(ctx, questionbank.RunRecord{ID: key, Owner: ownerHash(req.Owner), IdempotencyKey: key, Status: "blocked_deterministic", Data: raw, CreatedAt: now, UpdatedAt: now})
 }
 
-// guardHomeworkUnknown applies to direct single-homework runs too. They bypass
-// deterministic no-progress cooldowns, never unresolved mutations. A fresh
-// full-score read for the exact target or a durable reconciliation changing
-// the old run status is required before a new submit can be admitted.
-func (s *Service) guardHomeworkUnknown(ctx context.Context, req Request, roster *educoder.HomeworkRoster, progress *educoder.HomeworkProgress) error {
+// guardHomeworkUnknown applies to direct single-homework runs too. It returns
+// only the exact runtime games whose formal write outcome is still unknown.
+// Callers must hold those levels while continuing unrelated levels in the same
+// homework. Self-test/pre-write failures are intentionally omitted by the
+// question-bank evidence classifier and never block a new mutation.
+func (s *Service) guardHomeworkUnknown(ctx context.Context, req Request, roster *educoder.HomeworkRoster, progress *educoder.HomeworkProgress) (map[string]bool, error) {
 	runs, err := s.store.UnresolvedHomeworkRuns(ctx, ownerHash(req.Owner), req.Course, req.HomeworkID)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	blocked := make(map[string]bool)
 	for _, run := range runs {
+		if !run.FormalUnknown {
+			continue
+		}
 		resolved := false
 		for _, level := range roster.Levels {
 			if level.Game != run.Game || level.RosterIssue != "" {
@@ -136,37 +144,30 @@ func (s *Service) guardHomeworkUnknown(ctx context.Context, req Request, roster 
 			}
 			break
 		}
-		if !resolved {
-			return errors.New("prior submission outcome requires read-only reconciliation before another homework execution")
+		if resolved {
+			continue
 		}
+		if run.Game == "" {
+			// A formal unknown without a stable game cannot be mapped to one
+			// level. Keep the fail-closed whole-homework behavior rather than
+			// risking a duplicate write to an unidentified runtime.
+			return nil, errors.New("prior formal submission outcome has no stable level identity")
+		}
+		blocked[run.Game] = true
 	}
-	return nil
-}
-
-// guardPriorUnknownRuns runs before HomeworkRoster may create a lazy runtime.
-// This keeps an unresolved write from being followed by even an incidental
-// upstream mutation; the explicit read-only reconciliation endpoint must clear
-// the durable run first.
-func (s *Service) guardPriorUnknownRuns(ctx context.Context, req Request) error {
-	runs, err := s.store.UnresolvedHomeworkRuns(ctx, ownerHash(req.Owner), req.Course, req.HomeworkID)
-	if err != nil {
-		return err
-	}
-	if len(runs) > 0 {
-		return errors.New("prior submission outcome requires read-only reconciliation before another homework execution")
-	}
-	return nil
+	return blocked, nil
 }
 
 func mayContinueAfterLevel(task *educoder.Task, result *Result, err error) bool {
-	if !task.CanContinueAfterConfirmedFailure() || result == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	if task == nil || !task.CanContinueAfterConfirmedFailure() || result == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 	if err != nil {
 		var providerErr *answer.Error
-		if !errors.As(err, &providerErr) {
-			// A non-provider error may represent an unknown write or persistence
-			// failure. Only typed, confirmed model failures can continue.
+		if !errors.As(err, &providerErr) && !graphicFailureBeforeWrite(result, err) {
+			// An untyped error may represent an unknown formal write or persistence
+			// failure. Only confirmed model failures and typed pre-write graphic
+			// failures can continue to another independent level.
 			return false
 		}
 	}
@@ -181,8 +182,37 @@ func mayContinueAfterLevel(task *educoder.Task, result *Result, err error) bool 
 		}
 	}
 	switch result.Status {
-	case "attempts_exhausted", "selftest_failed", "generation_stalled", "model_error", "invalid_candidate", "resource_unavailable":
+	case "attempts_exhausted", "selftest_failed", "generation_stalled", "model_error", "invalid_candidate", "resource_unavailable", "prewrite_error", "save_unverified", "saved_not_submitted", "save_error":
 		return true
+	}
+	return false
+}
+
+// graphicFailureBeforeWrite is deliberately narrow. Quota/resource errors and
+// the explicit pre-write/save stages prove that no formal build was sent, so
+// another level may run and the failed level can be retried once later. A
+// build-sent/accepted mutation remains fail-closed because replaying it could
+// duplicate an upstream submission.
+func graphicFailureBeforeWrite(result *Result, err error) bool {
+	var mutation *educoder.GraphicMutationError
+	if errors.As(err, &mutation) {
+		switch mutation.Stage {
+		case educoder.GraphicStagePrewrite, educoder.GraphicStageSaveUnconfirmed, educoder.GraphicStageSavedNotSubmitted:
+			return true
+		default:
+			return false
+		}
+	}
+	var quota *educoder.GraphicEnvironmentQuotaError
+	var resource *educoder.GraphicRuntimeResourceError
+	if errors.As(err, &quota) || errors.As(err, &resource) {
+		return true
+	}
+	if result != nil && result.Programming != nil && result.Programming.Evaluation != nil {
+		switch result.Programming.Evaluation.Status {
+		case "prewrite_error", "resource_unavailable", "saved_not_submitted", "save_unverified", "save_error", "editor_changed":
+			return true
+		}
 	}
 	return false
 }

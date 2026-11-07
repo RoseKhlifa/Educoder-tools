@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.111 - 2026-11-07
+
+- Enforce full Go and browser release gates before metadata mutation, and verify deliberate gate failures are rejected.
+- Scope unknown-write guards to formal evidence and individual levels; keep self-test/pre-write failures retryable and recompute final counters from level state.
+- Canonicalize compact external multi-select answers, preserve legacy imports, repair score-feedback baselines, persist score-delta locks, and add bounded graphical retry/status handling.
+- Remove obsolete automatic programming-repair-round configuration and align async-job documentation with the bounded per-level budgets and explicit retry flow.
+- Defer objective media fetches until text-bank lookup, retain unverified platform-observed collection candidates, and scope no-progress evidence to reusable proofs for this homework.
+
 ## 0.1.110 - 2026-11-06
 
 - Use verified and precisely matched external objective answers as bounded first candidates without promoting them before platform proof.
@@ -15,7 +23,7 @@
 ## 0.1.108 - 2026-11-06
 
 - Bound programming and objective attempts, model profiles and provider recovery to finite per-level budgets; stop repeated candidates without automatic paid continuation
-- Reuse one owned graphic or MySQL runtime per account, classify pre-write and saved-not-submitted outcomes, and release owned environments on every path
+- Serialize graphic and MySQL mutations per account, classify pre-write and saved-not-submitted outcomes, and release each environment owned by the run on every path.
 - Add cancelable resource backoff and preserve unknown submissions as non-replayable
 
 ## 0.1.107 - 2026-11-06

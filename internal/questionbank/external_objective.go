@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 
 	"educoder-cli/internal/answer"
@@ -23,25 +22,61 @@ type externalChoiceSlot struct {
 }
 
 func validExternalChoiceReference(ref externalChoiceReference) bool {
-	if len(ref.Answer) == 0 || len(ref.Answer) > 256 {
-		return false
+	_, ok := normalizeExternalChoiceReference(ref)
+	return ok
+}
+
+// normalizeExternalSelected accepts both the canonical form ("A", "B") and
+// the compact form emitted by older inventories ("AB" or "ABD"). Compact
+// strings are expanded into letters, then sorted and de-duplicated so the
+// stored representation is deterministic. Invalid characters are rejected.
+func normalizeExternalSelected(selected []string) ([]string, bool) {
+	if len(selected) == 0 {
+		return nil, false
 	}
-	seen := map[int]bool{}
-	for _, slot := range ref.Answer {
-		if slot.Number <= 0 || seen[slot.Number] || len(slot.Selected) == 0 || len(slot.Selected) > 26 || slot.Category < 0 || slot.Category == 1 && len(slot.Selected) != 1 {
-			return false
+	seen := make(map[byte]bool, 26)
+	for _, raw := range selected {
+		raw = strings.ToUpper(strings.TrimSpace(raw))
+		if raw == "" {
+			return nil, false
 		}
-		seen[slot.Number] = true
-		labels := map[string]bool{}
-		for _, v := range slot.Selected {
-			v = strings.ToUpper(strings.TrimSpace(v))
-			if len(v) != 1 || v[0] < 'A' || v[0] > 'Z' || labels[v] {
-				return false
+		for i := 0; i < len(raw); i++ {
+			if raw[i] < 'A' || raw[i] > 'Z' {
+				return nil, false
 			}
-			labels[v] = true
+			seen[raw[i]] = true
+		}
+		if len(seen) > 26 {
+			return nil, false
 		}
 	}
-	return true
+	letters := make([]string, 0, len(seen))
+	for letter := byte('A'); letter <= 'Z'; letter++ {
+		if seen[letter] {
+			letters = append(letters, string(letter))
+		}
+	}
+	return letters, len(letters) > 0
+}
+
+func normalizeExternalChoiceReference(ref externalChoiceReference) (externalChoiceReference, bool) {
+	if len(ref.Answer) == 0 || len(ref.Answer) > 256 {
+		return externalChoiceReference{}, false
+	}
+	seen := make(map[int]bool, len(ref.Answer))
+	for i := range ref.Answer {
+		slot := &ref.Answer[i]
+		if slot.Number <= 0 || seen[slot.Number] || slot.Category < 0 {
+			return externalChoiceReference{}, false
+		}
+		letters, ok := normalizeExternalSelected(slot.Selected)
+		if !ok || slot.Category == 1 && len(letters) != 1 {
+			return externalChoiceReference{}, false
+		}
+		slot.Selected = letters
+		seen[slot.Number] = true
+	}
+	return ref, true
 }
 
 func externalObjectiveVector(raw json.RawMessage, snapshot answer.ObjectiveSnapshot) (answer.ObjectiveCandidate, bool) {
@@ -49,11 +84,13 @@ func externalObjectiveVector(raw json.RawMessage, snapshot answer.ObjectiveSnaps
 	if json.Unmarshal(raw, &ref) != nil || len(ref.Answer) != len(snapshot.Questions) || len(ref.Answer) == 0 {
 		return answer.ObjectiveCandidate{}, false
 	}
+	var normalized bool
+	ref, normalized = normalizeExternalChoiceReference(ref)
+	if !normalized {
+		return answer.ObjectiveCandidate{}, false
+	}
 	byPosition := map[int]externalChoiceSlot{}
 	for _, slot := range ref.Answer {
-		if slot.Number <= 0 || len(slot.Selected) == 0 || len(slot.Selected) > 26 {
-			return answer.ObjectiveCandidate{}, false
-		}
 		if _, dup := byPosition[slot.Number]; dup {
 			return answer.ObjectiveCandidate{}, false
 		}
@@ -66,21 +103,7 @@ func externalObjectiveVector(raw json.RawMessage, snapshot answer.ObjectiveSnaps
 			return answer.ObjectiveCandidate{}, false
 		}
 		delete(byPosition, q.Position)
-		letters := append([]string(nil), slot.Selected...)
-		for i, l := range letters {
-			l = strings.ToUpper(strings.TrimSpace(l))
-			if len(l) != 1 || l[0] < 'A' || l[0] > 'Z' {
-				return answer.ObjectiveCandidate{}, false
-			}
-			letters[i] = l
-		}
-		sort.Strings(letters)
-		for i := 1; i < len(letters); i++ {
-			if letters[i] == letters[i-1] {
-				return answer.ObjectiveCandidate{}, false
-			}
-		}
-		c.Answers = append(c.Answers, strings.Join(letters, ""))
+		c.Answers = append(c.Answers, strings.Join(slot.Selected, ""))
 	}
 	return c, len(byPosition) == 0 && answer.ValidateObjectiveCandidate(snapshot, c) == nil && answer.ValidateObjectiveFixedAnswers(snapshot, c.Answers) == nil
 }

@@ -218,6 +218,33 @@ func TestExternalFallbackPathlessExtensionAndPinnedContent(t *testing.T) {
 	}
 }
 
+func TestExternalFallbackUsesHistoricalFilenameContract(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	s, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	doc := `{"classrooms":[{"experiments":[{"name":"Python","levels":[{"title":"文件名字段","kind":"code","position":1,"answered":true,"filename":"main.py","answer":{"code":"print(1)"}},{"title":"注释提示","kind":"code","position":2,"answered":true,"answer":{"code":"# filename: helper.py\nprint(2)"}}]}]}]}`
+	if err := os.WriteFile(filepath.Join(root, "answers.json"), []byte(doc), 0600); err != nil {
+		t.Fatal(err)
+	}
+	report, err := s.ImportExternalDirectory(ctx, externalOptions(root))
+	if err != nil || report.Usable != 2 || report.Reference != 0 {
+		t.Fatalf("filename contracts not promoted: %+v %v", report, err)
+	}
+	entries, err := s.ExternalEntries(ctx)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("entries=%+v %v", entries, err)
+	}
+	for _, e := range entries {
+		if e.Status != "candidate" || e.Extension != ".py" || len(e.Files) != 1 || e.Files[0].Path == "" {
+			t.Fatalf("entry lost filename contract: %+v", e)
+		}
+	}
+}
+
 func TestExternalImportRejectsTraversalSecretsAndInvalidText(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()

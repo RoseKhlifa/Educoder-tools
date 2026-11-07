@@ -187,7 +187,7 @@ func TestObjectiveAttemptHistoryIsBoundedAndCopiesAnswers(t *testing.T) {
 	if objectiveAttemptKey(answer.ObjectiveCandidate{Answers: []string{"AB", "C"}}) == objectiveAttemptKey(answer.ObjectiveCandidate{Answers: []string{"A", "BC"}}) {
 		t.Fatal("candidate hashing lost question boundaries")
 	}
-	if newObjectiveAttemptHistory(999).limit != 10 {
+	if newObjectiveAttemptHistory(999).limit != 15 {
 		t.Fatal("history upper bound exceeded configured hard limit")
 	}
 }

@@ -32,14 +32,21 @@ type Config struct {
 	MaxEvaluations          int
 	ObjectiveMaxSubmissions int
 	EnableProFreshSolve     bool
-	ProgrammingRepairRounds int
-	BudgetMicroUSD          int64
-	ProviderRetryWait       answer.RetryWait `json:"-"`
+	// DisableLegacyIndependentReview is enabled by production wiring. The
+	// legacy one-question sweep remains only for replaying pre-v0.1.111 tests;
+	// new runs use the ranked-answer plus platform-score path.
+	DisableLegacyIndependentReview bool
+	BudgetMicroUSD                 int64
+	ProviderRetryWait              answer.RetryWait `json:"-"`
 }
 type Request struct {
 	Owner, Course, Game, IdempotencyKey string
 	HomeworkID                          int64
-	Mode                                solver.Mode
+	// Homework is an optional already-resolved assignment supplied by a course
+	// batch. It avoids re-reading the same homework list in RunHomework; direct
+	// callers leave it nil and retain the normal authenticated lookup.
+	Homework *educoder.Homework `json:"-"`
+	Mode     solver.Mode
 	// BudgetMicroUSD optionally caps this invocation. Batch callers use it to
 	// pass the remaining shared budget into each child run.
 	BudgetMicroUSD int64
@@ -109,7 +116,6 @@ func New(store *questionbank.Store, provider Provider, cfg Config) *Service {
 	if cfg.ObjectiveMaxSubmissions <= 0 || cfg.ObjectiveMaxSubmissions > 15 {
 		cfg.ObjectiveMaxSubmissions = 15
 	}
-	cfg.ProgrammingRepairRounds = 1
 	if cfg.BudgetMicroUSD <= 0 || cfg.BudgetMicroUSD > 50000 {
 		cfg.BudgetMicroUSD = 50000
 	}
@@ -257,18 +263,7 @@ func (s *Service) Run(ctx context.Context, client *educoder.Client, req Request,
 		if solverReq.BudgetMicroUSD <= 0 {
 			solverReq.BudgetMicroUSD = s.cfg.BudgetMicroUSD
 		}
-		r, e := runProgrammingRecovery(ctx, s.programming, adapter, solverReq, s.cfg.ProgrammingRepairRounds, func() (bool, error) {
-			homeworks, readErr := client.Homeworks(ctx, req.Course, "")
-			if readErr != nil {
-				return false, readErr
-			}
-			for _, homework := range homeworks {
-				if homework.ID == req.HomeworkID {
-					return !homework.IsClosed(time.Now()), nil
-				}
-			}
-			return false, nil
-		})
+		r, e := runProgrammingRecovery(ctx, s.programming, adapter, solverReq)
 		if r == nil {
 			return optionalResult(nil, e)
 		}
@@ -354,7 +349,7 @@ func (s *Service) objectiveFixedAnswers(ctx context.Context, snapshot answer.Obj
 			continue
 		}
 		legacy, err := s.store.LookupObjectiveLegacyReferences(ctx, input)
-		if err != nil {
+		if err != nil && !errors.Is(err, questionbank.ErrNotFound) {
 			return nil, nil, err
 		}
 		// Legacy answers without historical shared material remain useful data,
@@ -397,7 +392,7 @@ func recordObjectiveBankAnswer(ctx context.Context, bank *questionbank.Store, in
 		return candidate.ID, err
 	}
 	legacy, err := bank.LookupObjectiveLegacyReferences(ctx, input)
-	if err != nil {
+	if err != nil && !errors.Is(err, questionbank.ErrNotFound) {
 		return 0, err
 	}
 	for _, candidate := range legacy {
@@ -516,16 +511,26 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			return &Result{Kind: "objective", Status: "objective_read_incomplete"}, errors.New("objective read is missing question/context/count fields; no bank match or model call performed")
 		}
 	}
-	emit("loading_resources", "正在读取题干和选项中的图片")
-	snapshot, resources, err := prepareObjectiveResources(ctx, client, choice)
-	if err != nil {
-		return &Result{Kind: "objective", Status: "resource_unavailable"}, err
-	}
-	hash, err := s.store.PutObjectiveSnapshot(ctx, snapshot)
+	// Keep the first lookup independent of media retrieval. A broken or
+	// temporarily unavailable image must not hide an exact text/question-bank
+	// answer (or an external candidate). Media is required only when we need a
+	// model call; known candidates can still be submitted and verified against
+	// the text contract below.
+	snapshot := objectiveSnapshot(choice)
+	resources := []answer.ImageResource(nil)
+	mediaErr := error(nil)
+	// Keep a deterministic text-only key for history and fallback lookups. The
+	// snapshot is persisted lazily only if a known candidate is actually sent;
+	// a failed image fetch with no usable candidate must not leave a misleading
+	// reusable snapshot behind.
+	rawSnapshot, err := json.Marshal(snapshot)
 	if err != nil {
 		return nil, err
 	}
-	fixedAnswers, legacyFeedback, fixedErr := s.objectiveFixedAnswers(ctx, snapshot, resources, choice.ReadComplete())
+	rawSnapshotHash := sha256.Sum256(rawSnapshot)
+	hash := hex.EncodeToString(rawSnapshotHash[:])
+	snapshotPersisted := false
+	fixedAnswers, legacyFeedback, fixedErr := s.objectiveFixedAnswers(ctx, snapshot, nil, choice.ReadComplete())
 	fixedReady := choice.ReadComplete()
 	if fixedErr != nil {
 		return nil, fixedErr
@@ -549,22 +554,11 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 	}()
 	emit("bank_lookup", "正在查询客观题题库")
 	cached, cacheErr := questionbank.ObjectiveCandidate{}, questionbank.ErrNotFound
-	if fixedReady {
-		cached, cacheErr = s.store.FindObjectiveVerifiedWithResources(ctx, hash, resources)
-	}
-	if cacheErr != nil && !errors.Is(cacheErr, questionbank.ErrNotFound) {
-		r.Status = "failed"
-		return r, cacheErr
-	}
+	// A media-aware whole-task hit is attempted after media preparation below.
+	// Per-question fixed answers were already looked up using the text contract.
 	var previous *answer.ObjectiveCandidate
 	var feedback []answer.Feedback
 	attemptHistory := newObjectiveAttemptHistory(s.cfg.ObjectiveMaxSubmissions)
-	failed, historyErr := s.store.ObjectiveFailedAttempts(ctx, hash, 10)
-	if historyErr != nil {
-		r.Status = "failed"
-		return r, historyErr
-	}
-	previous = attemptHistory.restore(failed)
 	compactOutput := false
 	var independent *objectiveIndependentReview
 	independentUsed := false
@@ -583,6 +577,59 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			return r, externalErr
 		}
 	}
+	// Fetch media only after the cheap exact lookups. If fetching fails, retain
+	// the text snapshot and proceed with a bank/external candidate; the provider
+	// branch below will stop before spending a model call.
+	emit("loading_resources", "正在读取题干和选项中的图片")
+	preparedSnapshot, preparedResources, prepareErr := prepareObjectiveResources(ctx, client, choice)
+	if prepareErr == nil {
+		snapshot, resources = preparedSnapshot, preparedResources
+		hash, err = s.store.PutObjectiveSnapshot(ctx, snapshot)
+		if err != nil {
+			return r, err
+		}
+		snapshotPersisted = true
+		fixedAnswers, legacyFeedback, fixedErr = s.objectiveFixedAnswers(ctx, snapshot, resources, choice.ReadComplete())
+		if fixedErr != nil {
+			return r, fixedErr
+		}
+		if fixedReady {
+			cached, cacheErr = s.store.FindObjectiveVerifiedWithResources(ctx, hash, resources)
+		}
+		if cacheErr != nil && !errors.Is(cacheErr, questionbank.ErrNotFound) {
+			r.Status = "failed"
+			return r, cacheErr
+		}
+		// Rebind external vectors to the media-aware snapshot so a candidate
+		// created during the text-only preflight cannot be submitted under a
+		// different immutable snapshot hash.
+		external, externalErr = questionbank.ObjectiveCandidate{}, questionbank.ErrNotFound
+		if cacheErr != nil && errors.Is(cacheErr, questionbank.ErrNotFound) && choice.Task != nil {
+			external, externalErr = s.store.FindExternalObjectiveCandidate(ctx, questionbank.ExternalIdentity{
+				Experiment: choice.Task.Shixun.Name,
+				Title:      choice.Task.Challenge.Subject,
+				Position:   choice.Task.Challenge.Position,
+			}, snapshot)
+			if externalErr != nil && !errors.Is(externalErr, questionbank.ErrNotFound) {
+				r.Status = "failed"
+				return r, externalErr
+			}
+		}
+	} else {
+		mediaErr = prepareErr
+		r.Diagnostics = append(r.Diagnostics, "objective media unavailable; bank/external candidates remain eligible")
+	}
+	// Failed-attempt history is keyed by the final immutable snapshot. Loading
+	// it before media preparation would anchor a media-aware run to a stale
+	// text-only vector (or vice versa).
+	if snapshotPersisted {
+		failed, historyErr := s.store.ObjectiveFailedAttempts(ctx, hash, 15)
+		if historyErr != nil && !errors.Is(historyErr, questionbank.ErrNotFound) {
+			r.Status = "failed"
+			return r, historyErr
+		}
+		previous = attemptHistory.restore(failed)
+	}
 	for attempt := 0; submissions < s.cfg.ObjectiveMaxSubmissions; attempt++ {
 		var c answer.ObjectiveCandidate
 		scoreCandidate := false
@@ -600,14 +647,18 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			c = cached.Candidate
 			r.CandidateID = cached.ID
 			r.Source = "bank"
+		} else if attempt == 0 && fixedReady && len(fixedAnswers) == len(snapshot.Questions) && allObjectiveAnswersFixed(fixedAnswers) {
+			c = answer.ObjectiveCandidate{Kind: "objective", Answers: append([]string(nil), fixedAnswers...)}
+			r.Source = "question_bank"
 		} else if attempt == 0 && externalErr == nil {
 			c = external.Candidate
 			r.CandidateID = external.ID
 			r.Source = external.Source
-		} else if attempt == 0 && fixedReady && len(fixedAnswers) == len(snapshot.Questions) && allObjectiveAnswersFixed(fixedAnswers) {
-			c = answer.ObjectiveCandidate{Kind: "objective", Answers: append([]string(nil), fixedAnswers...)}
-			r.Source = "question_bank"
 		} else {
+			if mediaErr != nil {
+				r.Status = "resource_unavailable"
+				return r, mediaErr
+			}
 			if s.provider == nil {
 				r.Status = "needs_provider"
 				return r, errors.New("model provider is required for a cache miss")
@@ -616,11 +667,10 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 				r.Status = "attempts_exhausted"
 				return r, nil
 			}
-			// A failed whole-vector history can anchor every subsequent repair
-			// to the same misconception. Spend the existing bounded budget on
-			// one clean, question-focused sweep rather than another scored-history
-			// variation. Never start a sweep that cannot fit the remaining limits.
-			if !independentUsed && previous != nil && fixedReady && len(snapshot.Questions) > 1 {
+			// Legacy one-question review is retained only for deterministic replay
+			// of pre-v0.1.111 runs. Production wiring disables it so every repair
+			// request can use ranked alternatives and platform-score localization.
+			if !s.cfg.DisableLegacyIndependentReview && !independentUsed && previous != nil && fixedReady && len(snapshot.Questions) > 1 {
 				review, reviewErr := newObjectiveIndependentReview(snapshot, resources, previous, fixedAnswers)
 				if reviewErr != nil {
 					r.Status = "verification_unconfirmed"
@@ -639,7 +689,6 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 							r.Status = "budget_unavailable"
 							return r, estimateErr
 						}
-						// Subtract rather than sum so a large estimate cannot overflow.
 						if estimate.CostMicroUSD <= 0 || estimate.CostMicroUSD > remainingBudget {
 							fits = false
 							break
@@ -657,8 +706,6 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 				profile = answer.RepairProfile()
 			}
 			if independent != nil {
-				// A focused context does not need an increasingly anchored Pro
-				// repair. Keep reasoning, and the same observed-truncation fallback.
 				profile = answer.RepairProfile()
 			}
 			// Objective answers are compact, but reasoning-enabled repair and
@@ -673,6 +720,7 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 				profile.Thinking, profile.ReasoningEffort = "disabled", ""
 			}
 			pr := answer.ObjectiveRequest{Problem: snapshot, Previous: previous, Feedback: append(append([]answer.Feedback(nil), legacyFeedback...), attemptHistory.feedback(feedback)...), Profile: profile, Resources: resources}
+			pr.RequireRankedAnswers = previous != nil && independent == nil
 			if fixedReady {
 				pr.FixedAnswers = append([]string(nil), fixedAnswers...)
 			}
@@ -777,11 +825,6 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			return r, e
 		}
 		c = materialized
-		if !scoreCandidate && scoreFeedback == nil && len(c.RankedAnswers) == len(snapshot.Questions) {
-			if feedbackSearch, ok := newObjectiveScoreFeedback(snapshot, c, fixedAnswers); ok {
-				scoreFeedback = feedbackSearch
-			}
-		}
 		emit("validating", "正在校验客观题答案和选项")
 		if e := answer.ValidateObjectiveCandidate(snapshot, c); e != nil {
 			r.Status = "invalid_candidate"
@@ -789,11 +832,31 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 		}
 		if fixedReady {
 			for i, locked := range fixedAnswers {
+				if strings.TrimSpace(locked) != "" && strings.HasPrefix(r.Source, "external:") {
+					// External inventories are useful fallbacks, not locks. Merge
+					// already verified per-question answers over a conflicting
+					// external vector instead of rejecting the whole level.
+					c.Answers[i] = locked
+					continue
+				}
 				if strings.TrimSpace(locked) != "" && strings.TrimSpace(locked) != strings.TrimSpace(c.Answers[i]) {
 					r.Status = "invalid_candidate"
 					return r, errors.New("模型答案覆盖了已验证的单题答案")
 				}
 			}
+			if strings.HasPrefix(r.Source, "external:") {
+				if e := answer.ValidateObjectiveCandidate(snapshot, c); e != nil {
+					r.Status = "invalid_candidate"
+					return r, e
+				}
+			}
+		}
+		if !snapshotPersisted {
+			if _, e := s.store.PutObjectiveSnapshot(ctx, snapshot); e != nil {
+				r.Status = "failed"
+				return r, e
+			}
+			snapshotPersisted = true
 		}
 		if attemptHistory.contains(c) {
 			// Generation consumes the existing bounded budget, but a known
@@ -833,7 +896,11 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			r.Status = "verification_unconfirmed"
 			return r, errors.New("objective task identity or question kind changed before submission")
 		}
-		freshSnapshot, _, refreshErr := prepareObjectiveResources(ctx, client, freshChoice)
+		freshSnapshot := objectiveSnapshot(freshChoice)
+		var refreshErr error
+		if mediaErr == nil {
+			freshSnapshot, _, refreshErr = prepareObjectiveResources(ctx, client, freshChoice)
+		}
 		if refreshErr != nil || !freshChoice.ReadComplete() || !reflect.DeepEqual(snapshot, freshSnapshot) {
 			r.Status = "verification_unconfirmed"
 			return r, errors.New("objective question/options/context/media changed or incomplete before submission")
@@ -883,15 +950,43 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 		// slot at a time using only known, comparable platform scores.
 		if len(questionResults) == len(snapshot.Questions) {
 			scoreFeedback = nil
-		} else if scoreFeedback != nil && submitted.ScoreKnown {
-			scoreFeedback.observe(submitted.Score, submitted.MaxScore)
-			if !scoreFeedback.done {
+		} else if submitted.ScoreKnown {
+			// Create a score searcher only after this exact candidate has been
+			// submitted. A repeated candidate is filtered above and therefore
+			// cannot leave a stale, unsubmitted vector as the search baseline.
+			if scoreFeedback == nil && len(c.RankedAnswers) == len(snapshot.Questions) {
+				if feedbackSearch, ok := newObjectiveScoreFeedback(snapshot, c, fixedAnswers); ok {
+					scoreFeedback = feedbackSearch
+					beforeLocks := scoreFeedbackLocks(scoreFeedback)
+					scoreFeedback.observe(c, submitted.Score, submitted.MaxScore)
+					if e := s.persistScoreFeedbackLocks(ctx, snapshot, resources, hash, scoreFeedback, beforeLocks); e != nil {
+						r.Status = "verification_persistence_failed"
+						return r, e
+					}
+					for index, value := range scoreFeedbackLocks(scoreFeedback) {
+						fixedAnswers[index] = value
+					}
+				}
+			} else if scoreFeedback != nil {
+				beforeLocks := scoreFeedbackLocks(scoreFeedback)
+				scoreFeedback.observe(c, submitted.Score, submitted.MaxScore)
+				if e := s.persistScoreFeedbackLocks(ctx, snapshot, resources, hash, scoreFeedback, beforeLocks); e != nil {
+					r.Status = "verification_persistence_failed"
+					return r, e
+				}
+				for index, value := range scoreFeedbackLocks(scoreFeedback) {
+					fixedAnswers[index] = value
+				}
+			}
+			if scoreFeedback != nil && !scoreFeedback.done {
 				previous = &c
 				feedback = []answer.Feedback{{Kind: "formal", Message: fmt.Sprintf("本关得分 %s / %s，正在按平台分数逐题定位", submitted.Score, submitted.MaxScore)}}
 				emit("repairing", "平台已返回确定分数，正在逐题定位答案")
 				continue
 			}
-			scoreFeedback = nil
+			if scoreFeedback != nil && scoreFeedback.done {
+				scoreFeedback = nil
+			}
 		}
 		// A current explicit failure revokes an old lock before a repair.
 		fixedAnswers, legacyFeedback, e = s.objectiveFixedAnswers(ctx, snapshot, resources, true)
@@ -904,6 +999,50 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 	}
 	r.Status = "attempts_exhausted"
 	return r, nil
+}
+
+func scoreFeedbackLocks(search *objectiveScoreFeedback) map[int]string {
+	locks := make(map[int]string)
+	if search == nil {
+		return locks
+	}
+	for _, question := range search.questions {
+		if question.locked && question.index >= 0 && question.index < len(search.base.Answers) {
+			value := strings.TrimSpace(search.base.Answers[question.index])
+			if value != "" {
+				locks[question.index] = value
+			}
+		}
+	}
+	return locks
+}
+
+// persistScoreFeedbackLocks turns a deterministic one-question score delta
+// into the same durable per-question evidence used by ordinary test-set
+// feedback. Only newly locked answers are written; equal-score alternatives
+// remain hypotheses and never become reusable locks.
+func (s *Service) persistScoreFeedbackLocks(ctx context.Context, snapshot answer.ObjectiveSnapshot, resources []answer.ImageResource, scopeHash string, search *objectiveScoreFeedback, before map[int]string) error {
+	if search == nil {
+		return nil
+	}
+	for index, value := range scoreFeedbackLocks(search) {
+		if before[index] != "" {
+			continue
+		}
+		if index < 0 || index >= len(snapshot.Questions) {
+			continue
+		}
+		question := snapshot.Questions[index]
+		validation := questionbank.ObjectiveValidation{
+			Passed: true, Confirmed: true, PerQuestionCorrect: true,
+			AnswerHash: problem.HashContent(value), ScopeHash: scopeHash,
+			Feedback: "平台总分只改变一个题位，当前答案由可比基线和单题探测差分锁定。",
+		}
+		if _, err := recordObjectiveBankAnswer(ctx, s.store, objectiveBankInput(snapshot, question, resources, true), value, "score_delta", validation); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // retryableObjectiveModelError is limited to failures before the platform

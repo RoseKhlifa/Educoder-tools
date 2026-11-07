@@ -88,7 +88,7 @@ func TestObjectivePromptFailureFeedbackDoesNotBlameEveryComponentOrUnlockAnswers
 		"does not identify which individual components are wrong",
 		"does not prove every answer wrong", "justify changing all unlocked answers",
 		"Preserve semantically supported answers", "reliable question-specific grading",
-		"Do not enumerate answer combinations", "Never relax or overwrite fixed_answers",
+		"Do not perform unbounded answer enumeration", "Never relax or overwrite fixed_answers",
 		"Never change, reinterpret, shift, or infer a locked answer",
 		"even when feedback describes a failed whole vector",
 	)

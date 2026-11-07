@@ -59,6 +59,10 @@ type CollectionSummary struct {
 	ProgrammingFilesRead   int            `json:"programming_files_read"`
 	ReusedLevels           int            `json:"reused_levels"`
 	ReusedQuestions        int            `json:"reused_questions"`
+	// CandidatesStored are observed answers retained for a later normal
+	// platform evaluation. They are deliberately not counted as collected or
+	// verified and never affect completion claims.
+	CandidatesStored int `json:"candidates_stored"`
 }
 
 func (s *CollectionSummary) skip(reason string, unconfirmed bool) {
@@ -517,6 +521,22 @@ func (h *Collector) collectLevel(ctx context.Context, c CollectionReader, owner 
 			return err
 		}
 		if !confirmed {
+			// The editor bytes are useful evidence even when the read-only API
+			// cannot prove they are the submitted bytes. Keep them as an
+			// explicitly unverified candidate so a future normal solver run can
+			// evaluate them; never promote this record or count it as collected.
+			ref, candidateErr := h.Bank.UpsertSnapshot(ctx, prepared)
+			if candidateErr != nil {
+				return candidateErr
+			}
+			candidate, candidateErr := h.Bank.AddCandidate(ctx, ref, questionbank.CandidateInput{
+				Files: files, Source: "collection:platform_observed",
+			})
+			if candidateErr != nil {
+				return candidateErr
+			}
+			s.CandidatesStored++
+			receipt.CodeCandidateID = candidate.ID
 			s.skip("programming_submitted_source_unproven", true)
 			return nil
 		}
@@ -759,5 +779,5 @@ func collectionObjective(t *educoder.Task) (answer.ObjectiveSnapshot, []string, 
 }
 
 func CollectionMessage(s CollectionSummary) string {
-	return fmt.Sprintf("已采集 %d，重复 %d，跳过 %d，未确认 %d，失败 %d；检查点复用 %d 关 / %d 题", s.Collected, s.Duplicates, s.Skipped, s.Unconfirmed, s.Failed, s.ReusedLevels, s.ReusedQuestions)
+	return fmt.Sprintf("已采集 %d，重复 %d，候选 %d，跳过 %d，未确认 %d，失败 %d；检查点复用 %d 关 / %d 题", s.Collected, s.Duplicates, s.CandidatesStored, s.Skipped, s.Unconfirmed, s.Failed, s.ReusedLevels, s.ReusedQuestions)
 }

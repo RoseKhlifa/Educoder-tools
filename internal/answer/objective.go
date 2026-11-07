@@ -65,6 +65,9 @@ type ObjectiveRequest struct {
 	// Resources contain already-fetched public images only, never account
 	// credentials, remote signed URLs, or upstream execution context.
 	Resources []ImageResource `json:"-"`
+	// RequireRankedAnswers asks the provider for ordered alternatives so the
+	// bounded platform-score locator can probe one question at a time.
+	RequireRankedAnswers bool `json:"-"`
 }
 type ObjectiveResult struct {
 	Candidate         ObjectiveCandidate `json:"candidate"`
@@ -375,6 +378,7 @@ func buildObjectiveRequest(req ObjectiveRequest) (wireRequest, error) {
 		Previous: req.Previous, FixedAnswers: req.FixedAnswers, Feedback: req.Feedback, Resources: refs,
 		OutputContract: makeObjectiveOutputContract(req.Problem),
 	}
+	payload.OutputContract.RankedRequired = req.RequireRankedAnswers
 	for _, f := range req.Feedback {
 		if err := problem.ValidatePublicText(f.Kind + f.Message + f.Stdin + f.ExpectedStdout + f.ActualStdout); err != nil {
 			return wireRequest{}, &Error{Kind: "invalid_feedback"}
@@ -384,7 +388,11 @@ func buildObjectiveRequest(req ObjectiveRequest) (wireRequest, error) {
 	if err != nil {
 		return wireRequest{}, &Error{Kind: "prompt_build_failed"}
 	}
-	system := fmt.Sprintf("REQUEST-SPECIFIC OUTPUT: answers must contain exactly %d strings, one per entry in questions in that array's order, not indexed by original position. Only requested original question positions %v require answers. Each multiple-choice answer occupies ONE string of concatenated labels, never separate array entries. context_questions is background only. Follow output_contract.answer_slots for each slot's original position, shape and allowed labels.\n\n", len(req.Problem.Questions), payload.OutputContract.QuestionPositions) + objectiveSystemPrompt
+	contractInstruction := ""
+	if req.RequireRankedAnswers {
+		contractInstruction = " This is a repair/search request: ranked_answers is required, with at least two valid ordered alternatives for every unresolved question; answers-only output is accepted only when the ranked structure cannot be produced without violating the question contract."
+	}
+	system := fmt.Sprintf("REQUEST-SPECIFIC OUTPUT: answers must contain exactly %d strings, one per entry in questions in that array's order, not indexed by original position. Only requested original question positions %v require answers. Each multiple-choice answer occupies ONE string of concatenated labels, never separate array entries. context_questions is background only. Follow output_contract.answer_slots for each slot's original position, shape and allowed labels.%s\n\n", len(req.Problem.Questions), payload.OutputContract.QuestionPositions, contractInstruction) + objectiveSystemPrompt
 	content := textContent(string(b))
 	if len(images) > 0 {
 		parts := []contentPart{{Type: "text", Text: string(b)}}
@@ -409,6 +417,7 @@ type objectiveOutputContract struct {
 	AnswerCount       int                   `json:"answer_count"`
 	QuestionPositions []int                 `json:"question_positions"`
 	AnswerSlots       []objectiveOutputSlot `json:"answer_slots"`
+	RankedRequired    bool                  `json:"ranked_answers_required,omitempty"`
 }
 
 func makeObjectiveOutputContract(snapshot ObjectiveSnapshot) objectiveOutputContract {

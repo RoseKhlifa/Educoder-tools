@@ -19,6 +19,19 @@ type lifecycleGraphicSession struct {
 	saveFailure, closeFailure bool
 }
 
+func TestGraphicQuotaDataListRequiresNonEmptyArray(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want bool
+	}{
+		{`null`, false}, {`[]`, false}, {`{}`, false}, {`[{}]`, true}, {`"busy"`, false},
+	} {
+		if got := graphicQuotaDataList(json.RawMessage(tc.raw)); got != tc.want {
+			t.Fatalf("graphicQuotaDataList(%s)=%v want %v", tc.raw, got, tc.want)
+		}
+	}
+}
+
 func (s *lifecycleGraphicSession) ReadFile(ctx context.Context, p string) ([]byte, bool, error) {
 	s.reads++
 	if s.reads == s.readFailure {

@@ -151,7 +151,25 @@ func (s *objectiveScoreFeedback) next(snapshot answer.ObjectiveSnapshot) (answer
 // the search is abandoned rather than guessing.  Equal scores advance to the
 // next alternative for the same question; higher/lower scores lock the new or
 // old answer respectively.
-func (s *objectiveScoreFeedback) observe(score, max string) {
+func objectiveAnswersEqual(left, right answer.ObjectiveCandidate) bool {
+	if len(left.Answers) != len(right.Answers) {
+		return false
+	}
+	for i := range left.Answers {
+		if strings.ToUpper(strings.TrimSpace(left.Answers[i])) != strings.ToUpper(strings.TrimSpace(right.Answers[i])) {
+			return false
+		}
+	}
+	return true
+}
+
+// observe accepts score evidence only for the vector that was actually sent
+// to the platform.  In particular, a repeated model candidate must never
+// establish a baseline for a searcher that was created for another vector.
+// Once a probe is pending, the response must belong to that exact probe; a
+// mismatch abandons the search instead of inferring from an incomparable
+// score.
+func (s *objectiveScoreFeedback) observe(submitted answer.ObjectiveCandidate, score, max string) {
 	if s == nil || s.done {
 		return
 	}
@@ -162,11 +180,16 @@ func (s *objectiveScoreFeedback) observe(score, max string) {
 		return
 	}
 	if s.baseline == nil {
+		if !objectiveAnswersEqual(submitted, s.base) {
+			s.done = true
+			s.pending = nil
+			return
+		}
 		s.baseline, _ = objectiveScoreNumber(score)
 		s.maxScore = strings.TrimSpace(max)
 		return
 	}
-	if strings.TrimSpace(max) != s.maxScore || s.pending == nil {
+	if strings.TrimSpace(max) != s.maxScore || s.pending == nil || !objectiveAnswersEqual(submitted, s.pending.trial) {
 		s.done = true
 		s.pending = nil
 		return
@@ -229,8 +252,8 @@ type objectiveQuestionResult struct {
 }
 
 func newObjectiveAttemptHistory(limit int) *objectiveAttemptHistory {
-	if limit <= 0 || limit > 10 {
-		limit = 10
+	if limit <= 0 || limit > 15 {
+		limit = 15
 	}
 	return &objectiveAttemptHistory{limit: limit, byHash: make(map[[32]byte]objectiveAttempt)}
 }
@@ -249,8 +272,8 @@ func objectiveAttemptKey(candidate answer.ObjectiveCandidate) [32]byte {
 // from the latest observation avoids restarting repairs from an empty context;
 // a better total score alone is never used to infer any individual answer.
 func (h *objectiveAttemptHistory) restore(failed []questionbank.ObjectiveFailedAttempt) *answer.ObjectiveCandidate {
-	if len(failed) > 10 {
-		failed = failed[len(failed)-10:]
+	if len(failed) > 15 {
+		failed = failed[len(failed)-15:]
 	}
 	for _, item := range failed {
 		candidate := item.Candidate.Candidate

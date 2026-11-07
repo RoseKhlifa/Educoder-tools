@@ -23,17 +23,17 @@ func TestObjectiveScoreFeedbackUsesOneQuestionAndLocksByDelta(t *testing.T) {
 	if !ok {
 		t.Fatal("ranked candidate was rejected")
 	}
-	search.observe("1", "2")
+	search.observe(candidate, "1", "2")
 	first, ok := search.next(snapshot)
 	if !ok || first.Answers[0] != "A" || first.Answers[1] != "B" {
 		t.Fatalf("weakest question was not probed first: %+v ok=%v", first, ok)
 	}
-	search.observe("2", "2")
+	search.observe(first, "2", "2")
 	second, ok := search.next(snapshot)
 	if !ok || second.Answers[0] != "B" || second.Answers[1] != "B" {
 		t.Fatalf("score increase did not lock changed answer: %+v ok=%v", second, ok)
 	}
-	search.observe("1", "2")
+	search.observe(second, "1", "2")
 	if _, ok := search.next(snapshot); ok {
 		t.Fatal("search emitted a candidate after all questions were classified")
 	}
@@ -49,9 +49,9 @@ func TestObjectiveScoreFeedbackEqualScoreAdvancesAlternative(t *testing.T) {
 	if !ok {
 		t.Fatal("ranked candidate was rejected")
 	}
-	search.observe("1", "2")
+	search.observe(candidate, "1", "2")
 	first, _ := search.next(snapshot)
-	search.observe("1", "2") // neither first answer nor probe improved score
+	search.observe(first, "1", "2") // neither first answer nor probe improved score
 	second, ok := search.next(snapshot)
 	if !ok || second.Answers[0] != "A" || second.Answers[1] != "B" {
 		t.Fatalf("equal score did not advance same question: %+v ok=%v", second, ok)
@@ -71,15 +71,52 @@ func TestObjectiveScoreFeedbackAbandonsUnknownOrChangedMaximum(t *testing.T) {
 	if !ok {
 		t.Fatal("ranked candidate was rejected")
 	}
-	search.observe("?", "2")
+	search.observe(candidate, "?", "2")
 	if _, ok := search.next(snapshot); ok {
 		t.Fatal("unknown score must not drive a probe")
 	}
 	search, _ = newObjectiveScoreFeedback(snapshot, candidate, nil)
-	search.observe("1", "2")
-	_, _ = search.next(snapshot)
-	search.observe("1", "3")
+	search.observe(candidate, "1", "2")
+	probe, _ := search.next(snapshot)
+	search.observe(probe, "1", "3")
 	if _, ok := search.next(snapshot); ok {
 		t.Fatal("changed maximum must stop score inference")
+	}
+}
+
+func TestObjectiveScoreFeedbackRejectsUnsubmittedBaselineAndProbe(t *testing.T) {
+	snapshot := scoreFeedbackSnapshot()
+	candidate := answer.ObjectiveCandidate{Kind: "objective", Answers: []string{"A", "A"}, RankedAnswers: []answer.ObjectiveRankedSlot{
+		{QuestionPosition: 1, Choices: []string{"A", "B"}},
+		{QuestionPosition: 2, Choices: []string{"A", "B"}},
+	}}
+	search, ok := newObjectiveScoreFeedback(snapshot, candidate, nil)
+	if !ok {
+		t.Fatal("ranked candidate was rejected")
+	}
+	// A stale model candidate must not establish a baseline for this search.
+	stale := candidate
+	stale.Answers = []string{"B", "A"}
+	search.observe(stale, "1", "2")
+	if !search.done {
+		t.Fatal("stale baseline was accepted")
+	}
+
+	search, _ = newObjectiveScoreFeedback(snapshot, candidate, nil)
+	search.observe(candidate, "1", "2")
+	probe, ok := search.next(snapshot)
+	if !ok {
+		t.Fatal("expected probe")
+	}
+	// A score for another vector is incomparable and must stop inference.
+	wrong := probe
+	wrong.Answers = append([]string(nil), probe.Answers...)
+	wrong.Answers[0] = "A"
+	if objectiveAnswersEqual(wrong, probe) {
+		t.Fatal("test setup did not change probe")
+	}
+	search.observe(wrong, "2", "2")
+	if !search.done {
+		t.Fatal("unsubmitted probe was accepted")
 	}
 }

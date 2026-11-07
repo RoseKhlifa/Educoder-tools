@@ -584,9 +584,14 @@ func rejectObjectiveConflicts(answers []ObjectiveAnswer) []ObjectiveAnswer {
 // Reusable deliberately stays false until shared-context proof is established.
 func (s *Store) LookupObjectiveLegacyReferences(ctx context.Context, in ObjectiveQuestionInput) ([]ObjectiveAnswer, error) {
 	_, complete, err := ObjectiveQuestionKeyWithContext(in)
-	if err != nil || !complete {
+	if err != nil {
 		return nil, err
 	}
+	// A media fetch can be unavailable during the cheap preflight. Legacy
+	// question records that never had media bindings are still safe to compare
+	// by exact text/options; only a complete context may promote an answer to
+	// reusable, so an incomplete input remains a reference for model review.
+	_ = complete
 	normalized, _, _, _, err := prepareObjectiveQuestion(in.Question, nil)
 	if err != nil {
 		return nil, err
@@ -628,7 +633,7 @@ func (s *Store) LookupObjectiveLegacyReferences(ctx context.Context, in Objectiv
 	var out []ObjectiveAnswer
 	for _, key := range keys {
 		answers, e := s.LookupObjectiveAnswers(ctx, key)
-		if e != nil {
+		if e != nil && !errors.Is(e, ErrNotFound) {
 			return nil, e
 		}
 		for _, a := range answers {

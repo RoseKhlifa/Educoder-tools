@@ -144,7 +144,7 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 		bank.Close()
 		return nil, err
 	}
-	service := taskservice.New(bank, provider, taskservice.Config{ModelConcurrency: cfg.ModelConcurrency, Timeout: cfg.JobTimeout})
+	service := taskservice.New(bank, provider, taskservice.Config{ModelConcurrency: cfg.ModelConcurrency, Timeout: cfg.JobTimeout, DisableLegacyIndependentReview: true})
 	runtime := &JobRuntime{manager: manager, bank: bank, modelConfigured: key != "", modelConcurrency: cfg.ModelConcurrency}
 	collector := &taskservice.Collector{Bank: bank, Limits: taskservice.DefaultCollectionLimits()}
 	runtime.collect = func(ctx context.Context, client EducoderClient, owner string, report func(jobs.Event)) (jobs.Outcome, error) {

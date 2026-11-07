@@ -156,7 +156,7 @@ func TestRunHomeworkFinalVerificationRejectsLostFullScore(t *testing.T) {
 	}))
 	defer server.Close()
 	r, err := New(bank(t), nil, Config{}).RunHomework(context.Background(), educoder.New(server.URL), Request{Owner: "o", Course: "C", HomeworkID: 44, Mode: solver.ModeSubmit}, nil)
-	if err == nil || r.Status != "verification_unconfirmed" || r.CompletedLevels != 1 || r.SkippedLevels != 1 || r.FailedLevels != 1 || r.Levels[0].Status != "verification_unconfirmed" {
+	if err == nil || r.Status != "verification_unconfirmed" || r.CompletedLevels != 0 || r.SkippedLevels != 0 || r.FailedLevels != 1 || r.Levels[0].Status != "verification_unconfirmed" {
 		t.Fatalf("batch=%+v err=%v progress_calls=%d", r, err, progressCalls)
 	}
 }

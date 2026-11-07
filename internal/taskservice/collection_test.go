@@ -257,6 +257,9 @@ func TestCollectionProgrammingRequiresBoundFormalHash(t *testing.T) {
 			if e != nil || s.Duplicates != tc.duplicates || s.Collected != 0 {
 				t.Fatalf("%+v %v", s, e)
 			}
+			if tc.duplicates == 0 && tc.name != "editor_changed" && s.CandidatesStored != 1 {
+				t.Fatalf("unproven source was not retained as a candidate: %+v", s)
+			}
 			if tc.duplicates == 0 && s.Unconfirmed < 1 {
 				t.Fatalf("unproven %+v", s)
 			}

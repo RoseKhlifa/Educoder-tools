@@ -1,27 +1,72 @@
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$Message)
+param(
+    [string]$Message,
+    # The default is the repository containing this script.  A path override
+    # keeps the gate testable in a disposable clone without touching a user's
+    # working tree or publishing anything.
+    [string]$RepositoryPath,
+    [string]$GoExecutable = 'go',
+    [string]$NpmExecutable = 'npm',
+    [string[]]$Paths = @(),
+    [switch]$VerifyOnly
+)
 
 $ErrorActionPreference = 'Stop'
-$repositoryPath = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$repositoryPath = if ([string]::IsNullOrWhiteSpace($RepositoryPath)) {
+    [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+} else {
+    [IO.Path]::GetFullPath($RepositoryPath)
+}
+if (-not $VerifyOnly -and [string]::IsNullOrWhiteSpace($Message)) {
+    throw 'Message is required for a release.'
+}
+
+function Invoke-ReleaseCheck {
+    param(
+        [Parameter(Mandatory)][string]$Label,
+        [Parameter(Mandatory)][string]$Executable,
+        [Parameter(Mandatory)][string[]]$Arguments
+    )
+    & $Executable @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Label failed (exit code $LASTEXITCODE); release not committed."
+    }
+}
+
 Push-Location -LiteralPath $repositoryPath
 try {
-    $remote = (& git remote get-url origin).Trim()
-    if ($LASTEXITCODE -ne 0 -or $remote -ne 'git@github.com:RoseKhlifa/Educoder-tools.git') {
-        throw 'origin must use the approved SSH repository.'
+    if (-not $VerifyOnly) {
+        $remote = (& git remote get-url origin).Trim()
+        if ($LASTEXITCODE -ne 0 -or $remote -ne 'git@github.com:RoseKhlifa/Educoder-tools.git') {
+            throw 'origin must use the approved SSH repository.'
+        }
+        $branch = (& git branch --show-current).Trim()
+        if ([string]::IsNullOrEmpty($branch)) { throw 'Release from a named branch or an isolated worktree branch.' }
+        if (-not (& git status --porcelain)) { throw 'No changes to release.' }
+        $current = (Get-Content -LiteralPath 'VERSION' -Raw).Trim()
+        if ($current -notmatch '^(\d+)\.(\d+)\.(\d+)$') { throw 'VERSION must be MAJOR.MINOR.PATCH.' }
+        $next = '{0}.{1}.{2}' -f $Matches[1], $Matches[2], ([int]$Matches[3] + 1)
+        & git rev-parse --verify "refs/tags/v$current" *> $null
+        if ($LASTEXITCODE -ne 0) { throw 'Current version must already have a release tag.' }
+        & git fetch origin main --tags
+        if ($LASTEXITCODE -ne 0) { throw 'SSH fetch failed.' }
+        $head = (& git rev-parse HEAD).Trim()
+        $remoteHead = (& git rev-parse origin/main).Trim()
+        if ($head -ne $remoteHead) { throw 'Sync main with origin/main before creating a release.' }
     }
-    $branch = (& git branch --show-current).Trim()
-    if ([string]::IsNullOrEmpty($branch)) { throw 'Release from a named branch or an isolated worktree branch.' }
-    if (-not (& git status --porcelain)) { throw 'No changes to release.' }
-    $current = (Get-Content -LiteralPath 'VERSION' -Raw).Trim()
-    if ($current -notmatch '^(\d+)\.(\d+)\.(\d+)$') { throw 'VERSION must be MAJOR.MINOR.PATCH.' }
-    $next = '{0}.{1}.{2}' -f $Matches[1], $Matches[2], ([int]$Matches[3] + 1)
-    & git rev-parse --verify "refs/tags/v$current" *> $null
-    if ($LASTEXITCODE -ne 0) { throw 'Current version must already have a release tag.' }
-    & git fetch origin main --tags
-    if ($LASTEXITCODE -ne 0) { throw 'SSH fetch failed.' }
-    $head = (& git rev-parse HEAD).Trim()
-    $remoteHead = (& git rev-parse origin/main).Trim()
-    if ($head -ne $remoteHead) { throw 'Sync main with origin/main before creating a release.' }
+
+    # Run every expensive/semantic check before mutating VERSION, package
+    # metadata, or CHANGELOG.  A failing check therefore leaves the checkout
+    # untouched and, most importantly, cannot reach commit/tag/push below.
+    Invoke-ReleaseCheck 'Go tests' $GoExecutable @('test', './...')
+    Invoke-ReleaseCheck 'Go vet' $GoExecutable @('vet', './...')
+    Invoke-ReleaseCheck 'TypeScript tests' $NpmExecutable @('test')
+    Invoke-ReleaseCheck 'TypeScript check' $NpmExecutable @('run', 'typecheck')
+
+    if ($VerifyOnly) {
+        Write-Output 'RELEASE_GATES=PASS; PUBLISH=SKIPPED'
+        return
+    }
 
     [IO.File]::WriteAllText((Join-Path $repositoryPath 'VERSION'), "$next`n")
     foreach ($packageFile in @('package.json', 'package-lock.json')) {
@@ -37,15 +82,13 @@ try {
     $entry = "# Changelog`n`n## $next - $date`n`n- $Message`n"
     [IO.File]::WriteAllText($changelogPath, $changelog.Replace('# Changelog', $entry.TrimEnd()))
 
-    & go test ./...
-    if ($LASTEXITCODE -ne 0) { throw 'Go tests failed; release not committed.' }
-    & go vet ./...
-    if ($LASTEXITCODE -ne 0) { throw 'Go vet failed; release not committed.' }
-    & npm test
-    if ($LASTEXITCODE -ne 0) { throw 'TypeScript tests failed; release not committed.' }
-    & npm run typecheck
-    if ($LASTEXITCODE -ne 0) { throw 'TypeScript check failed; release not committed.' }
-    & git add --all
+    # Stage only the release metadata, explicitly requested new files, and
+    # already-tracked modifications. Never sweep unrelated user artifacts into
+    # a published commit.
+    $stage = @('VERSION', 'CHANGELOG.md', 'package.json', 'package-lock.json') + $Paths
+    $stage += (& git diff --name-only)
+    $stage = @($stage | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+    & git add -- $stage
     if ($LASTEXITCODE -ne 0) { throw 'Git staging failed.' }
     & python scripts/check-private-data.py
     if ($LASTEXITCODE -ne 0) { throw 'Privacy audit failed; release not committed or pushed.' }

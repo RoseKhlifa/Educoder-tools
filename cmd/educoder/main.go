@@ -175,7 +175,7 @@ func run() error {
 				return e
 			}
 		}
-		service := taskservice.New(store, provider, taskservice.Config{Timeout: *timeout})
+		service := taskservice.New(store, provider, taskservice.Config{Timeout: *timeout, DisableLegacyIndependentReview: true})
 		result, runErr := service.Run(ctx, client, taskservice.Request{Owner: user.Login, IdempotencyKey: *idempotencyKey, Course: *course, HomeworkID: *homework, Game: *game, Mode: solver.Mode(*mode)}, nil)
 		if result != nil {
 			if *jsonOutput {

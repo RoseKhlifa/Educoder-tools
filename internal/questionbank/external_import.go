@@ -230,11 +230,17 @@ func (s *Store) ImportExternalDirectory(ctx context.Context, opts ExternalImport
 			e.Status = "candidate"
 			e.Reason = "unverified_external_source"
 			var v externalChoiceReference
-			if json.Unmarshal(payload, &v) != nil || !validExternalChoiceReference(v) {
+			if json.Unmarshal(payload, &v) != nil {
 				e.Status = "rejected"
 				e.Reason = "invalid_choice_reference"
 			} else {
-				e.Reference = json.RawMessage(marshal(v))
+				normalized, ok := normalizeExternalChoiceReference(v)
+				if !ok {
+					e.Status = "rejected"
+					e.Reason = "invalid_choice_reference"
+				} else {
+					e.Reference = json.RawMessage(marshal(normalized))
+				}
 			}
 		case "uml":
 			e.Kind = "diagram"
@@ -314,14 +320,22 @@ func (s *Store) ImportExternalDirectory(ctx context.Context, opts ExternalImport
 				return report, err
 			}
 			if digest != e.EntrySHA256 {
+				// These are classification-only migrations for the same pinned
+				// source bytes. Preserve the existing ID and all answer/evaluation
+				// history when upgrading legacy objective imports: old versions
+				// stored compact multi-select values as rejected, while the current
+				// parser canonicalizes them into sorted individual letters.
 				legacy := e
 				legacy.Status, legacy.Reason = "reference", "missing_question_and_option_identity"
-				// This is only a classification migration for identical pinned
-				// bytes. Preserve the existing ID and all answer/evaluation history.
-				if e.Kind != "objective" || e.Status != "candidate" || finalizeExternalEntry(legacy).EntrySHA256 != digest {
+				legacyReferenceDigest := finalizeExternalEntry(legacy).EntrySHA256
+				legacyRejected := e
+				legacyRejected.Status, legacyRejected.Reason = "rejected", "invalid_choice_reference"
+				legacyRejected.Reference = json.RawMessage(`null`)
+				legacyRejectedDigest := finalizeExternalEntry(legacyRejected).EntrySHA256
+				if e.Kind != "objective" || e.Status != "candidate" || digest != legacyReferenceDigest && digest != legacyRejectedDigest {
 					return report, errors.New("source content changed for pinned import identity")
 				}
-				if _, err = tx.ExecContext(ctx, `UPDATE external_entries SET status=?,reason=?,entry_sha256=? WHERE repository=? AND source_commit=? AND source_path=?`, e.Status, e.Reason, e.EntrySHA256, e.Repository, e.Commit, e.SourcePath); err != nil {
+				if _, err = tx.ExecContext(ctx, `UPDATE external_entries SET status=?,reason=?,entry_sha256=?,reference_json=? WHERE repository=? AND source_commit=? AND source_path=?`, e.Status, e.Reason, e.EntrySHA256, string(e.Reference), e.Repository, e.Commit, e.SourcePath); err != nil {
 					return report, err
 				}
 			}
@@ -348,10 +362,16 @@ func readExternalFallback(repo, commit string, b []byte) ([]ExternalEntry, error
 			Experiments []struct {
 				Name   string `json:"name"`
 				Levels []struct {
-					Title    string          `json:"title"`
-					Kind     string          `json:"kind"`
-					Position int             `json:"position"`
-					Answered bool            `json:"answered"`
+					Title    string `json:"title"`
+					Kind     string `json:"kind"`
+					Position int    `json:"position"`
+					Answered bool   `json:"answered"`
+					// Historical exports used all three spellings. Preserve an
+					// explicit file contract when present instead of downgrading a
+					// perfectly executable answer to reference-only.
+					File     string          `json:"file"`
+					Filename string          `json:"filename"`
+					Path     string          `json:"path"`
 					Answer   json.RawMessage `json:"answer"`
 				} `json:"levels"`
 			} `json:"experiments"`
@@ -385,8 +405,26 @@ func readExternalFallback(repo, commit string, b []byte) ([]ExternalEntry, error
 					e.Experiment = ""
 					e.Title = ""
 				} else {
-					e.Files = []problem.SolutionFile{{Content: answer.Code}}
-					e.Extension = externalLanguageExtension(answer.Language, answer.Code)
+					fileName := strings.TrimSpace(level.File)
+					if fileName == "" {
+						fileName = strings.TrimSpace(level.Filename)
+					}
+					if fileName == "" {
+						fileName = strings.TrimSpace(level.Path)
+					}
+					if fileName == "" {
+						if match := externalFilenameHint.FindStringSubmatch(answer.Code); len(match) > 1 {
+							fileName = strings.TrimSpace(match[1])
+						}
+					}
+					if fileName != "" && !cleanExternalPath(fileName) {
+						fileName = ""
+					}
+					e.Files = []problem.SolutionFile{{Path: fileName, Content: answer.Code}}
+					e.Extension = strings.ToLower(path.Ext(fileName))
+					if e.Extension == "" {
+						e.Extension = externalLanguageExtension(answer.Language, answer.Code)
+					}
 					if e.Extension == "" {
 						e.Status = "reference"
 						e.Reason = "missing_file_contract"
@@ -407,7 +445,11 @@ func validExternalDiagram(payload []byte) bool {
 	return json.Unmarshal(payload, &project) == nil && project.Type == "Project" && len(project.OwnedElements) > 0
 }
 
-var externalFilenameHint = regexp.MustCompile(`(?m)^\s*(?://|#)\s*([A-Za-z0-9_.-]+\.(?:java|py|sh|cpp|c|h|js|ts|sql))\s*$`)
+// Older answers.json exports omitted language/filename fields but retained a
+// harmless first-line comment such as "# filename: main.py". Accept only a
+// bounded basename/path hint; this never executes or rewrites the source and
+// still leaves genuinely ambiguous entries as reference-only.
+var externalFilenameHint = regexp.MustCompile(`(?im)(?:^|\n)\s*(?://|#|/\*+)\s*(?:(?:file(?:name)?|path)\s*[:=]\s*)?([A-Za-z0-9_./-]+\.(?:java|py|sh|cpp|c|h|js|ts|sql))\s*(?:\*/)?\s*$`)
 
 func externalLanguageExtension(language, code string) string {
 	switch strings.ToLower(strings.TrimSpace(language)) {

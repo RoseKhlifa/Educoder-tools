@@ -239,7 +239,8 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 			emit("verified", "已完成的作业已自动跳过", nil)
 			continue
 		}
-		childRequest := Request{Owner: req.Owner, Course: p.course.Identifier, HomeworkID: p.hw.ID, Mode: solver.ModeSubmit}
+		resolvedHomework := p.hw
+		childRequest := Request{Owner: req.Owner, Course: p.course.Identifier, HomeworkID: p.hw.ID, Homework: &resolvedHomework, Mode: solver.ModeSubmit}
 		block, fuseErr := s.homeworkFuse(ctx, childRequest, p.hw, progress, time.Now().UTC())
 		if fuseErr != nil {
 			h.Status, h.ReasonCode = "needs_service", "blocker_state_unavailable"
