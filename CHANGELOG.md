@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.115 - 2026-11-07
+
+- Count only assigned required levels in course homework summaries
+
 ## 0.1.114 - 2026-11-07
 
 - Preserve pre-formal failure states and validate historical score probe locks

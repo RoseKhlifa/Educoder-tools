@@ -69,65 +69,20 @@ func (r *HomeworkRoster) RequiredLevels() []HomeworkLevel {
 // A name must match uniquely; runtime positions never index an assignment-only
 // slice because the assignment can select a subset of the shixun.
 func (c *Client) HomeworkRoster(ctx context.Context, course string, hw Homework) (*HomeworkRoster, error) {
-	if validIdentifier(course) != nil || hw.ID < 1 || validIdentifier(hw.ShixunIdentifier) != nil || !hw.IsShixun {
-		return nil, errors.New("invalid homework roster context")
-	}
-	ref := "/classrooms/" + course + "/shixun_homework/" + strconv.FormatInt(hw.ID, 10) + "/detail"
-	var response struct {
-		Data collectionHeader `json:"data"`
-	}
-	if err := c.readMetadata(ctx, metadataHeader, "/api/shixun_homeworks/"+strconv.FormatInt(hw.ID, 10)+"/header_info.json", nil, ref, &response, nil); err != nil {
+	h, err := c.readHomeworkHeader(ctx, course, hw)
+	if err != nil {
 		return nil, err
-	}
-	h := response.Data
-	if h.HomeworkID != hw.ID || h.Shixun != hw.ShixunIdentifier || (hw.StudentWorkID > 0 && hw.StudentWorkID != h.WorkID) || (hw.MyShixunIdentifier != "" && h.MyShixun != hw.MyShixunIdentifier) {
-		return nil, errors.New("homework header identity mismatch")
-	}
-	if h.MyShixun == "" {
-		return nil, ErrHomeworkRuntimeMissing
-	}
-	if validIdentifier(h.MyShixun) != nil || h.WorkID < 1 {
-		return nil, errors.New("homework runtime identity missing")
 	}
 	p, err := c.HomeworkProgress(ctx, course, hw.ID)
 	if err != nil {
 		return nil, err
 	}
-	headerIDs := map[int64]string{}
-	headerNames := map[string]bool{}
-	for _, ch := range h.Challenges {
-		if ch.ID < 1 || ch.Name == "" || headerIDs[ch.ID] != "" || headerNames[ch.Name] {
-			return nil, errors.New("ambiguous homework header roster")
-		}
-		headerIDs[ch.ID] = ch.Name
-		headerNames[ch.Name] = true
-	}
-	canonical := map[string]ChallengeProgress{}
-	ids := map[int64]bool{}
-	for _, ch := range p.Challenges {
-		// Progress can contain levels outside this homework's assignment. When
-		// header_info supplies the canonical assignment IDs, ignore those extras
-		// while still rejecting malformed/duplicate selected entries.
-		if len(headerIDs) > 0 && headerIDs[ch.ChallengeID] == "" {
-			continue
-		}
-		if ch.ChallengeID < 1 || ch.Name == "" || ids[ch.ChallengeID] || canonical[ch.Name].ChallengeID != 0 || (len(headerIDs) > 0 && headerIDs[ch.ChallengeID] != ch.Name) {
-			return nil, errors.New("ambiguous or mismatched homework score roster")
-		}
-		ids[ch.ChallengeID] = true
-		canonical[ch.Name] = ch
-	}
-	// Upstream exposes both roster shapes: a broader header with an exact
-	// assignment count, or an assignment-only header while challenge_count
-	// still counts the full shixun. Keep the count guard for the first shape.
-	// Accept the second only when progress covers every unique header ID with
-	// its exact name and the assigned roster fits within the catalog total.
-	catalogCountMatches := hw.ChallengeCount <= 0 || len(canonical) == hw.ChallengeCount
-	headerProvesAssigned := len(headerIDs) > 0 && len(canonical) == len(headerIDs) && len(headerIDs) <= hw.ChallengeCount
-	if len(canonical) < 1 || len(canonical) > 100 || (!catalogCountMatches && !headerProvesAssigned) {
-		return nil, errors.New("homework score roster incomplete or exceeds 100 levels")
+	canonical, err := canonicalHomeworkAssignment(hw, p, h)
+	if err != nil {
+		return nil, err
 	}
 	var games []collectionGame
+	ref := "/classrooms/" + course + "/shixun_homework/" + strconv.FormatInt(hw.ID, 10) + "/detail"
 	q := url.Values{"homework_common_id": {strconv.FormatInt(hw.ID, 10)}}
 	if err := c.readMetadata(ctx, metadataRoster, "/api/myshixuns/"+h.MyShixun+"/challenges.json", q, ref, &games, func() bool { return games != nil }); err != nil {
 		return nil, err

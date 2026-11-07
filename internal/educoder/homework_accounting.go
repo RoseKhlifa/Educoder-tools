@@ -1,6 +1,9 @@
 package educoder
 
-import "strings"
+import (
+	"context"
+	"strings"
+)
 
 // RequiredHomeworkCounts is shared by execution and browser summaries. An
 // incomplete or ambiguous score roster cannot prove zero work or completion.
@@ -17,6 +20,33 @@ func RequiredHomeworkCounts(hw Homework, progress *HomeworkProgress) (required, 
 			return 0, 0, false
 		}
 		ids[level.ChallengeID], names[name] = true, true
+		if !level.IsOptional() {
+			required++
+			if level.HasFullScore() {
+				completed++
+			}
+		}
+	}
+	return required, completed, true
+}
+
+// AssignedHomeworkCounts projects already-read progress onto the same canonical
+// assignment as HomeworkRoster, without reading runtime games or creating an
+// environment. Invalid or unavailable header evidence is unknown, never 0/0.
+// Callers can retain RequiredHomeworkCounts as the no-header complete fast path.
+func (c *Client) AssignedHomeworkCounts(ctx context.Context, course string, hw Homework, progress *HomeworkProgress) (required, completed int, valid bool) {
+	if progress == nil || hw.ChallengeCount < 1 || hw.ChallengeCount > 100 {
+		return 0, 0, false
+	}
+	header, err := c.readHomeworkHeader(ctx, course, hw)
+	if err != nil {
+		return 0, 0, false
+	}
+	canonical, err := canonicalHomeworkAssignment(hw, progress, header)
+	if err != nil {
+		return 0, 0, false
+	}
+	for _, level := range canonical {
 		if !level.IsOptional() {
 			required++
 			if level.HasFullScore() {
