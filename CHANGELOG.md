@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.112 - 2026-11-07
+
+- Align objective failure history with bounded submission budget
+
 ## 0.1.111 - 2026-11-07
 
 - Enforce full Go and browser release gates before metadata mutation, and verify deliberate gate failures are rejected.

@@ -23,12 +23,13 @@ type ObjectiveFailedAttempt struct {
 	MaxScore  string
 }
 
-// ObjectiveFailedAttempts returns at most ten distinct, recently confirmed
+// ObjectiveFailedAttempts returns at most fifteen distinct, recently confirmed
 // failures in chronological order. It deliberately does not read run payloads,
 // infer per-question correctness, or accept uncertain submission outcomes.
 func (s *Store) ObjectiveFailedAttempts(ctx context.Context, key string, limit int) ([]ObjectiveFailedAttempt, error) {
-	if limit <= 0 || limit > 10 {
-		limit = 10
+	const maxObjectiveFailedAttempts = 15
+	if limit <= 0 || limit > maxObjectiveFailedAttempts {
+		limit = maxObjectiveFailedAttempts
 	}
 	var rawSnapshot string
 	if err := s.db.QueryRowContext(ctx, `SELECT snapshot_json FROM objective_snapshots WHERE snapshot_hash=?`, key).Scan(&rawSnapshot); err != nil {

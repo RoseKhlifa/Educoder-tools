@@ -133,7 +133,7 @@ func TestObjectiveFailedAttemptsBoundDistinctVectorsWithoutChangingVerifiedLooku
 	// another slot or make a known failed vector eligible for resubmission.
 	addFailedVector(t, store, key, snapshot, []string{" C ", "D"}, "1.25", "2", "not_full_score")
 	history, err := store.ObjectiveFailedAttempts(ctx, key, 999)
-	if err != nil || len(history) != 10 || !reflect.DeepEqual(history[len(history)-1].Candidate.Candidate.Answers, []string{" C ", "D"}) || history[len(history)-1].Score != "1.25" {
+	if err != nil || len(history) != 12 || !reflect.DeepEqual(history[len(history)-1].Candidate.Candidate.Answers, []string{" C ", "D"}) || history[len(history)-1].Score != "1.25" {
 		t.Fatalf("history not bounded to latest distinct vectors: %+v err=%v", history, err)
 	}
 	passed := addFailedVector(t, store, key, snapshot, []string{"D", "D"}, "2", "2", "full_score")
