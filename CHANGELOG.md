@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.114 - 2026-11-07
+
+- Preserve pre-formal failure states and validate historical score probe locks
+
 ## 0.1.113 - 2026-11-07
 
 - Reuse ranked historical score baselines for one-question objective probes

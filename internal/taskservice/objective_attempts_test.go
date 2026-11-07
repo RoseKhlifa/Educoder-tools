@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -146,6 +147,83 @@ func TestObjectiveAggregateScoreProbeChangesOneQuestionWithoutAnotherModelCall(t
 	result, err := New(bank(t), provider, Config{MaxModelCalls: 1, MaxEvaluations: 1, ObjectiveMaxSubmissions: 3}).Run(context.Background(), client, req(solver.ModeSubmit), nil)
 	if err != nil || result.Status != "passed" || result.ModelCalls != 1 || provider.requests == nil || submits.Load() != 2 {
 		t.Fatalf("aggregate score probe did not converge deterministically: result=%+v model_requests=%d submits=%d err=%v", result, len(provider.requests), submits.Load(), err)
+	}
+	if !provider.requests[0].RequireRankedAnswers {
+		t.Fatal("first submit-mode model call did not request ranked alternatives")
+	}
+}
+
+func TestObjectiveHistoricalRankedFailureSeedsScoreProbeWithoutBaselineResubmit(t *testing.T) {
+	ctx := context.Background()
+	store := bank(t)
+	submits := &atomic.Int64{}
+	var submitted atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/tasks/OBJGAME.json":
+			fmt.Fprint(w, objectiveJSON())
+		case "/api/tasks/OBJGAME/choose_build.json":
+			raw, readErr := io.ReadAll(r.Body)
+			if readErr != nil {
+				t.Errorf("read objective submission: %v", readErr)
+				http.Error(w, "read failed", http.StatusBadRequest)
+				return
+			}
+			var body struct {
+				Answer []string `json:"answer"`
+			}
+			if err := json.Unmarshal(raw, &body); err != nil {
+				t.Errorf("decode objective submission: %v", err)
+				http.Error(w, "decode failed", http.StatusBadRequest)
+				return
+			}
+			submitted.Store(append([]string(nil), body.Answer...))
+			submits.Add(1)
+			fmt.Fprint(w, `{"status":0,"choose_correct_num":null,"challenge_chooses_count":1}`)
+		case "/api/homework_commons/44/shixun_challenge_data.json":
+			fmt.Fprint(w, `{"data":{"passed_count":1,"challenge_settings":[{"challenge_id":9,"challenge_score":"13.3","game_score":"13.3","passed_status":2}]}}`)
+		default:
+			t.Errorf("unexpected endpoint %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	client := educoder.New(server.URL)
+
+	// Persist the exact ranked candidate and its confirmed partial score as a
+	// previous run would. The retry should compare the first probe against this
+	// durable baseline instead of sending the same historical vector again.
+	choice, err := client.LoadChoiceTask(ctx, req(solver.ModeSubmit).Course, 44, "OBJGAME")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := objectiveSnapshot(choice)
+	scope, err := store.PutObjectiveSnapshot(ctx, snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	historical := answer.ObjectiveCandidate{
+		Kind:    "objective",
+		Answers: []string{"A"},
+		RankedAnswers: []answer.ObjectiveRankedSlot{{
+			QuestionPosition: 1,
+			Choices:          []string{"A", "B"},
+		}},
+	}
+	candidate, err := store.AddObjectiveCandidate(ctx, scope, snapshot, historical, "model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordObjectiveVerification(ctx, candidate.ID, "historical-run", "not_full_score", "12", "13.3"); err != nil {
+		t.Fatal(err)
+	}
+
+	provider := &objectiveSequenceProvider{answers: []string{"A"}}
+	result, err := New(store, provider, Config{MaxModelCalls: 1, MaxEvaluations: 1, ObjectiveMaxSubmissions: 3}).Run(ctx, client, req(solver.ModeSubmit), nil)
+	answers, _ := submitted.Load().([]string)
+	if err != nil || result.Status != "passed" || result.ModelCalls != 0 || len(provider.requests) != 0 || submits.Load() != 1 || !reflect.DeepEqual(answers, []string{"B"}) {
+		t.Fatalf("historical ranked score probe replayed baseline or called model: result=%+v err=%v model_requests=%d submits=%d answers=%v", result, err, len(provider.requests), submits.Load(), answers)
 	}
 }
 

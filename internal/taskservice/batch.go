@@ -503,7 +503,7 @@ func statusOf(r *Result, e error) string {
 func terminalBatchStatus(r *Result, e error) string {
 	if r != nil {
 		switch r.Status {
-		case "uncertain", "verification_unconfirmed", "canceled", "budget_exhausted", "model_error", "generation_stalled", "selftest_failed", "attempts_exhausted", "invalid_candidate", "unsupported_multifile", "budget_unavailable", "usage_persistence_failed", "verification_persistence_failed", "resource_unavailable":
+		case "uncertain", "verification_unconfirmed", "canceled", "budget_exhausted", "model_error", "generation_stalled", "selftest_failed", "attempts_exhausted", "invalid_candidate", "unsupported_multifile", "budget_unavailable", "usage_persistence_failed", "verification_persistence_failed", "resource_unavailable", "prewrite_error", "saved_not_submitted", "save_unverified", "save_error", "editor_changed":
 			return r.Status
 		}
 	}
@@ -516,8 +516,15 @@ func terminalBatchStatus(r *Result, e error) string {
 // batchFailureReason emits an enum only. Upstream bodies, model responses,
 // source code and execution URLs are never copied into a public reason.
 func batchFailureReason(r *Result, err error) string {
-	if r != nil && r.Status == "generation_stalled" {
-		return "generation_stalled"
+	if r != nil {
+		switch r.Status {
+		case "generation_stalled":
+			return r.Status
+		case "prewrite_error", "saved_not_submitted", "save_unverified", "save_error", "editor_changed":
+			// Explicit adapter stages are stronger evidence than diagnostic
+			// wording: these failures never started a formal evaluation.
+			return r.Status
+		}
 	}
 	var imageErr *educoder.QuestionImageError
 	if errors.As(err, &imageErr) {

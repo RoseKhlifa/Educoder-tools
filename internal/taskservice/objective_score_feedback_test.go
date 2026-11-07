@@ -9,8 +9,8 @@ import (
 
 func scoreFeedbackSnapshot() answer.ObjectiveSnapshot {
 	return answer.ObjectiveSnapshot{Kind: "objective", Title: "t", Questions: []answer.ObjectiveQuestion{
-		{Position: 1, Question: "one", Category: 1, Options: []answer.ObjectiveOption{{Label: "A", Text: "a"}, {Label: "B", Text: "b"}}},
-		{Position: 2, Question: "two", Category: 1, Options: []answer.ObjectiveOption{{Label: "A", Text: "a"}, {Label: "B", Text: "b"}, {Label: "C", Text: "c"}}},
+		{Position: 1, Question: "one", Category: 1, Options: []answer.ObjectiveOption{{Label: "A", Text: "a", Position: 0}, {Label: "B", Text: "b", Position: 1}}},
+		{Position: 2, Question: "two", Category: 1, Options: []answer.ObjectiveOption{{Label: "A", Text: "a", Position: 0}, {Label: "B", Text: "b", Position: 1}, {Label: "C", Text: "c", Position: 2}}},
 	}}
 }
 
@@ -140,5 +140,11 @@ func TestObjectiveScoreFeedbackSeedsFromConfirmedHistoricalFailure(t *testing.T)
 	probe, ok := search.next(snapshot)
 	if !ok || probe.Answers[0] != "B" || probe.Answers[1] != "A" || len(probe.RankedAnswers) != 0 {
 		t.Fatalf("historical baseline did not produce a clean one-question probe: %+v ok=%v", probe, ok)
+	}
+	if _, ok := history.scoreFeedback(snapshot, []string{"B", ""}); ok {
+		t.Fatal("historical score was reused after a conflicting verified lock")
+	}
+	if _, ok := history.scoreFeedback(snapshot, []string{"A", ""}); !ok {
+		t.Fatal("matching verified lock rejected a comparable history baseline")
 	}
 }

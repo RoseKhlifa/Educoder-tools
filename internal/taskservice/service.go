@@ -629,8 +629,12 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			return r, historyErr
 		}
 		previous = attemptHistory.restore(failed)
-		if seeded, ok := attemptHistory.scoreFeedback(snapshot, fixedAnswers); ok {
-			scoreFeedback = seeded
+		// Proven answers and a fresh external first candidate retain priority.
+		// History only avoids a model-generated baseline on an actual miss.
+		if cacheErr != nil && externalErr != nil && !(fixedReady && allObjectiveAnswersFixed(fixedAnswers)) {
+			if seeded, ok := attemptHistory.scoreFeedback(snapshot, fixedAnswers); ok {
+				scoreFeedback = seeded
+			}
 		}
 	}
 	for attempt := 0; submissions < s.cfg.ObjectiveMaxSubmissions; attempt++ {
@@ -723,7 +727,7 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 				profile.Thinking, profile.ReasoningEffort = "disabled", ""
 			}
 			pr := answer.ObjectiveRequest{Problem: snapshot, Previous: previous, Feedback: append(append([]answer.Feedback(nil), legacyFeedback...), attemptHistory.feedback(feedback)...), Profile: profile, Resources: resources}
-			pr.RequireRankedAnswers = previous != nil && independent == nil
+			pr.RequireRankedAnswers = req.Mode == solver.ModeSubmit && independent == nil
 			if fixedReady {
 				pr.FixedAnswers = append([]string(nil), fixedAnswers...)
 			}

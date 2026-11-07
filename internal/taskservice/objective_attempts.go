@@ -303,6 +303,22 @@ func (h *objectiveAttemptHistory) scoreFeedback(snapshot answer.ObjectiveSnapsho
 	}
 	for index := len(h.prior) - 1; index >= 0; index-- {
 		prior := h.prior[index]
+		// A new verified lock may contradict this older observation. Changing
+		// the historical base to fit it would make its score incomparable, so
+		// abandon this baseline rather than merge two different vectors.
+		if answer.ValidateObjectiveFixedAnswers(snapshot, fixed) != nil {
+			return nil, false
+		}
+		compatible := true
+		for i, locked := range fixed {
+			if strings.TrimSpace(locked) != "" && (i >= len(prior.Candidate.Answers) || !strings.EqualFold(strings.TrimSpace(locked), strings.TrimSpace(prior.Candidate.Answers[i]))) {
+				compatible = false
+				break
+			}
+		}
+		if !compatible {
+			continue
+		}
 		search, ok := newObjectiveScoreFeedback(snapshot, prior.Candidate, fixed)
 		if !ok {
 			continue
