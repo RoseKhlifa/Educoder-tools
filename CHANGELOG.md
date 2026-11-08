@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.118 - 2026-11-08
+
+- Clarify that personalized text-image homework and ZIP materials are excluded from collection and reuse
+
 ## 0.1.117 - 2026-11-08
 
 - Show the running application version beside the shared page footer

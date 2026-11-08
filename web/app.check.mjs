@@ -375,6 +375,7 @@ await test('consumer course service and administrator boundary',async t=>{
     page.get('[data-action="bank-refresh"]').dispatch('click');await settle();assert.equal(bankRequests().length,2);
     for(const source of ['sidebar','mobile']) {
       page.get(`[data-guidelines-source="${source}"]`).dispatch('click');assert.match(page.html(), /平台会收集用户做题数据/);
+      assert.ok(page.html().includes('具有用户个人独特特征的图文作业及 ZIP 压缩包，本站不会收集，也不会纳入题库或用于答案复用。'));
       page.document.listeners.get('keydown')({key:'Escape'});assert.doesNotMatch(page.html(), /role="dialog"/);
       assert.equal(page.document.activeElement,page.get(`[data-guidelines-source="${source}"]`));
     }
@@ -759,6 +760,7 @@ await test('consumer course service and administrator boundary',async t=>{
     page.get('[data-action="user-guidelines"]').dispatch('click');
     assert.match(page.html(), /role="dialog"/);
     assert.match(page.html(), /平台会收集用户做题数据/);assert.match(page.html(), /题目内容、作答内容或代码、评测结果与通过状态/);
+    assert.ok(page.html().includes('具有用户个人独特特征的图文作业及 ZIP 压缩包，本站不会收集，也不会纳入题库或用于答案复用。'));
     assert.match(page.html(), /复用题目及经核验的答案/);assert.match(page.html(), /降低平台成本，维持平台发展/);
     assert.match(page.html(), /登录后.*扫描账号中已通过的任务/);
     assert.match(page.html(), /模型服务/);assert.doesNotMatch(page.html(), /private-draft-account|private-draft-password/);

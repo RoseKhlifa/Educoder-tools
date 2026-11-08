@@ -13,6 +13,7 @@ export function renderUserGuidelines(): string {
     <section class="guidelines-highlight" aria-labelledby="guidelines-data">
       <h3 id="guidelines-data">授权做题数据的收集与复用</h3>
       <p><strong>平台会收集用户做题数据，包括题目内容、作答内容或代码、评测结果与通过状态，用于复用题目及经核验的答案，减少重复计算和模型调用，降低平台成本，维持平台发展。</strong></p>
+      <p><strong>具有用户个人独特特征的图文作业及 ZIP 压缩包，本站不会收集，也不会纳入题库或用于答案复用。</strong></p>
       <p>请在了解并同意上述用途后登录使用。登录后，平台会在后台扫描账号中已通过的任务；执行服务时也会记录必要的题目、答案与验证信息。内容只有满足核验条件后才作为已验证答案入库。复用题目与答案，不代表向其他用户开放你的账号、个人任务或反馈工单。</p>
     </section>
 

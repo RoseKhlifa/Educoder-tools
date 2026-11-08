@@ -13,6 +13,9 @@ assert.match(protocolSection[2], /独立服务/);
 assert.match(protocolSection[2], /自行评估相关风险/);
 assert.match(guidelines, /<section class="guidelines-highlight" aria-labelledby="guidelines-data">/);
 assert.match(guidelines, /平台会收集用户做题数据/);
+const dataSection = guidelines.match(/<section class="guidelines-highlight" aria-labelledby="guidelines-data">([\s\S]*?)<\/section>/);
+assert.ok(dataSection?.[1].includes('<p><strong>具有用户个人独特特征的图文作业及 ZIP 压缩包，本站不会收集，也不会纳入题库或用于答案复用。</strong></p>'), 'the highlighted data notice must clearly exclude personalized homework and ZIP materials');
+assert.ok(dataSection[1].indexOf('本站不会收集') < dataSection[1].indexOf('请在了解并同意上述用途后登录使用'), 'the collection boundary must appear before consent copy');
 
 const css = (await readFile(new URL('./styles.css', import.meta.url), 'utf8')).replace(/\/\*[\s\S]*?\*\//g, '');
 function lastRule(selector) {
