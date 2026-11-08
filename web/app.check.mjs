@@ -16,7 +16,7 @@ class Element {
 }
 class Input extends Element {}
 class Document {
-  items = []; html = ''; listeners = new Map(); activeElement = null; assetRevision = ''; visibilityState = 'visible';
+  items = []; html = ''; listeners = new Map(); activeElement = null; assetRevision = ''; appVersion = ''; visibilityState = 'visible';
   constructor() { const document = this; this.root = { get innerHTML() { return document.html; }, set innerHTML(value) {
     document.html = value; document.items.forEach(item => { item.isConnected = false; });
     const modalStart = value.indexOf('role="dialog"');
@@ -31,7 +31,7 @@ class Document {
       const end=value.indexOf('</form>',form.start);form.controls=document.items.filter(item=>item.start>form.start&&item.start<end&&'name'in item.attributes);
     }
   } }; }
-  querySelector(selector) { return selector === '#app' ? this.root : selector === 'meta[name="app-asset-revision"]' ? this.assetRevision ? {content:this.assetRevision} : null : this.querySelectorAll(selector)[0] ?? null; }
+  querySelector(selector) { return selector === '#app' ? this.root : selector === 'meta[name="app-asset-revision"]' ? this.assetRevision ? {content:this.assetRevision} : null : selector === 'meta[name="app-version"]' ? this.appVersion ? {content:this.appVersion} : null : this.querySelectorAll(selector)[0] ?? null; }
   querySelectorAll(selector) {
     if(selector.includes(',')) return [...new Set(selector.split(',').flatMap(part=>this.querySelectorAll(part.trim())))].sort((a,b)=>a.start-b.start);
     if(selector.startsWith('.modal ')) return this.items.filter(item=>item.inModal&&(item.tag===selector.slice(7)||selector.slice(7)==='a[href]'&&item.tag==='a'&&'href'in item.attributes));
@@ -54,7 +54,7 @@ const supportList=(items,next_cursor='')=>({items,next_cursor,limit:30});
 const fillSupport=(page,subject='测试问题',body='测试反馈内容',category='task')=>{page.get('#ticket-subject').value=subject;page.get('#ticket-category').value=category;page.get('#ticket-body').value=body;};
 let version=0;
 async function app(overrides={}, options={}) {
-  const document=new Document(),requests=[],timers=new Map(),windowListeners=new Map();let timerId=0,reloadCount=0;document.assetRevision=options.assetRevision||'';
+  const document=new Document(),requests=[],timers=new Map(),windowListeners=new Map();let timerId=0,reloadCount=0;document.assetRevision=options.assetRevision||'';document.appVersion=options.appVersion||'';
   globalThis.HTMLInputElement=Input;globalThis.document=document;globalThis.window={location:{reload(){reloadCount++;}},addEventListener(name,handler){windowListeners.set(name,handler);}};
   globalThis.setTimeout=(handler,delay)=>{const id=++timerId;timers.set(id,{handler,delay});return id;};globalThis.clearTimeout=id=>timers.delete(id);
   globalThis.localStorage=globalThis.sessionStorage={setItem(){throw new Error('no browser persistence');}};
@@ -76,6 +76,38 @@ async function app(overrides={}, options={}) {
   return {requests,timers,document,windowListeners,html:()=>document.html,reloads:()=>reloadCount,get(selector){const element=document.querySelector(selector);assert.ok(element,`Missing ${selector}`);return element;},async tick(){const tasks=[...timers.entries()];for(const[id,timer]of tasks){timers.delete(id);timer.handler();}await settle();}};
 }
 await test('consumer course service and administrator boundary',async t=>{
+  await t.test('footer shows the page release for consumers and administrators without a version request', async () => {
+    const page = await app({'/api/auth/me':()=>ok({user,platform:{role:'admin',status:'active'}})}, {appVersion:' 0.1.234 '});
+    const footer = '<footer class="page-footer">头歌妈妈 · 把任务交给我们 · <span class="app-version">v0.1.234</span></footer>';
+    assert.ok(page.html().includes(footer));
+    page.get('[data-nav="admin-overview"]').dispatch('click');await settle();
+    assert.match(page.html(), /admin-app/);assert.ok(page.html().includes(footer));
+    page.get('[data-nav="courses"]').dispatch('click');await settle();
+    assert.ok(page.html().includes(footer));
+    assert.equal(page.requests.some(({url})=>url==='/version'),false);
+  });
+  await t.test('footer keeps its original text when release metadata is absent or blank', async () => {
+    for (const appVersion of ['', '   ']) {
+      const page = await app({}, {appVersion});
+      assert.ok(page.html().includes('<footer class="page-footer">头歌妈妈 · 把任务交给我们</footer>'));
+      assert.doesNotMatch(page.html(), /class="app-version"|vundefined/);
+    }
+  });
+  await t.test('footer escapes release metadata rather than interpreting markup', async () => {
+    const page = await app({}, {appVersion:'<img src=x onerror="boom">'});
+    assert.match(page.html(), /class="app-version">v&lt;img src=x onerror=&quot;boom&quot;&gt;<\/span>/);
+    assert.doesNotMatch(page.html(), /<img src=x/);
+  });
+  await t.test('footer retains the loaded page version when a newer service release is detected', async () => {
+    const page = await app({
+      '/api/auth/me':()=>okWithHeaders({user,platform:{role:'user',status:'active'}},{'X-App-Asset-Revision':'asset-old','X-App-Version':'0.1.234'}),
+      '/api/courses':()=>okWithHeaders(courses,{'X-App-Asset-Revision':'asset-new','X-App-Version':'0.1.235'}),
+    }, {appVersion:'0.1.234',assetRevision:'asset-old'});
+    assert.match(page.html(), /class="app-version">v0.1.234<\/span>/);
+    assert.doesNotMatch(page.html(), /v0.1.235/);
+    assert.match(page.html(), /检测到头歌妈妈已发布新版本/);
+    assert.equal(page.reloads(),0);assert.equal(page.requests.some(({url})=>url==='/version'),false);
+  });
   await t.test('real support envelopes update recovery notice from active read to blocked without announcing a retry', async () => {
     const source=job({status:'support',can_recover:true,result:{service_status:'support',total_homeworks:19,completed_homeworks:13}});
     const child=job({id:'wire-recovery',status:'processing',can_recover:false,created_at:'2026-11-03T06:00:00Z',result:{service_status:'processing',total_homeworks:19,completed_homeworks:13},recovery:{original_id:'job-1',state:'reconciling',message:'正在只读复核上次提交结果，尚未开始新的提交'}});

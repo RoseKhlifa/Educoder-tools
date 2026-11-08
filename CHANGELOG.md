@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.117 - 2026-11-08
+
+- Show the running application version beside the shared page footer
+
 ## 0.1.116 - 2026-11-08
 
 - Preserve objective homework levels and require complete assignment coverage before success

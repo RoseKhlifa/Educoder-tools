@@ -224,6 +224,32 @@ func TestStaticCompressionRevalidationHeadAndRanges(t *testing.T) {
 	}
 }
 
+func TestStaticEntryEmbedsApplicationVersion(t *testing.T) {
+	for name, body := range map[string]string{
+		"document": `<html><head><title>Workbench</title></head><body></body></html>`,
+		"fragment": `<script type="module" src="/dist/app.js"></script>`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg := DefaultConfig()
+			cfg.StaticDir = dir
+			s := NewServer(cfg)
+			response := httptest.NewRecorder()
+			s.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+			meta := `name="app-version" content="` + buildinfo.Current() + `"`
+			if response.Code != http.StatusOK || strings.Count(response.Body.String(), meta) != 1 {
+				t.Fatalf("entry must embed the running release exactly once: status=%d body=%s", response.Code, response.Body.String())
+			}
+			if response.Header().Get("X-App-Version") != buildinfo.Current() || !strings.Contains(response.Body.String(), `name="app-asset-revision"`) {
+				t.Fatal("version metadata must match the service and preserve asset revision metadata")
+			}
+		})
+	}
+}
+
 func TestStaticModuleGraphVersionsOnlyPublishedLocalDependencies(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "dist", "nested"), 0o755); err != nil {

@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"fmt"
+	"html"
 	"io/fs"
 	"net/http"
 	"net/url"
@@ -16,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	buildinfo "educoder-cli"
 )
 
 type staticAsset struct {
@@ -115,7 +118,7 @@ var publicEntryAsset = regexp.MustCompile(`(?:src|href)=["']([^"']+)["']`)
 var publicAssetRevision = regexp.MustCompile(`name="app-asset-revision" content="([a-f0-9]{16})"`)
 
 func versionEntryHTML(body []byte, revision string) []byte {
-	meta := []byte(`<meta name="app-asset-revision" content="` + revision + `">`)
+	meta := []byte(`<meta name="app-asset-revision" content="` + revision + `"><meta name="app-version" content="` + html.EscapeString(buildinfo.Current()) + `">`)
 	if bytes.Contains(body, []byte("</head>")) {
 		body = bytes.Replace(body, []byte("</head>"), append(meta, []byte("</head>")...), 1)
 	} else {
