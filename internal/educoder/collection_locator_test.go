@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -57,7 +58,7 @@ func TestCollectionLocateExistingRuntimeWithoutStartingIt(t *testing.T) {
 		{"runtime incomplete", func(_ map[string]any, g []map[string]any, _ *Homework, _ *HomeworkProgress) { g[0]["status"] = 0 }, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			hw := Homework{ID: 4, StudentWorkID: 5, MyShixunIdentifier: "RUNTIME", ShixunIdentifier: "SHIXUN"}
+			hw := Homework{ID: 4, StudentWorkID: 5, MyShixunIdentifier: "RUNTIME", ShixunIdentifier: "SHIXUN", ChallengeCount: 2}
 			p := &HomeworkProgress{Challenges: []ChallengeProgress{{ChallengeID: 10, Name: "passed", GameScore: "10.00", ChallengeScore: "10"}, {ChallengeID: 11, Name: "unfinished", GameScore: "0", ChallengeScore: "10"}}}
 			h := map[string]any{"homework_id": 4, "work_id": 5, "myshixun_identifier": "RUNTIME", "shixun_identifier": "SHIXUN", "challenges": []any{map[string]any{"id": 10, "name": "passed"}, map[string]any{"id": 11, "name": "unfinished"}}}
 			games := []map[string]any{{"identifier": "GAME_PASSED", "position": 1, "name": "passed", "status": 2}, {"identifier": "GAME_UNFINISHED", "position": 2, "name": "unfinished", "status": 0}}
@@ -98,6 +99,119 @@ func TestCollectionLocateExistingRuntimeWithoutStartingIt(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The header is a code-level subset on mixed code/objective assignments. It
+// must not narrow the complete assignment-specific score roster or index its
+// rows by runtime position.
+func TestCollectionLocateMixedKindsUsesCompleteAssignmentProgress(t *testing.T) {
+	for _, headerCount := range []int{0, 1, 3} {
+		t.Run(fmt.Sprintf("header_%d_of_4", headerCount), func(t *testing.T) {
+			code, objective := 0, 1
+			p := &HomeworkProgress{}
+			h := map[string]any{"homework_id": 4, "work_id": 5, "myshixun_identifier": "RUNTIME", "shixun_identifier": "SHIXUN"}
+			var header []map[string]any
+			var games []map[string]any
+			for i := 1; i <= 4; i++ {
+				name := fmt.Sprintf("level %d", i)
+				st := &objective
+				if (headerCount == 1 && i == 2) || (headerCount == 3 && i < 4) {
+					st = &code
+					header = append(header, map[string]any{"id": i, "name": name})
+				}
+				p.Challenges = append(p.Challenges, ChallengeProgress{ChallengeID: int64(i), Name: name, ST: st, GameScore: "25", ChallengeScore: "25"})
+				games = append(games, map[string]any{"identifier": fmt.Sprintf("GAME%d", i), "position": i, "name": name, "status": 2, "challenge_st": *st})
+			}
+			h["challenges"] = header
+			got, err := collectionLocatorFixture(t, h, games, Homework{ID: 4, StudentWorkID: 5, MyShixunIdentifier: "RUNTIME", ShixunIdentifier: "SHIXUN", ChallengeCount: 4}, p)
+			if err != nil || len(got.Targets) != 4 || len(got.Reasons) != 0 {
+				t.Fatalf("targets=%+v reasons=%v err=%v", got.Targets, got.Reasons, err)
+			}
+			for i, target := range got.Targets {
+				if target.ChallengeID != int64(i+1) || target.Position != i+1 || target.Game != fmt.Sprintf("GAME%d", i+1) {
+					t.Fatal(target)
+				}
+			}
+		})
+	}
+}
+
+func TestCollectionLocateRejectsIncompleteOrAmbiguousAssignmentProof(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(map[string]any, []map[string]any, *Homework, *HomeworkProgress)
+	}{
+		{"missing catalog count", func(_ map[string]any, _ []map[string]any, hw *Homework, _ *HomeworkProgress) { hw.ChallengeCount = 0 }},
+		{"truncated progress", func(_ map[string]any, _ []map[string]any, _ *Homework, p *HomeworkProgress) {
+			p.Challenges = p.Challenges[:1]
+		}},
+		{"duplicate progress id", func(_ map[string]any, _ []map[string]any, _ *Homework, p *HomeworkProgress) {
+			p.Challenges[1].ChallengeID = 10
+		}},
+		{"duplicate selected runtime name", func(_ map[string]any, games []map[string]any, _ *Homework, _ *HomeworkProgress) {
+			games[1]["name"] = "passed"
+		}},
+		{"overlapping header id wrong name", func(h map[string]any, _ []map[string]any, _ *Homework, _ *HomeworkProgress) {
+			h["challenges"] = []map[string]any{{"id": 10, "name": "other"}}
+		}},
+		{"overlapping header name wrong id", func(h map[string]any, _ []map[string]any, _ *Homework, _ *HomeworkProgress) {
+			h["challenges"] = []map[string]any{{"id": 99, "name": "passed"}}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hw := Homework{ID: 4, StudentWorkID: 5, MyShixunIdentifier: "RUNTIME", ShixunIdentifier: "SHIXUN", ChallengeCount: 2}
+			p := &HomeworkProgress{Challenges: []ChallengeProgress{{ChallengeID: 10, Name: "passed", GameScore: "10", ChallengeScore: "10"}, {ChallengeID: 11, Name: "unfinished", GameScore: "0", ChallengeScore: "10"}}}
+			h := map[string]any{"homework_id": 4, "work_id": 5, "myshixun_identifier": "RUNTIME", "shixun_identifier": "SHIXUN", "challenges": []map[string]any{{"id": 10, "name": "passed"}}}
+			games := []map[string]any{{"identifier": "GAME_PASSED", "position": 1, "name": "passed", "status": 2}, {"identifier": "GAME_UNFINISHED", "position": 2, "name": "unfinished", "status": 0}}
+			tc.mutate(h, games, &hw, p)
+			got, err := collectionLocatorFixture(t, h, games, hw, p)
+			if err != nil || len(got.Targets) != 0 || len(got.Reasons) == 0 {
+				t.Fatalf("targets=%+v reasons=%v err=%v", got.Targets, got.Reasons, err)
+			}
+		})
+	}
+}
+
+func TestCollectionLocateGenuineAssignedSubsetRetainsRuntimePosition(t *testing.T) {
+	hw := Homework{ID: 4, StudentWorkID: 5, MyShixunIdentifier: "RUNTIME", ShixunIdentifier: "SHIXUN", ChallengeCount: 1}
+	p := &HomeworkProgress{Challenges: []ChallengeProgress{{ChallengeID: 12, Name: "selected", GameScore: "25", ChallengeScore: "25"}}}
+	h := map[string]any{"homework_id": 4, "work_id": 5, "myshixun_identifier": "RUNTIME", "shixun_identifier": "SHIXUN", "challenges": []map[string]any{{"id": 12, "name": "selected"}}}
+	games := []map[string]any{{"identifier": "GAME1", "position": 1, "name": "unselected 1", "status": 2}, {"identifier": "GAME2", "position": 2, "name": "unselected 2", "status": 2}, {"identifier": "GAME3", "position": 3, "name": "selected", "status": 2}, {"identifier": "GAME4", "position": 4, "name": "unselected 4", "status": 2}}
+	got, err := collectionLocatorFixture(t, h, games, hw, p)
+	if err != nil || len(got.Targets) != 1 || len(got.Reasons) != 0 || got.Targets[0].ChallengeID != 12 || got.Targets[0].Position != 3 || got.Targets[0].Game != "GAME3" {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
+
+func collectionLocatorFixture(t *testing.T, header map[string]any, games []map[string]any, hw Homework, p *HomeworkProgress) (CollectionLocationResult, error) {
+	t.Helper()
+	s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Error("write request", r.Method, r.URL.Path)
+			http.Error(w, "write forbidden", http.StatusForbidden)
+			return
+		}
+		switch r.URL.Path {
+		case "/api/shixun_homeworks/4/header_info.json":
+			json.NewEncoder(w).Encode(map[string]any{"data": header})
+		case "/api/myshixuns/RUNTIME/challenges.json":
+			if r.URL.Query().Get("homework_common_id") != "4" {
+				t.Error("missing homework scope")
+			}
+			json.NewEncoder(w).Encode(games)
+		default:
+			t.Error("unexpected endpoint", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer s.Close()
+	c := New(s.URL)
+	c.LoginName = "demo"
+	reader, err := c.CollectionReader(CollectionBudget{Requests: 2, ResponseBytes: 8192, TotalBytes: 16384})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reader.CollectionLocate(context.Background(), "COURSE", hw, p)
 }
 
 func TestCollectionLocatorReadOnlyAllowlist(t *testing.T) {

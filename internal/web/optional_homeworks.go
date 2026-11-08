@@ -12,10 +12,6 @@ type homeworkProgressReader interface {
 	HomeworkProgress(context.Context, string, int64) (*educoder.HomeworkProgress, error)
 }
 
-type homeworkAssignedCountsReader interface {
-	AssignedHomeworkCounts(context.Context, string, educoder.Homework, *educoder.HomeworkProgress) (int, int, bool)
-}
-
 // serviceHomeworks enriches only executable shixun rows with required-level
 // progress. Common text/image assignments have a different submission protocol
 // and must remain visible without shixun progress requests or optional-level
@@ -29,7 +25,6 @@ func serviceHomeworks(ctx context.Context, client EducoderClient, course string,
 	if !ok {
 		return result
 	}
-	assignedReader, hasAssignedReader := client.(homeworkAssignedCountsReader)
 	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 	candidates := make([]int, 0, min(len(homeworks), 100))
@@ -55,19 +50,9 @@ func serviceHomeworks(ctx context.Context, client EducoderClient, course string,
 				if err != nil {
 					continue
 				}
-				required, completed, valid := educoder.RequiredHomeworkCounts(homeworks[index], progress)
-				// A fully verified catalog already proves completion. Pending or
-				// unknown catalog counts need the same assignment projection as
-				// execution: score responses may contain unassigned zeroes.
-				if hasAssignedReader && (!valid || completed != required) {
-					valid = false
-					if ctx.Err() == nil {
-						required, completed, valid = assignedReader.AssignedHomeworkCounts(ctx, course, homeworks[index], progress)
-					}
-				}
-				if valid {
-					applyRequiredCounts(&result[index], required, completed)
-				}
+				// The assignment score list includes every question kind. Header
+				// metadata can omit objective levels and cannot shrink its scope.
+				applyRequiredProgress(&result[index], homeworks[index], progress)
 			}
 		}()
 	}

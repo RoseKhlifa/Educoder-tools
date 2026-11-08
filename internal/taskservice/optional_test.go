@@ -253,7 +253,11 @@ func TestHomeworkDropsLevelThatBecomesOptionalBeforeRun(t *testing.T) {
 		case "/api/shixun_homeworks/44/header_info.json":
 			fmt.Fprint(w, `{"data":{"homework_id":44,"work_id":5,"myshixun_identifier":"RUNTIME","shixun_identifier":"SHIXUN","challenges":[{"id":10,"name":"first"}]}}`)
 		case "/api/homework_commons/44/shixun_challenge_data.json":
-			fmt.Fprint(w, `{"data":{"challenge_settings":[{"challenge_id":10,"challenge_name":"first","status":"required","challenge_score":"10","game_score":"0"}]}}`)
+			status := "required"
+			if taskReads.Load() > 1 {
+				status = "optional"
+			}
+			fmt.Fprintf(w, `{"data":{"challenge_settings":[{"challenge_id":10,"challenge_name":"first","status":%q,"challenge_score":"10","game_score":"0"}]}}`, status)
 		case "/api/myshixuns/RUNTIME/challenges.json":
 			fmt.Fprint(w, `[{"identifier":"G1","position":1,"name":"first"}]`)
 		case "/api/tasks/G1.json":

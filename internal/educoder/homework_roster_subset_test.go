@@ -9,34 +9,35 @@ import (
 	"testing"
 )
 
-func TestHomeworkRosterUsesExactHeaderCoverageForAssignedSubset(t *testing.T) {
-	const fullProgress = `[{"challenge_id":10,"challenge_name":"first","status":"required"},{"challenge_id":11,"challenge_name":"second","status":"required"},{"challenge_id":12,"challenge_name":"third","status":"required"},{"challenge_id":13,"challenge_name":"outside","status":"required"}]`
+func TestHomeworkRosterUsesCompleteProgressNotCodeOnlyHeader(t *testing.T) {
+	const fullProgress = `[{"challenge_id":10,"challenge_name":"first","status":"required","challenge_st":0},{"challenge_id":11,"challenge_name":"second","status":"required","challenge_st":0},{"challenge_id":12,"challenge_name":"third","status":"required","challenge_st":0},{"challenge_id":13,"challenge_name":"outside","status":"required","challenge_st":1}]`
 	const allGames = `[{"identifier":"G1","position":1,"name":"first"},{"identifier":"G2","position":2,"name":"second"},{"identifier":"G3","position":3,"name":"third"},{"identifier":"G4","position":4,"name":"outside"}]`
 	for _, tc := range []struct {
 		name, header, progress, games                        string
 		catalogCount, wantLevels, wantRequired, wantPosition int
 		wantErr                                              bool
 	}{
-		{name: "catalog full four header assigns three", catalogCount: 4,
+		{name: "code header has three but all four levels are assigned", catalogCount: 4,
 			header: `[{"id":10,"name":"first"},{"id":11,"name":"second"},{"id":12,"name":"third"}]`, progress: fullProgress, games: allGames,
-			wantLevels: 3, wantRequired: 3, wantPosition: 1},
-		{name: "catalog full four header assigns only second", catalogCount: 4,
+			wantLevels: 4, wantRequired: 4, wantPosition: 1},
+		{name: "code header has one but all four levels are assigned", catalogCount: 4,
 			header: `[{"id":11,"name":"second"}]`, progress: fullProgress, games: allGames,
-			wantLevels: 1, wantRequired: 1, wantPosition: 2},
-		{name: "scores also limited to assigned header", catalogCount: 4,
+			wantLevels: 4, wantRequired: 4, wantPosition: 1},
+		{name: "partial scores matching code header do not prove assignment", catalogCount: 4,
 			header:   `[{"id":10,"name":"first"},{"id":11,"name":"second"}]`,
 			progress: `[{"challenge_id":10,"challenge_name":"first"},{"challenge_id":11,"challenge_name":"second"}]`, games: allGames,
-			wantLevels: 2, wantRequired: 2, wantPosition: 1},
-		{name: "assigned optional remains excluded from required execution", catalogCount: 4,
+			wantErr: true},
+		{name: "explicit optional excluded but header omitted required rows remain", catalogCount: 4,
 			header:   `[{"id":10,"name":"first"},{"id":11,"name":"second"}]`,
 			progress: `[{"challenge_id":10,"challenge_name":"first","status":"required"},{"challenge_id":11,"challenge_name":"second","status":"optional"},{"challenge_id":12,"challenge_name":"third"},{"challenge_id":13,"challenge_name":"outside"}]`,
-			games:    `[{"identifier":"G1","position":1,"name":"first"}]`, wantLevels: 2, wantRequired: 1, wantPosition: 1},
+			games:    allGames, wantLevels: 4, wantRequired: 3, wantPosition: 1},
 		{name: "incomplete assigned coverage is rejected", catalogCount: 4,
 			header:   `[{"id":10,"name":"first"},{"id":11,"name":"second"},{"id":12,"name":"third"}]`,
 			progress: `[{"challenge_id":10,"challenge_name":"first"},{"challenge_id":11,"challenge_name":"second"}]`, games: allGames, wantErr: true},
 		{name: "missing header cannot justify catalog mismatch", catalogCount: 4, header: `[]`,
 			progress: `[{"challenge_id":10,"challenge_name":"first"},{"challenge_id":11,"challenge_name":"second"}]`, games: allGames, wantErr: true},
 		{name: "selected name mismatch is rejected", catalogCount: 4, header: `[{"id":11,"name":"renamed"}]`, progress: fullProgress, games: allGames, wantErr: true},
+		{name: "same header name with different challenge ID is rejected", catalogCount: 4, header: `[{"id":99,"name":"first"}]`, progress: fullProgress, games: allGames, wantErr: true},
 		{name: "duplicate selected progress cannot justify coverage", catalogCount: 4, header: `[{"id":10,"name":"first"}]`,
 			progress: `[{"challenge_id":10,"challenge_name":"first"},{"challenge_id":10,"challenge_name":"first"}]`, games: allGames, wantErr: true},
 		{name: "duplicate header is rejected", catalogCount: 4, header: `[{"id":10,"name":"first"},{"id":10,"name":"first"}]`, progress: fullProgress, games: allGames, wantErr: true},
@@ -45,6 +46,7 @@ func TestHomeworkRosterUsesExactHeaderCoverageForAssignedSubset(t *testing.T) {
 			header:   `[{"id":10,"name":"first"},{"id":11,"name":"second"},{"id":12,"name":"third"}]`,
 			progress: `[{"challenge_id":10,"challenge_name":"first"}]`, games: allGames, wantLevels: 1, wantRequired: 1, wantPosition: 1},
 		{name: "no header with exact catalog count remains valid", catalogCount: 4, header: `[]`, progress: fullProgress, games: allGames, wantLevels: 4, wantRequired: 4, wantPosition: 1},
+		{name: "missing catalog cannot prove assignment from header", catalogCount: 0, header: `[{"id":10,"name":"first"}]`, progress: `[{"challenge_id":10,"challenge_name":"first"}]`, games: allGames, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var runtimeReads atomic.Int32

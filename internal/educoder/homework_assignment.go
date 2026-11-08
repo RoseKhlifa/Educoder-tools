@@ -33,43 +33,32 @@ func (c *Client) readHomeworkHeader(ctx context.Context, course string, hw Homew
 	return h, nil
 }
 
-// canonicalHomeworkAssignment is shared by execution and read-only counts.
-// Header IDs select assignment rows out of a possibly broader score response;
-// exact names bind those rows to the runtime's name-based mapping. Upstream
-// returns both broader headers with an exact assignment catalog count and
-// assignment-only headers with a full-shixun catalog count. Either proof must
-// hold, and every selected row must have an unambiguous identity.
+// canonicalHomeworkAssignment uses the complete homework-specific progress
+// response and catalog count as the assignment proof. Header challenges can be
+// only the code-reviewable subset (omitting required objective levels), so they
+// may cross-check identities but must never select or exclude progress rows.
 func canonicalHomeworkAssignment(hw Homework, progress *HomeworkProgress, h collectionHeader) (map[string]ChallengeProgress, error) {
-	if progress == nil {
-		return nil, errors.New("homework score roster missing")
+	if _, _, valid := RequiredHomeworkCounts(hw, progress); !valid {
+		return nil, errors.New("homework score roster incomplete or exceeds 100 levels")
 	}
 	headerIDs := map[int64]string{}
-	headerNames := map[string]bool{}
+	headerNames := map[string]int64{}
 	for _, ch := range h.Challenges {
-		if ch.ID < 1 || strings.TrimSpace(ch.Name) == "" || headerIDs[ch.ID] != "" || headerNames[ch.Name] {
+		if ch.ID < 1 || strings.TrimSpace(ch.Name) == "" || headerIDs[ch.ID] != "" || headerNames[ch.Name] != 0 {
 			return nil, errors.New("ambiguous homework header roster")
 		}
 		headerIDs[ch.ID] = ch.Name
-		headerNames[ch.Name] = true
+		headerNames[ch.Name] = ch.ID
 	}
 	canonical := map[string]ChallengeProgress{}
-	ids := map[int64]bool{}
 	for _, ch := range progress.Challenges {
-		// Progress can include unassigned levels. They never enter either
-		// accounting or execution, even when their scores are zero.
-		if len(headerIDs) > 0 && headerIDs[ch.ChallengeID] == "" {
-			continue
-		}
-		if ch.ChallengeID < 1 || strings.TrimSpace(ch.Name) == "" || ids[ch.ChallengeID] || canonical[ch.Name].ChallengeID != 0 || (len(headerIDs) > 0 && headerIDs[ch.ChallengeID] != ch.Name) {
+		if headerName, listed := headerIDs[ch.ChallengeID]; listed && headerName != ch.Name {
 			return nil, errors.New("ambiguous or mismatched homework score roster")
 		}
-		ids[ch.ChallengeID] = true
+		if headerID, listed := headerNames[ch.Name]; listed && headerID != ch.ChallengeID {
+			return nil, errors.New("ambiguous or mismatched homework score roster")
+		}
 		canonical[ch.Name] = ch
-	}
-	catalogCountMatches := hw.ChallengeCount <= 0 || len(canonical) == hw.ChallengeCount
-	headerProvesAssigned := len(headerIDs) > 0 && len(canonical) == len(headerIDs) && len(headerIDs) <= hw.ChallengeCount
-	if len(canonical) < 1 || len(canonical) > 100 || (!catalogCountMatches && !headerProvesAssigned) {
-		return nil, errors.New("homework score roster incomplete or exceeds 100 levels")
 	}
 	return canonical, nil
 }

@@ -191,15 +191,20 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 		out.Levels = append(out.Levels, entry)
 	}
 	out.TotalLevels = len(out.Levels)
-	if out.TotalLevels == 0 {
-		out.Status, out.ReasonCode = "passed", "no_required_levels"
-		return out, nil
-	}
 	// Re-read progress for preflight and use only exact challenge IDs. This is
 	// also the baseline for skip decisions and catches stale roster changes.
 	progress, err := client.HomeworkProgress(ctx, req.Course, req.HomeworkID)
 	if err != nil {
 		return nil, err
+	}
+	if coverageErr := homeworkPlanCoverage(*hw, progress, out.Levels); coverageErr != nil {
+		out.Status, out.ReasonCode = "unsupported_roster", "assignment_roster_incomplete"
+		out.Diagnostics = append(out.Diagnostics, coverageErr.Error())
+		return out, coverageErr
+	}
+	if out.TotalLevels == 0 {
+		out.Status, out.ReasonCode = "passed", "no_required_levels"
+		return out, nil
 	}
 	blockedGames, guardErr := s.guardHomeworkUnknown(ctx, req, roster, progress)
 	if guardErr != nil {
@@ -395,6 +400,12 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 			out.Diagnostics = append(out.Diagnostics, e.Error())
 			return out, e
 		}
+		if coverageErr := homeworkPlanCoverage(*hw, verify, out.Levels); coverageErr != nil {
+			out.Status, out.ReasonCode = "verification_unconfirmed", "assignment_roster_incomplete"
+			out.Diagnostics = append(out.Diagnostics, coverageErr.Error())
+			return out, coverageErr
+		}
+		progress = verify
 		if progressOptional(verify, l.ChallengeID) {
 			omitBatchLevel(out, i)
 			continue
@@ -406,7 +417,6 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 			out.Status = "verification_unconfirmed"
 			return out, errors.New("level did not reach exact full score after submission")
 		}
-		progress = verify
 		out.Levels[i].Status = "passed"
 		out.Levels[i].Score = p.GameScore
 		out.Levels[i].MaxScore = p.ChallengeScore
@@ -422,6 +432,11 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 		out.FailedLevels++
 		out.Diagnostics = append(out.Diagnostics, finalErr.Error())
 		return out, finalErr
+	}
+	if coverageErr := homeworkPlanCoverage(*hw, finalProgress, out.Levels); coverageErr != nil {
+		out.Status, out.ReasonCode = "verification_unconfirmed", "assignment_roster_incomplete"
+		out.Diagnostics = append(out.Diagnostics, coverageErr.Error())
+		return out, coverageErr
 	}
 	// Reconcile every required row; do not return at the first missing score.
 	// Counters are derived exactly once from the final per-level states. This

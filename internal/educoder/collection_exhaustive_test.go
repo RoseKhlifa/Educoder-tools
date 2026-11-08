@@ -199,7 +199,7 @@ func TestCollectionLocatorHandlesMoreThan500ProvenLevels(t *testing.T) {
 	c := New(s.URL)
 	c.LoginName = "demo"
 	r, _ := c.CollectionReader(CollectionBudget{ResponseBytes: 2 << 20})
-	got, err := r.CollectionLocate(context.Background(), "C", Homework{ID: 4, ShixunIdentifier: "SHIXUN", StudentWorkID: 5, MyShixunIdentifier: "RUNTIME"}, p)
+	got, err := r.CollectionLocate(context.Background(), "C", Homework{ID: 4, ShixunIdentifier: "SHIXUN", StudentWorkID: 5, MyShixunIdentifier: "RUNTIME", ChallengeCount: n}, p)
 	if err != nil || len(got.Targets) != n || len(got.Reasons) != 0 || got.Targets[n-1].Position != n {
 		t.Fatalf("targets=%d reasons=%v err=%v", len(got.Targets), got.Reasons, err)
 	}

@@ -279,6 +279,38 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 			out.NeedsServiceHomeworks++
 			return stop(childErr, "canceled")
 		}
+		// A child can only verify its own plan. Independently require complete
+		// official assignment evidence before trusting passed/no-required; a
+		// truncated header or a late required row must not produce a course pass.
+		if childErr == nil && batch != nil && batch.Status == "passed" {
+			latest, readErr := client.HomeworkProgress(ctx, p.course.Identifier, p.hw.ID)
+			if ctx.Err() != nil {
+				h.Status, h.ReasonCode = "needs_service", "interrupted"
+				out.NeedsServiceHomeworks++
+				return stop(ctx.Err(), "canceled")
+			}
+			var verificationErr error
+			if readErr != nil {
+				verificationErr = errors.New("final official homework progress is unavailable")
+			} else if coverageErr := homeworkPlanCoverage(p.hw, latest, batch.Levels); coverageErr != nil {
+				verificationErr = coverageErr
+			} else if !homeworkExactlyComplete(p.hw, latest) {
+				verificationErr = errors.New("final official homework progress does not confirm every required challenge at full score")
+			}
+			if verificationErr != nil {
+				batch.Status, batch.ReasonCode = "verification_unconfirmed", "assignment_verification_unconfirmed"
+				batch.Diagnostics = append(batch.Diagnostics, verificationErr.Error())
+				childErr = verificationErr
+			} else if required, valid := requiredHomeworkCount(p.hw, latest); valid && required == 0 {
+				// The independent official read also owns late optional changes.
+				// Do not keep an assignment in course totals just because the
+				// child completed it before it became wholly optional.
+				h.Status, h.ReasonCode = "skipped_optional", "no_required_levels"
+				out.TotalHomeworks--
+				emit("verified", "这份作业没有需要安排的必做关卡", nil)
+				continue
+			}
+		}
 		if childErr == nil && batch != nil && batch.Status == "passed" && batch.TotalLevels == 0 && batch.ReasonCode == "no_required_levels" {
 			h.Status, h.ReasonCode = "skipped_optional", "no_required_levels"
 			out.TotalHomeworks--

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 // Evidence: the task bundle's service export g6 calls GET
@@ -45,8 +46,9 @@ type collectionGame struct {
 }
 
 // CollectionLocate resolves only this account's listed homework/runtime. The
-// header supplies canonical challenge IDs; positions/names join the runtime
-// list to it, and exact full-score challenge evidence authorizes each target.
+// complete assignment-specific progress supplies canonical challenge IDs and
+// names; the header binds the runtime but can omit objective levels. Exact
+// full-score challenge evidence and a unique runtime name authorize each target.
 // A generic status=2 does not authorize a detail read by itself.
 func (c *Client) CollectionLocate(ctx context.Context, course string, hw Homework, progress *HomeworkProgress) (CollectionLocationResult, error) {
 	out := CollectionLocationResult{Reasons: map[string]int{}}
@@ -65,34 +67,45 @@ func (c *Client) CollectionLocate(ctx context.Context, course string, hw Homewor
 		out.Reasons["locator_homework_identity_mismatch"]++
 		return out, nil
 	}
-	// Validate before any runtime request: malformed/duplicate canonical IDs or
-	// names could otherwise make a passed row point to another challenge.
-	ids := map[int64]bool{}
-	names := map[string]bool{}
-	for _, ch := range h.Challenges {
-		if ch.ID < 1 || ch.Name == "" || ids[ch.ID] || names[ch.Name] {
-			out.Reasons["locator_challenge_roster_ambiguous"]++
-			return out, nil
-		}
-		ids[ch.ID] = true
-		names[ch.Name] = true
+	// A catalog count equal to the assignment-specific score roster proves
+	// coverage. A code-only header must never shrink that roster. Collection
+	// remains exhaustive even for legacy assignments above execution's cap.
+	if hw.ChallengeCount < 1 || len(progress.Challenges) != hw.ChallengeCount {
+		out.Reasons["locator_score_roster_incomplete"]++
+		return out, nil
 	}
-	full := map[int64]ChallengeProgress{}
+	progressIDs := map[int64]ChallengeProgress{}
+	progressNames := map[string]ChallengeProgress{}
 	fullNames := map[string]ChallengeProgress{}
-	progressNames := map[string]bool{}
 	for _, p := range progress.Challenges {
-		if p.Name == "" || progressNames[p.Name] {
+		name := strings.TrimSpace(p.Name)
+		if p.ChallengeID < 1 || name == "" || progressIDs[p.ChallengeID].ChallengeID != 0 || progressNames[name].ChallengeID != 0 {
 			out.Reasons["locator_score_roster_ambiguous"]++
 			return out, nil
 		}
-		progressNames[p.Name] = true
+		progressIDs[p.ChallengeID] = p
+		progressNames[name] = p
 		if p.HasFullScore() {
-			if full[p.ChallengeID].ChallengeID != 0 {
-				out.Reasons["locator_score_roster_ambiguous"]++
-				return out, nil
-			}
-			full[p.ChallengeID] = p
 			fullNames[p.Name] = p
+		}
+	}
+	// Cross-check overlapping IDs and names, not positions or header coverage.
+	// A genuine catalog/progress subset may have a broader runtime/header.
+	headerIDs, headerNames := map[int64]bool{}, map[string]bool{}
+	for _, ch := range h.Challenges {
+		name := strings.TrimSpace(ch.Name)
+		if ch.ID < 1 || name == "" || headerIDs[ch.ID] || headerNames[name] {
+			out.Reasons["locator_challenge_roster_ambiguous"]++
+			return out, nil
+		}
+		headerIDs[ch.ID], headerNames[name] = true, true
+		if p, ok := progressIDs[ch.ID]; ok && p.Name != ch.Name {
+			out.Reasons["locator_challenge_identity_or_pass_mismatch"]++
+			return out, nil
+		}
+		if p, ok := progressNames[name]; ok && (p.ChallengeID != ch.ID || p.Name != ch.Name) {
+			out.Reasons["locator_challenge_identity_or_pass_mismatch"]++
+			return out, nil
 		}
 	}
 	var games []collectionGame
@@ -102,36 +115,40 @@ func (c *Client) CollectionLocate(ctx context.Context, course string, hw Homewor
 	}
 	seenGame := map[string]bool{}
 	seenPosition := map[int]bool{}
+	seenSelected := map[int64]bool{}
 	initializedGames := make([]collectionGame, 0, len(games))
 	for _, g := range games {
+		if g.Position < 1 || seenPosition[g.Position] {
+			out.Reasons["locator_game_roster_ambiguous"]++
+			return out, nil
+		}
+		seenPosition[g.Position] = true
+		if p, selected := progressNames[g.Name]; selected {
+			if seenSelected[p.ChallengeID] {
+				out.Reasons["locator_game_roster_ambiguous"]++
+				return out, nil
+			}
+			seenSelected[p.ChallengeID] = true
+		}
 		// A not-yet-entered challenge has no game to collect. It must not
 		// prevent collection of other, positively verified full-score rows.
 		// Never initialize such a game from the read-only collector.
 		if g.Identifier == "" && g.Status == 3 && fullNames[g.Name].ChallengeID == 0 {
 			continue
 		}
-		if validIdentifier(g.Identifier) != nil || g.Position < 1 || (len(h.Challenges) > 0 && g.Position > len(h.Challenges)) || seenGame[g.Identifier] || seenPosition[g.Position] {
+		if validIdentifier(g.Identifier) != nil || seenGame[g.Identifier] {
 			out.Reasons["locator_game_roster_ambiguous"]++
 			return out, nil
 		}
 		seenGame[g.Identifier] = true
-		seenPosition[g.Position] = true
 		initializedGames = append(initializedGames, g)
 	}
 	for _, g := range initializedGames {
-		// Some real headers omit challenges entirely (notably choices).
-		// The score response still binds an exact unique name to challenge_id.
+		// The score response binds an exact unique name to challenge_id, even
+		// when the header omits some or all of the objective challenges.
 		// Join only unique exact names, then verify ID, name and runtime position
 		// again on the loaded task. Never equate a runtime identifier to a game.
 		p, ok := fullNames[g.Name]
-		if len(h.Challenges) > 0 {
-			ch := h.Challenges[g.Position-1]
-			p, ok = full[ch.ID]
-			if g.Name != ch.Name {
-				out.Reasons["locator_challenge_identity_or_pass_mismatch"]++
-				continue
-			}
-		}
 		if !ok {
 			continue
 		} // Never load a task without positive exact-full-score evidence.

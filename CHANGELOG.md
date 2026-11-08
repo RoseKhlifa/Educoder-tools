@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.116 - 2026-11-08
+
+- Preserve objective homework levels and require complete assignment coverage before success
+
 ## 0.1.115 - 2026-11-07
 
 - Count only assigned required levels in course homework summaries
