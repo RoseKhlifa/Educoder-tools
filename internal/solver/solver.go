@@ -706,9 +706,11 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 		state.Attempts = attempt + 1
 		var candidate answer.Candidate
 		var bankID int64
+		var bankParent *questionbank.Candidate
 		legacyRetestAttempt := false
 		if len(candidates) > 0 && len(feedback) == 0 {
 			bc := candidates[0]
+			bankParent = &bc
 			bankID = bc.ID
 			candidate = answer.Candidate{Kind: "programming", Language: languageOf(snap), Files: bc.Files}
 			result.Source = bc.Source
@@ -807,6 +809,9 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				dispatched = true
 				return nil
 			})
+			// Normalize before the first candidate checkpoint, validation, hash or
+			// bank write, including partial model output retained after an error.
+			gen.Candidate, _ = normalizeSingleFileCRLF(snap, gen.Candidate)
 			if billed && !dispatched {
 				result.Status = "reservation_persistence_failed"
 				return result, ge
@@ -948,6 +953,26 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			state.LastCandidate = &candidate
 			previous = &candidate
 			continue
+		}
+		if normalized, changed := normalizeSingleFileCRLF(snap, candidate); changed && bankParent != nil {
+			// Browser editors save LF. Preserve historical CRLF source/evidence
+			// and create a normal unverified child bound to the exact LF bytes.
+			// AddCandidate deduplicates an existing derivative without promoting
+			// it or copying its parent's validation records.
+			bc, err := s.store.AddCandidate(ctx, ref, questionbank.CandidateInput{
+				Files: normalized.Files, Source: "editor_newline_normalized",
+				Provider: bankParent.Provider, Model: bankParent.Model,
+				PromptVersion: "crlf_to_lf_v1", ParentCandidateID: bankParent.ID,
+			})
+			if err != nil {
+				return result, err
+			}
+			candidate = normalized
+			bankID = bc.ID
+			result.CandidateID, result.Source = bankID, bc.Source
+			// Any legacy exception belongs to the original exact bytes. A
+			// rejected normalized child must still hit rejectedByHash below.
+			legacyRetestAttempt = false
 		}
 		result.CodeHash, _ = problem.HashFiles(candidate.Files)
 		state.LastCandidate = &candidate

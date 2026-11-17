@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.123 - 2026-11-17
+
+- Normalize single-file execution candidates before hashing while preserving historical verified bank records
+
 ## 0.1.122 - 2026-11-17
 
 - Detect explicit public sample conflicts before model generation and show actionable task notices
