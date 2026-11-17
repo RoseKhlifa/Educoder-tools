@@ -63,6 +63,9 @@ let jobDialog: { id: string; historical: boolean } | null = null;
 let adminJobDialog: { id: string; historical: boolean } | null = null;
 const jobActions = new Map<string, JobActionState>();
 const adminJobActions = new Map<string, AdminJobAction>();
+// Retain an unconfirmed single-homework intent only for this login session.
+// A retry after a lost response must resolve the same job, not create another.
+const homeworkRetryKeys = new Map<string, string>();
 const courseCache = new CourseDetailsCache({
   homeworks: async id => {
     const session = generation;
@@ -108,7 +111,7 @@ const accessible = (): boolean => state.user?.service_access !== false && state.
 const activeJobs = (): AnswerJob[] => state.jobs.filter(job => serviceJob(job) && pendingJob(job));
 function stopPoll(): void { if (pollTimer !== undefined) clearTimeout(pollTimer); pollTimer = undefined; }
 function resetSession(message = ''): void {
-  jobActions.clear(); recoveryNoticeID = ''; adminJobActions.clear(); jobDialog = null; adminJobDialog = null; homeworkSync.clear(); homeworkJobObservations.clear();
+  jobActions.clear(); recoveryNoticeID = ''; adminJobActions.clear(); homeworkRetryKeys.clear(); jobDialog = null; adminJobDialog = null; homeworkSync.clear(); homeworkJobObservations.clear();
   userTickets = emptyTickets(); adminTickets = emptyTickets(); ticketDialog = null; ticketRetryKeys.clear(); ticketFormDrafts.clear();
   generation++; jobsRevision++; coursesRevision++; adminRevision++; modalRevision++; bankRevision++; bankLoadedAt = 0; todayRevision++; todayLoadedAt = 0; todayLoadedDate = ''; guidelinesSource = 'login'; stopPoll(); courseDialog = null; courseCache.clear();
   Object.assign(state, { user: null, page: 'courses', courses: [], jobs: [], selected: [], loading: false, signingIn: false, creating: false, notice: '', loginError: message, modal: '', modalKind: '', modalAction: null, search: '', progressHistoryOpen: false, questionBank: null, bankLoading: false, bankUnavailable: false, todaySummary: null, todayLoading: false, todayUnavailable: false, admin: { overview: {}, users: [], jobs: [], audit: [], loading: false, error: false, userSearch: '', userFilter: 'all' } });
@@ -311,6 +314,25 @@ function commonHomeworkStatus(homework: Homework): { label: string; tone: string
   if (homework.submissionStatus === 'not_submitted') return { label: '待提交', tone: 'waiting' };
   return { label: '状态待确认', tone: 'waiting' };
 }
+function homeworkComplete(homework: Homework): boolean {
+  return Boolean(homework.requiredProgressKnown && homework.requiredChallengeCount !== undefined && (homework.finishedRequiredChallengeCount ?? 0) >= homework.requiredChallengeCount);
+}
+function homeworkManualEligible(course: Course, homework: Homework): boolean {
+  if (course.ended || homework.homeworkKind !== 'shixun' || homework.automaticSupported !== true || homework.canEnter === false
+    || !homework.requiredProgressKnown || homework.requiredChallengeCount === undefined || homework.finishedRequiredChallengeCount === undefined
+    || homeworkComplete(homework) || /已截止|已结束|未发布|未开始|closed|expired/i.test(homework.status)) return false;
+  // Naive upstream classroom timestamps use Beijing time. Undated entries
+  // still come from the server's open-homework catalog and are checked again.
+  const deadline = homework.deadline?.trim() ?? '';
+  const explicitZone = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?$/.test(deadline)
+    ? `${deadline.replace(' ', 'T')}+08:00` : deadline;
+  const endsAt = Date.parse(explicitZone);
+  return !Number.isFinite(endsAt) || endsAt > Date.now();
+}
+function homeworkPending(course: string, homeworkID: number): boolean {
+  return state.jobs.some(job => serviceJob(job) && pendingJob(job) && (job.request.scope === 'all'
+    || job.request.course === course && (job.request.scope === 'course' || job.request.scope === 'homework' && job.request.homework_id === homeworkID)));
+}
 function renderCourseDetail(dialog: CourseDialog): string {
   const { course, homeworks, exercises, tab } = dialog;
   const pending = '<div class="loading" role="status"><span class="spinner"></span>正在同步列表…</div>';
@@ -318,8 +340,9 @@ function renderCourseDetail(dialog: CourseDialog): string {
   const shixun = (homeworks ?? []).filter(homework => homework.homeworkKind !== 'common');
   const common = (homeworks ?? []).filter(homework => homework.homeworkKind === 'common');
   const homeworkBody = homeworks === null ? (dialog.failed.homework ? unavailable : pending) : `<p class="subtext">${shixun.length} 份课程实验，只处理必做关卡；当前仅自动处理课程实验，已完成的会自动跳过。</p><ul class="completion-list">${shixun.map(homework => {
-    const complete = Boolean(homework.requiredProgressKnown && homework.requiredChallengeCount !== undefined && (homework.finishedRequiredChallengeCount ?? 0) >= homework.requiredChallengeCount);
-    return `<li><span class="completion-icon ${complete ? 'done' : ''}">${complete ? '✓' : '·'}</span><div><strong>${e(homework.name)}</strong><p>${homework.requiredProgressKnown ? `${complete ? '已完成' : '待完成'} · ${count(homework.finishedRequiredChallengeCount)} / ${count(homework.requiredChallengeCount)} 必做关卡` : '开始处理时核验必做进度'}</p></div></li>`;
+    const complete = homeworkComplete(homework);
+    const pending = homeworkPending(course.identifier, homework.id);
+    return `<li><span class="completion-icon ${complete ? 'done' : ''}">${complete ? '✓' : '·'}</span><div class="exercise-row"><strong>${e(homework.name)}</strong><p>${homework.requiredProgressKnown ? `${complete ? '已完成' : '待完成'} · ${count(homework.finishedRequiredChallengeCount)} / ${count(homework.requiredChallengeCount)} 必做关卡` : '开始处理时核验必做进度'}</p>${homeworkManualEligible(course, homework) ? `<div class="exercise-actions"><button class="button primary compact" data-homework-submit="${homework.id}" ${state.creating || !accessible() || pending ? 'disabled' : ''}>${pending ? '这份作业正在处理' : '处理这份作业'}</button></div>` : ''}</div></li>`;
   }).join('') || '<li>这门课程暂无待处理的课程实验。</li>'}</ul>`;
   const commonBody = homeworks === null ? (dialog.failed.homework ? unavailable : pending) : `<p class="subtext">图文作业只展示状态，当前不支持自动提交；提交后由头歌教师批阅。</p><ul class="completion-list">${common.map(homework => { const status = commonHomeworkStatus(homework); return `<li><span class="completion-icon ${status.tone === 'completed' ? 'done' : ''}">${status.tone === 'completed' ? '✓' : '·'}</span><div class="exercise-row"><strong>${e(homework.name)}</strong><p>${status.label}${homework.deadline ? ` · 截止 ${e(homework.deadline)}` : ''}</p><p>${homework.status ? `作业状态：${e(homework.status)}` : '状态待确认'}</p><div class="exercise-actions">${commonHomeworkLink(course, homework)}</div></div></li>`; }).join('') || '<li>这门课程暂无图文作业。</li>'}</ul>`;
   const examBody = exercises === null ? (dialog.failed.exercise ? unavailable : pending) : exercises.length ? `<p class="subtext">在线考试需单独处理，不包含在一键完成课程作业中；已交卷的考试不会重复提交。</p><ul class="completion-list">${exercises.map(exercise => { const status = exerciseStatus(exercise); return `<li><span class="completion-icon ${status.tone === 'completed' ? 'done' : ''}">${status.tone === 'completed' ? '✓' : '·'}</span><div class="exercise-row"><strong>${e(exercise.name)}</strong><p>${status.label}${exercise.totalQuestions ? ` · ${exercise.totalQuestions} 道题` : ''}${exercise.deadline ? ` · 截止 ${e(exercise.deadline)}` : ''}</p><p>${e(exerciseReason(exercise))}</p><div class="exercise-actions">${exercise.submitted || !exercise.available || exercise.actionRequired === true ? '' : `<button class="button primary compact" data-exam-submit="${exercise.id}">开始处理考试</button>`}${exerciseLink(course, exercise)}</div></div></li>`; }).join('')}</ul>` : '<div class="empty"><h3>暂无在线考试</h3><p>这门课程当前没有可查看的在线考试。</p></div>';
@@ -689,6 +712,32 @@ function confirmExercise(course: Course, exercise: Exercise): void {
     if (session === generation) { state.creating = false; render(); void loadJobs(); }
   });
 }
+function confirmHomework(course: Course, homework: Homework): void {
+  if (state.creating || !accessible() || !homeworkManualEligible(course, homework) || homeworkPending(course.identifier, homework.id)) return;
+  showModal(`<h2 id="modal-title">只处理这份作业？</h2><p class="subtext">${e(course.name)} · ${e(homework.name)}</p><div class="detail-note">本次只处理这份作业中尚未完成的必做关卡，不会重新安排整个课程。已核验通过的关卡会自动跳过；上次提交结果仍未明确时，会先核验，不重复提交。</div><div class="modal-actions"><button class="button" data-action="close-modal">再看看</button><button class="button primary" data-action="modal-confirm">确认处理这份作业</button></div>`, () => startHomework(course.identifier, homework.id));
+}
+async function startHomework(courseID: string, homeworkID: number): Promise<void> {
+  const course = state.courses.find(item => item.identifier === courseID);
+  const homework = courseCache.peekHomeworks(courseID)?.data.find(item => item.id === homeworkID);
+  if (state.creating || !accessible() || !course || !homework || !homeworkManualEligible(course, homework) || homeworkPending(courseID, homeworkID)) return;
+  const target = JSON.stringify([courseID, homeworkID]);
+  const key = homeworkRetryKeys.get(target) ?? crypto.randomUUID();
+  homeworkRetryKeys.set(target, key);
+  const session = generation; jobsRevision++; stopPoll(); state.creating = true; closeModal();
+  try {
+    const response = await api.createJob({ scope: 'homework', course: courseID, homework_id: homeworkID, mode: 'submit', idempotency_key: key });
+    if (session !== generation) return;
+    if (!response || typeof response.id !== 'string' || !response.id || typeof response.status !== 'string') throw new Error('Invalid homework job response');
+    homeworkRetryKeys.delete(target);
+    state.jobs = [response, ...state.jobs.filter(job => job.id !== response.id)]; state.page = 'progress';
+    state.notice = '单份作业任务已创建，已完成关卡会自动跳过，完成进度会自动更新。'; closeModal();
+  } catch (error) {
+    if (session !== generation || handleError(error)) return;
+    state.notice = '尚未确认单份作业任务，请先查看完成进度后重试；重复操作会核对同一请求。';
+  } finally {
+    if (session === generation) { state.creating = false; render(); void loadJobs(); }
+  }
+}
 const ticketScreen = (admin: boolean): TicketScreen => admin ? adminTickets : userTickets;
 const ticketVisible = (admin: boolean): boolean => Boolean(state.user) && state.page === (admin ? 'admin-support' : 'support') && (!admin || isAdmin());
 function ticketErrorText(error: unknown): string {
@@ -896,6 +945,10 @@ function bindEvents(): void {
     const exerciseID = Number(button.dataset.examSubmit);
     const exercise = courseDialog?.exercises?.find(item => item.id === exerciseID);
     if (courseDialog && exercise) confirmExercise(courseDialog.course, exercise);
+  }));
+  document.querySelectorAll<HTMLButtonElement>('[data-homework-submit]').forEach(button => button.addEventListener('click', () => {
+    const homework = courseDialog?.homeworks?.find(item => item.id === Number(button.dataset.homeworkSubmit));
+    if (courseDialog && homework) confirmHomework(courseDialog.course, homework);
   }));
   document.querySelectorAll<HTMLButtonElement>('[data-job-detail]').forEach(button => button.addEventListener('click', () => {
     const job = state.jobs.find(item => item.id === button.dataset.jobDetail);

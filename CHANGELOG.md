@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.121 - 2026-11-17
+
+- Expose guarded single-homework execution for stalled course assignments
+
 ## 0.1.120 - 2026-11-17
 
 - Adapt observed repository names and header caller variants without blind model retries

@@ -831,6 +831,68 @@ await test('consumer course service and administrator boundary',async t=>{
   await t.test('logout invalidates a delayed private course response',async()=>{
     const late=deferred();const page=await app({'/api/courses':()=>late.promise});page.get('[data-action="logout"]').dispatch('click');late.resolve(ok(courses));await settle();assert.match(page.html(),/id="login-form"/);assert.doesNotMatch(page.html(),/课堂甲|课堂乙/);
   });
+  await t.test('single homework action confirms exactly one unfinished assignment and suppresses double submission', async () => {
+    const pending = deferred(); let rows = [job({status:'support',can_retry:true})];
+    const page = await app({
+      '/api/jobs': options => options.method === 'POST' ? pending.promise : ok({jobs:rows}),
+      '/api/courses/COURSE_A/homeworks': () => ok([11,12].map(id => ({id,name:`目标实验 ${id}`,automaticSupported:true,homeworkKind:'shixun',requiredProgressKnown:true,requiredChallengeCount:3,finishedRequiredChallengeCount:1,deadline:'2099-01-01T00:00:00+08:00'}))),
+    });
+    page.get('[data-course-detail="COURSE_A"]').dispatch('click'); await settle();
+    page.get('[data-homework-submit="11"]').dispatch('click');
+    const modal = page.html().slice(page.html().indexOf('role="dialog"'));
+    assert.match(modal,/目标实验 11/); assert.doesNotMatch(modal,/目标实验 12/); assert.match(modal,/本次只处理这份作业/); assert.match(modal,/已核验通过的关卡.*自动跳过/);
+    assert.equal(page.requests.filter(item => item.url === '/api/jobs' && item.options.method === 'POST').length,0);
+    const confirm = page.get('[data-action="modal-confirm"]'); confirm.dispatch('click'); confirm.dispatch('click'); await settle();
+    const posted = page.requests.filter(item => item.url === '/api/jobs' && item.options.method === 'POST');
+    assert.equal(posted.length,1); const body = JSON.parse(posted[0].options.body);
+    assert.deepEqual({...body,idempotency_key:undefined},{scope:'homework',course:'COURSE_A',homework_id:11,mode:'submit',idempotency_key:undefined}); assert.ok(body.idempotency_key);
+    page.get('[data-course-detail="COURSE_A"]').dispatch('click'); await settle();
+    assert.ok('disabled' in page.get('[data-homework-submit="11"]').attributes);
+    const accepted = job({id:'single-homework',status:'queued',request:body}); rows=[accepted,...rows]; pending.resolve(ok(accepted)); await settle();
+    assert.match(page.html(),/单份作业任务已创建/); assert.match(page.html(),/data-job-detail="single-homework"/);
+    assert.equal(page.requests.some(item => item.url.endsWith('/enter')),false);
+  });
+  await t.test('single homework retry keeps the same idempotency key after an unconfirmed response and hides raw errors', async () => {
+    let calls=0, rows=[];
+    const page = await app({'/api/jobs': options => {
+      if (options.method !== 'POST') return ok({jobs:rows});
+      calls++; if (calls === 1) return failure(503,'UPSTREAM_ERROR','PRIVATE_SINGLE_HOMEWORK_DETAIL');
+      const accepted=job({id:'single-retry',status:'queued',request:JSON.parse(options.body)}); rows=[accepted]; return ok(accepted);
+    }});
+    for (let attempt=0;attempt<2;attempt++) {
+      page.get('[data-course-detail="COURSE_A"]').dispatch('click'); await settle();
+      page.get('[data-homework-submit="1"]').dispatch('click'); page.get('[data-action="modal-confirm"]').dispatch('click'); await settle();
+      if (!attempt) { assert.match(page.html(),/尚未确认单份作业任务/); assert.doesNotMatch(page.html(),/PRIVATE_SINGLE_HOMEWORK_DETAIL/); }
+    }
+    const requests=page.requests.filter(item => item.url === '/api/jobs' && item.options.method === 'POST').map(item=>JSON.parse(item.options.body));
+    assert.equal(requests.length,2); assert.equal(requests[0].idempotency_key,requests[1].idempotency_key); assert.equal(requests[1].homework_id,1); assert.match(page.html(),/单份作业任务已创建/);
+  });
+  await t.test('single homework actions exclude completed common closed unsupported and unverified assignments', async () => {
+    const base={homeworkKind:'shixun',automaticSupported:true,requiredProgressKnown:true,requiredChallengeCount:3,finishedRequiredChallengeCount:1};
+    const page=await app({'/api/courses/COURSE_A/homeworks':()=>ok([
+      {id:11,name:'可处理',...base},
+      {id:12,name:'已完成',...base,finishedRequiredChallengeCount:3},
+      {id:13,name:'图文作业',...base,homeworkKind:'common',automaticSupported:false,submissionStatus:'not_submitted'},
+      {id:14,name:'已过截止时间',...base,deadline:'2000-01-01T00:00:00+08:00'},
+      {id:15,name:'状态已截止',...base,status:['已截止'],deadline:'2099-01-01T00:00:00+08:00'},
+      {id:16,name:'不支持自动处理',...base,automaticSupported:false},
+      {id:17,name:'不能进入',...base,canEnter:false},
+      {id:18,name:'必做进度未知',...base,requiredProgressKnown:false},
+    ])});
+    page.get('[data-course-detail="COURSE_A"]').dispatch('click'); await settle();
+    assert.deepEqual(page.document.querySelectorAll('[data-homework-submit]').map(button=>button.dataset.homeworkSubmit),['11']);
+    page.get('[data-detail-tab="common"]').dispatch('click'); await settle(); assert.equal(page.document.querySelectorAll('[data-homework-submit]').length,0);
+    assert.equal(page.requests.some(item=>item.url==='/api/jobs'&&item.options.method==='POST'),false);
+  });
+  await t.test('active course or exact homework tasks prevent duplicate single homework dispatch', async () => {
+    for (const request of [{scope:'course',course:'COURSE_A',mode:'submit'},{scope:'all',mode:'submit'},{scope:'homework',course:'COURSE_A',homework_id:1,mode:'submit'}]) {
+      const page=await app({'/api/jobs':()=>ok({jobs:[job({status:'running',request})]})});
+      page.get('[data-course-detail="COURSE_A"]').dispatch('click'); await settle();
+      assert.ok('disabled' in page.get('[data-homework-submit="1"]').attributes);
+      page.get('[data-homework-submit="1"]').dispatch('click'); await settle();
+      assert.equal(page.requests.some(item=>item.url==='/api/jobs'&&item.options.method==='POST'),false);
+    }
+  });
   await t.test('read-only course detail does not enter or submit an upstream task',async()=>{
     const page=await app();page.get('[data-course-detail="COURSE_A"]').dispatch('click');await settle();assert.match(page.html(),/测试作业/);assert.match(page.html(),/1 \/ 2 必做关卡/);assert.equal(page.requests.some(item=>item.url.endsWith('/enter')||item.options.method==='POST'),false);page.get('[data-action="close-modal"]').dispatch('click');assert.doesNotMatch(page.html(),/role="dialog"/);
   });
