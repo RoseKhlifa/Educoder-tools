@@ -2,7 +2,6 @@ package educoder
 
 import (
 	"context"
-	"errors"
 	"path"
 	"regexp"
 	"sort"
@@ -12,7 +11,7 @@ import (
 )
 
 // ReadProgrammingSupport supplies only a header-only task's visible sibling
-// main.c/main.cpp caller. It follows exact observed directory entries along the
+// main or exact matching-header-stem caller. It follows observed entries along the
 // editable header path, never scans other directories or evaluation materials.
 // Missing/incomplete context is optional; no partial or truncated source escapes.
 func (c *Client) ReadProgrammingSupport(ctx context.Context, t *Task) ([]CodeFile, error) {
@@ -22,25 +21,23 @@ func (c *Client) ReadProgrammingSupport(ctx context.Context, t *Task) ([]CodeFil
 	}
 	directories := map[string][]string{}
 	for _, file := range paths {
-		switch strings.ToLower(path.Ext(file)) {
-		case ".h", ".hpp", ".hh", ".hxx":
-		default:
+		if !headerExtension(file) {
 			return nil, nil
 		}
 		if !repositoryPathValid(file) {
-			return nil, errors.New("invalid header context path")
+			return nil, &ProgrammingSupportError{Stage: "repository_task", Reason: "invalid_path"}
 		}
 		dir := path.Dir(file)
 		if dir == "." {
 			dir = ""
 		}
 		if strings.Count(dir, "/") >= 8 {
-			return nil, errors.New("header context directory is too deep")
+			return nil, &ProgrammingSupportError{Stage: "directory", Reason: "depth_limit"}
 		}
 		directories[dir] = append(directories[dir], path.Base(file))
 	}
 	if len(directories) > 8 {
-		return nil, errors.New("too many header context directories")
+		return nil, &ProgrammingSupportError{Stage: "directory", Reason: "directory_limit"}
 	}
 	root, err := c.ListRepository(ctx, t, nil)
 	if err != nil {
@@ -73,7 +70,7 @@ func (c *Client) ReadProgrammingSupport(ctx context.Context, t *Task) ([]CodeFil
 					}
 				}
 				if observed == nil {
-					return nil, nil
+					return nil, supportFailure("directory", "no_matching_driver")
 				}
 				entries, err = c.ListRepository(ctx, t, observed)
 				if err != nil {
@@ -83,11 +80,11 @@ func (c *Client) ReadProgrammingSupport(ctx context.Context, t *Task) ([]CodeFil
 			}
 		}
 		if len(entries) > 512 {
-			return nil, errors.New("header context directory is too large")
+			return nil, &ProgrammingSupportError{Stage: "directory", Reason: "directory_limit"}
 		}
 		for _, entry := range entries {
 			name := path.Base(entry.Path)
-			if entry.Type != "blob" || (name != "main.c" && name != "main.cpp") {
+			if entry.Type != "blob" || !headerDriverName(name, directories[dir]) {
 				continue
 			}
 			file, readErr := c.ReadRepositoryFile(ctx, t, entry)
@@ -95,20 +92,53 @@ func (c *Client) ReadProgrammingSupport(ctx context.Context, t *Task) ([]CodeFil
 				return nil, readErr
 			}
 			if file.Content == "" || len(file.Content) > 64<<10 || file.Language == "" || problem.ValidatePublicText(file.Content) != nil {
-				return nil, errors.New("header caller is empty or too large")
+				return nil, &ProgrammingSupportError{Stage: "driver", Reason: "unsupported_content"}
 			}
 			// Do not mistake an unrelated sibling program for this header's caller.
-			if !headerCallerMatches(file.Content, directories[dir]) {
+			if !headerCallerMatches(file.Content, directories[dir]) || !sourceHasMainDefinition(file.Content) {
 				continue
 			}
 			total += len(file.Content)
 			if total > 128<<10 || len(files) >= 8 {
-				return nil, errors.New("header caller context is too large")
+				return nil, &ProgrammingSupportError{Stage: "driver", Reason: "content_limit"}
 			}
 			files = append(files, *file)
 		}
 	}
 	return files, nil
+}
+
+func headerExtension(file string) bool {
+	switch strings.ToLower(path.Ext(file)) {
+	case ".h", ".hpp", ".hh", ".hxx":
+		return true
+	}
+	return false
+}
+
+func headerDriverName(name string, headers []string) bool {
+	ext := path.Ext(name)
+	switch strings.ToLower(ext) {
+	case ".c", ".cc", ".cpp", ".cxx":
+	default:
+		return false
+	}
+	stem := strings.TrimSuffix(name, ext)
+	lower := strings.ToLower(stem)
+	for _, forbidden := range []string{"grader", "test", "checker", "judge", "evaluate"} {
+		if strings.Contains(lower, forbidden) {
+			return false
+		}
+	}
+	if stem == "main" {
+		return true
+	}
+	for _, header := range headers {
+		if stem == strings.TrimSuffix(header, path.Ext(header)) {
+			return true
+		}
+	}
+	return false
 }
 
 var localHeaderInclude = regexp.MustCompile(`^#\s*include\s*"([^"\r\n]+)"`)

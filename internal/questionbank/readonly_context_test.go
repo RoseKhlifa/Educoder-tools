@@ -26,6 +26,7 @@ func TestReadOnlyContextUpdatesSnapshotButPreservesLegacyCandidateIdentity(t *te
 		t.Fatal(err)
 	}
 	p.ReadOnlyFiles = []problem.ReadOnlyFile{{Path: "src/driver.cpp", Language: "cpp", Content: "int main(){return 0;}"}}
+	p.ReadOnlyContext = &problem.ReadOnlyContextDiagnostic{Status: "available", Stage: "association", Reason: "observed_driver"}
 	next, err := s.UpsertSnapshot(ctx, p)
 	if err != nil {
 		t.Fatal(err)
@@ -38,7 +39,7 @@ func TestReadOnlyContextUpdatesSnapshotButPreservesLegacyCandidateIdentity(t *te
 		t.Fatalf("legacy candidate lost: %+v %v", found, err)
 	}
 	stored, err := s.Snapshot(ctx, next)
-	if err != nil || len(stored.ReadOnlyFiles) != 1 || stored.ContextHash == "" {
+	if err != nil || len(stored.ReadOnlyFiles) != 1 || stored.ContextHash == "" || stored.ReadOnlyContext == nil || stored.ReadOnlyContext.Reason != "observed_driver" {
 		t.Fatalf("latest snapshot context missing: %+v %v", stored, err)
 	}
 	var raw string
@@ -46,7 +47,7 @@ func TestReadOnlyContextUpdatesSnapshotButPreservesLegacyCandidateIdentity(t *te
 		t.Fatal(err)
 	}
 	var contract problem.Snapshot
-	if json.Unmarshal([]byte(raw), &contract) != nil || len(contract.ReadOnlyFiles) != 0 || contract.ContextHash != "" {
+	if json.Unmarshal([]byte(raw), &contract) != nil || len(contract.ReadOnlyFiles) != 0 || contract.ContextHash != "" || contract.ReadOnlyContext != nil {
 		t.Fatalf("stable contract retained caller observation: %s", raw)
 	}
 	// A fresh contract first encountered with a driver must also exclude it.
@@ -59,7 +60,7 @@ func TestReadOnlyContextUpdatesSnapshotButPreservesLegacyCandidateIdentity(t *te
 	if err = s.db.QueryRowContext(ctx, "SELECT contract_json FROM execution_contracts WHERE contract_hash=?", fresh.ContractHash).Scan(&raw); err != nil {
 		t.Fatal(err)
 	}
-	if json.Unmarshal([]byte(raw), &contract) != nil || len(contract.ReadOnlyFiles) != 0 || contract.ContextHash != "" {
+	if json.Unmarshal([]byte(raw), &contract) != nil || len(contract.ReadOnlyFiles) != 0 || contract.ContextHash != "" || contract.ReadOnlyContext != nil {
 		t.Fatalf("new stable contract retained caller observation: %s", raw)
 	}
 }

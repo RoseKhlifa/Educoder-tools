@@ -92,6 +92,10 @@ func Prepare(in Snapshot) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
+	s.ReadOnlyContext, err = prepareReadOnlyDiagnostic(in.ReadOnlyContext)
+	if err != nil {
+		return Snapshot{}, err
+	}
 	texts := []string{s.Title, s.StatementMarkdown, s.EditMode, s.SnapshotCompleteness}
 	texts = append(texts, s.ObservedConstraints...)
 	texts = append(texts, s.EnvironmentContract...)

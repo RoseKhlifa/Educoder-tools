@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.120 - 2026-11-17
+
+- Adapt observed repository names and header caller variants without blind model retries
+
 ## 0.1.119 - 2026-11-17
 
 - Supply public read-only header drivers and reserve complete output for final programming repairs

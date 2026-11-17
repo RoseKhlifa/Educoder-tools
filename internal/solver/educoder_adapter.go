@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"educoder-cli/internal/educoder"
 	"educoder-cli/internal/problem"
@@ -80,10 +79,10 @@ func (a *EducoderAdapter) Load(ctx context.Context, target Target) (LoadedProble
 	// A header's input parsing and call order may live in a visible, read-only
 	// sibling main. Keep this optional observation outside the writable contract.
 	var readOnly []problem.ReadOnlyFile
-	supportCtx, supportCancel := context.WithTimeout(ctx, 10*time.Second)
-	support, supportErr := a.Client.ReadProgrammingSupport(supportCtx, t)
+	supportCtx, supportCancel := context.WithTimeout(ctx, educoder.ProgrammingSupportTimeout)
+	support, supportStatus := a.Client.ReadProgrammingSupportWithStatus(supportCtx, t)
 	supportCancel()
-	if supportErr == nil {
+	if supportStatus != nil && supportStatus.Status == "available" {
 		for _, file := range support {
 			readOnly = append(readOnly, problem.ReadOnlyFile{Path: file.Path, Language: file.Language, Content: file.Content})
 		}
@@ -106,7 +105,7 @@ func (a *EducoderAdapter) Load(ctx context.Context, target Target) (LoadedProble
 			seen[file.Language] = true
 		}
 	}
-	snap := problem.Snapshot{SchemaVersion: problem.SchemaVersion, Kind: "programming", Title: t.Challenge.Subject, StatementMarkdown: pt.Markdown, Files: files, ReadOnlyFiles: readOnly, PublicTests: public, EditMode: "single_file", SnapshotCompleteness: "observed", EnvironmentContract: environment}
+	snap := problem.Snapshot{SchemaVersion: problem.SchemaVersion, Kind: "programming", Title: t.Challenge.Subject, StatementMarkdown: pt.Markdown, Files: files, ReadOnlyFiles: readOnly, ReadOnlyContext: supportStatus, PublicTests: public, EditMode: "single_file", SnapshotCompleteness: "observed", EnvironmentContract: environment}
 	return LoadedProblem{Snapshot: snap, ExternalIdentity: questionbank.ExternalIdentity{Experiment: t.Shixun.Name, Title: t.Challenge.Subject, Position: t.Challenge.Position}, Key: strconv.FormatInt(t.MyShixun.ID, 10), target: target}, nil
 }
 

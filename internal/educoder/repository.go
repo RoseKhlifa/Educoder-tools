@@ -3,7 +3,7 @@ package educoder
 import (
 	"context"
 	"encoding/base64"
-	"errors"
+	"encoding/json"
 	"net/http"
 	"net/url"
 	"path"
@@ -15,14 +15,32 @@ import (
 // RepositoryEntry is an upstream-visible task repository item. It grants read
 // access only to the exact item returned for this task, never code-save access.
 type RepositoryEntry struct {
-	Name       string `json:"name"`
-	Path       string `json:"path"`
-	Type       string `json:"type"`
-	game       string
-	myshixun   string
-	listedPath string
-	listedType string
-	client     *Client
+	Name        string `json:"name"`
+	Path        string `json:"path"`
+	Type        string `json:"type"`
+	game        string
+	myshixun    string
+	listedPath  string
+	listedType  string
+	pathPresent bool
+	client      *Client
+}
+
+func (entry *RepositoryEntry) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Name string          `json:"name"`
+		Path json.RawMessage `json:"path"`
+		Type string          `json:"type"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	entry.Name, entry.Type, entry.pathPresent = wire.Name, wire.Type, len(wire.Path) > 0
+	entry.Path = ""
+	if entry.pathPresent {
+		return json.Unmarshal(wire.Path, &entry.Path)
+	}
+	return nil
 }
 
 func repositoryPathValid(value string) bool {
@@ -31,10 +49,10 @@ func repositoryPathValid(value string) bool {
 
 func repositoryTaskValid(t *Task) error {
 	if err := requireProgramming(t); err != nil {
-		return err
+		return &ProgrammingSupportError{Stage: "repository_task", Reason: "unsupported_task"}
 	}
 	if validIdentifier(t.MyShixun.Identifier) != nil {
-		return errors.New("repository requires the task myshixun identifier")
+		return &ProgrammingSupportError{Stage: "repository_task", Reason: "missing_task_identifier"}
 	}
 	return nil
 }
@@ -52,29 +70,48 @@ func (c *Client) ListRepository(ctx context.Context, t *Task, parent *Repository
 	directory := ""
 	if parent != nil {
 		if !parent.boundTo(c, t, "tree") {
-			return nil, errors.New("repository directory must come from this task listing")
+			return nil, &ProgrammingSupportError{Stage: "directory", Reason: "invalid_parent"}
 		}
 		directory = parent.Path
 	}
 	var response struct {
-		Trees []RepositoryEntry `json:"trees"`
+		Trees *[]RepositoryEntry `json:"trees"`
 	}
-	if err := c.request(ctx, http.MethodPost, "/api/myshixuns/"+t.MyShixun.Identifier+"/repository.json", nil, map[string]any{"path": directory}, taskRef(t), &response); err != nil {
-		return nil, err
+	stage := "root"
+	if parent != nil {
+		stage = "directory"
+	}
+	if err := c.requestWithReadDiagnostics(ctx, http.MethodPost, "/api/myshixuns/"+t.MyShixun.Identifier+"/repository.json", nil, map[string]any{"path": directory}, taskRef(t), &response, true); err != nil {
+		return nil, supportRequestFailure(stage, err)
+	}
+	if response.Trees == nil {
+		return nil, &ProgrammingSupportError{Stage: stage, Reason: "missing_trees"}
 	}
 	expectedParent := directory
 	if expectedParent == "" {
 		expectedParent = "."
 	}
-	for i := range response.Trees {
-		entry := &response.Trees[i]
+	for i := range *response.Trees {
+		entry := &(*response.Trees)[i]
+		// The official tree mapper uses the requested parent plus returned
+		// basename. Reconstruct missing paths only; never repair conflicts.
+		validName := repositoryPathValid(entry.Name) && path.Base(entry.Name) == entry.Name
+		if !entry.pathPresent && entry.Path == "" {
+			if !validName {
+				return nil, supportFailure(stage, "invalid_entry")
+			}
+			entry.Path = path.Join(directory, entry.Name)
+		}
+		if entry.Name != "" && (!validName || path.Base(entry.Path) != entry.Name) {
+			return nil, supportFailure(stage, "invalid_entry")
+		}
 		if !repositoryPathValid(entry.Path) || path.Dir(entry.Path) != expectedParent || (entry.Type != "tree" && entry.Type != "blob") {
-			return nil, errors.New("repository returned an invalid or unexpected entry")
+			return nil, &ProgrammingSupportError{Stage: stage, Reason: "invalid_entry"}
 		}
 		entry.game, entry.myshixun, entry.listedPath, entry.listedType = t.Game.Identifier, t.MyShixun.Identifier, entry.Path, entry.Type
 		entry.client = c
 	}
-	return response.Trees, nil
+	return *response.Trees, nil
 }
 
 // ReadRepositoryFile reads supporting source shown by ListRepository. The
@@ -84,7 +121,7 @@ func (c *Client) ReadRepositoryFile(ctx context.Context, t *Task, entry Reposito
 		return nil, err
 	}
 	if !entry.boundTo(c, t, "blob") {
-		return nil, errors.New("repository file must come from this task listing")
+		return nil, &ProgrammingSupportError{Stage: "driver", Reason: "invalid_path"}
 	}
 	var response struct {
 		Content struct {
@@ -96,21 +133,21 @@ func (c *Client) ReadRepositoryFile(ctx context.Context, t *Task, entry Reposito
 		FileType string `json:"file_type"`
 	}
 	query := url.Values{"path": {entry.Path}, "homework_common_id": {strconv.FormatInt(t.HomeworkID, 10)}}
-	if err := c.request(ctx, http.MethodGet, "/api/tasks/"+t.Game.Identifier+"/rep_content.json", query, nil, taskRef(t), &response); err != nil {
-		return nil, err
+	if err := c.requestWithReadDiagnostics(ctx, http.MethodGet, "/api/tasks/"+t.Game.Identifier+"/rep_content.json", query, nil, taskRef(t), &response, true); err != nil {
+		return nil, supportRequestFailure("driver", err)
 	}
 	if response.Filename != path.Base(entry.Path) {
-		return nil, errors.New("repository response filename does not match the listed file")
+		return nil, &ProgrammingSupportError{Stage: "driver", Reason: "filename_mismatch"}
 	}
 	if response.Content.Content == nil {
-		return nil, errors.New("repository file response is missing content.content")
+		return nil, &ProgrammingSupportError{Stage: "driver", Reason: "missing_content"}
 	}
 	content, err := base64.StdEncoding.DecodeString(*response.Content.Content)
 	if err != nil || !utf8.Valid(content) {
-		return nil, errors.New("repository file content is not Base64 UTF-8")
+		return nil, &ProgrammingSupportError{Stage: "driver", Reason: "invalid_content"}
 	}
 	if response.Content.Size != 0 && response.Content.Size != int64(len(content)) {
-		return nil, errors.New("repository file content size is incomplete or inconsistent")
+		return nil, &ProgrammingSupportError{Stage: "driver", Reason: "content_size_mismatch"}
 	}
 	return &CodeFile{Path: entry.Path, Filename: response.Filename, Extension: path.Ext(response.Filename), Language: response.Language, FileType: response.FileType, Content: string(content), Size: response.Content.Size}, nil
 }

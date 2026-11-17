@@ -737,6 +737,11 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				_ = s.persist(ctx, result.RunID, state, result.Status, created)
 				return result, nil
 			}
+			if headerContextUnavailable(snap) {
+				result.Status = "context_unavailable"
+				result.Diagnostics = append(result.Diagnostics, fmt.Sprintf("公开头文件调用上下文读取未确认，已暂停模型生成并保留题库候选 (stage=%s reason=%s)", snap.ReadOnlyContext.Stage, snap.ReadOnlyContext.Reason))
+				return result, nil
+			}
 			if previous != nil {
 				if err := validateCandidate(snap, *previous); err != nil {
 					feedback = append(feedback, answer.Feedback{Kind: "schema", Message: err.Error()})

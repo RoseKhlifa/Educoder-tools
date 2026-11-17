@@ -32,21 +32,30 @@ type ReadOnlyFile struct {
 	ContentHash string `json:"content_hash"`
 }
 
+// ReadOnlyContextDiagnostic carries fixed, non-sensitive probe metadata only.
+// It does not belong to the reusable question or execution-contract identity.
+type ReadOnlyContextDiagnostic struct {
+	Status string `json:"status"`
+	Stage  string `json:"stage"`
+	Reason string `json:"reason"`
+}
+
 type Snapshot struct {
-	SchemaVersion        int            `json:"schema_version"`
-	Kind                 string         `json:"kind"`
-	Title                string         `json:"title"`
-	StatementMarkdown    string         `json:"statement_markdown"`
-	Files                []File         `json:"files"`
-	ReadOnlyFiles        []ReadOnlyFile `json:"read_only_files,omitempty"`
-	ContextHash          string         `json:"context_hash,omitempty"`
-	PublicTests          []PublicTest   `json:"public_tests"`
-	ObservedConstraints  []string       `json:"observed_constraints"`
-	EnvironmentContract  []string       `json:"environment_contract"`
-	EditMode             string         `json:"edit_mode"`
-	SnapshotCompleteness string         `json:"snapshot_completeness"`
-	RevisionHash         string         `json:"problem_revision_hash"`
-	ContractHash         string         `json:"execution_contract_hash"`
+	SchemaVersion        int                        `json:"schema_version"`
+	Kind                 string                     `json:"kind"`
+	Title                string                     `json:"title"`
+	StatementMarkdown    string                     `json:"statement_markdown"`
+	Files                []File                     `json:"files"`
+	ReadOnlyFiles        []ReadOnlyFile             `json:"read_only_files,omitempty"`
+	ContextHash          string                     `json:"context_hash,omitempty"`
+	ReadOnlyContext      *ReadOnlyContextDiagnostic `json:"read_only_context,omitempty"`
+	PublicTests          []PublicTest               `json:"public_tests"`
+	ObservedConstraints  []string                   `json:"observed_constraints"`
+	EnvironmentContract  []string                   `json:"environment_contract"`
+	EditMode             string                     `json:"edit_mode"`
+	SnapshotCompleteness string                     `json:"snapshot_completeness"`
+	RevisionHash         string                     `json:"problem_revision_hash"`
+	ContractHash         string                     `json:"execution_contract_hash"`
 }
 
 type ProblemSnapshot = Snapshot

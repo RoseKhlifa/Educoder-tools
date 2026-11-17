@@ -44,3 +44,20 @@ func TestReadOnlyContextRejectsOverlapAndInvalidSource(t *testing.T) {
 		}
 	}
 }
+
+func TestReadOnlyDiagnosticDoesNotChangeLegacyIdentityOrAcceptRawText(t *testing.T) {
+	legacy, _ := Prepare(sample())
+	input := sample()
+	input.ReadOnlyContext = &ReadOnlyContextDiagnostic{Status: "unavailable", Stage: "root", Reason: "unavailable_timeout"}
+	with, err := Prepare(input)
+	if err != nil || with.RevisionHash != legacy.RevisionHash || with.ContractHash != legacy.ContractHash || with.ContextHash != legacy.ContextHash {
+		t.Fatalf("diagnostic changed legacy identity: %+v %v", with, err)
+	}
+	input.ReadOnlyContext.Reason = "https://example.invalid/private?token=secret"
+	if with.ReadOnlyContext.Reason != "unavailable_timeout" {
+		t.Fatal("prepare retained mutable caller diagnostic")
+	}
+	if _, err := Prepare(input); err == nil {
+		t.Fatal("arbitrary upstream text accepted as diagnostic")
+	}
+}

@@ -128,23 +128,24 @@ func buildRequest(req Request) (wireRequest, error) {
 		system += " Terminal mode overrides editor source semantics: return one complete POSIX shell script in content, with language shell and the exact allowed path as its candidate label. The script runs in a real terminal to create or modify only the experiment files explicitly required by the task statement; it is never written into the named placeholder editor file, so a placeholder filename extension does not determine script syntax. CurrentContent is intentionally empty, not a source template. Inspect and handle the working directory with pwd and an explicit task-appropriate cd where needed; initialize required task directories and files without resetting unrelated work. Use errors and checks to verify each requested workspace operation. The empty public test is an exit-status check only; formal evaluation checks workspace state. Printing expected output with echo is not evidence of task completion. Do not read hidden tests, secret files, credentials, or unrelated data, alter graders, or fabricate evaluation results. Do not use exec, exit 0, swallowed errors, or output text to conceal an unknown or failed operation. A successful shell exit alone never establishes a passed challenge."
 	}
 	payload := struct {
-		Kind                 string                 `json:"kind"`
-		Title                string                 `json:"title"`
-		Statement            string                 `json:"statement_markdown"`
-		Files                []problem.File         `json:"files"`
-		ReadOnlyFiles        []problem.ReadOnlyFile `json:"read_only_files,omitempty"`
-		ContextHash          string                 `json:"context_hash,omitempty"`
-		AllowedFiles         []string               `json:"allowed_files"`
-		FileContract         []fileContract         `json:"file_contract"`
-		PublicTests          []problem.PublicTest   `json:"public_tests"`
-		ObservedConstraints  []string               `json:"observed_constraints"`
-		EnvironmentContract  []string               `json:"environment_contract"`
-		EditMode             string                 `json:"edit_mode"`
-		SnapshotCompleteness string                 `json:"snapshot_completeness"`
-		Previous             *Candidate             `json:"previous_candidate,omitempty"`
-		Feedback             []Feedback             `json:"feedback,omitempty"`
-		RepairHistory        []RepairAttempt        `json:"repair_history,omitempty"`
-	}{snapshot.Kind, snapshot.Title, snapshot.StatementMarkdown, snapshot.Files, snapshot.ReadOnlyFiles, snapshot.ContextHash, filePaths(snapshot.Files), fileContracts(snapshot.Files), snapshot.PublicTests, snapshot.ObservedConstraints, snapshot.EnvironmentContract, snapshot.EditMode, snapshot.SnapshotCompleteness, req.Previous, req.Feedback, req.RepairHistory}
+		Kind                 string                             `json:"kind"`
+		Title                string                             `json:"title"`
+		Statement            string                             `json:"statement_markdown"`
+		Files                []problem.File                     `json:"files"`
+		ReadOnlyFiles        []problem.ReadOnlyFile             `json:"read_only_files,omitempty"`
+		ContextHash          string                             `json:"context_hash,omitempty"`
+		ReadOnlyContext      *problem.ReadOnlyContextDiagnostic `json:"read_only_context,omitempty"`
+		AllowedFiles         []string                           `json:"allowed_files"`
+		FileContract         []fileContract                     `json:"file_contract"`
+		PublicTests          []problem.PublicTest               `json:"public_tests"`
+		ObservedConstraints  []string                           `json:"observed_constraints"`
+		EnvironmentContract  []string                           `json:"environment_contract"`
+		EditMode             string                             `json:"edit_mode"`
+		SnapshotCompleteness string                             `json:"snapshot_completeness"`
+		Previous             *Candidate                         `json:"previous_candidate,omitempty"`
+		Feedback             []Feedback                         `json:"feedback,omitempty"`
+		RepairHistory        []RepairAttempt                    `json:"repair_history,omitempty"`
+	}{snapshot.Kind, snapshot.Title, snapshot.StatementMarkdown, snapshot.Files, snapshot.ReadOnlyFiles, snapshot.ContextHash, snapshot.ReadOnlyContext, filePaths(snapshot.Files), fileContracts(snapshot.Files), snapshot.PublicTests, snapshot.ObservedConstraints, snapshot.EnvironmentContract, snapshot.EditMode, snapshot.SnapshotCompleteness, req.Previous, req.Feedback, req.RepairHistory}
 	for _, f := range req.Feedback {
 		if err := problem.ValidatePublicText(f.Kind + f.Message + f.Stdin + f.ExpectedStdout + f.ActualStdout); err != nil {
 			return wireRequest{}, &Error{Kind: "invalid_feedback"}

@@ -191,6 +191,7 @@ func (s *Store) UpsertSnapshot(ctx context.Context, in problem.Snapshot) (Ref, e
 	// execution contract independent, preserving existing candidate lookup keys.
 	contract.ReadOnlyFiles = nil
 	contract.ContextHash = ""
+	contract.ReadOnlyContext = nil
 	for i := range contract.Files {
 		contract.Files[i].CurrentContent = ""
 		contract.Files[i].CurrentContentHash = ""
