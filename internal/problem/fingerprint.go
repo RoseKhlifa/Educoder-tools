@@ -87,6 +87,11 @@ func Prepare(in Snapshot) (Snapshot, error) {
 	s.PublicTests = append([]PublicTest(nil), in.PublicTests...)
 	s.ObservedConstraints = append([]string(nil), in.ObservedConstraints...)
 	s.EnvironmentContract = append([]string(nil), in.EnvironmentContract...)
+	var err error
+	s.ReadOnlyFiles, s.ContextHash, err = prepareReadOnlyContext(in.ReadOnlyFiles, s.Files)
+	if err != nil {
+		return Snapshot{}, err
+	}
 	texts := []string{s.Title, s.StatementMarkdown, s.EditMode, s.SnapshotCompleteness}
 	texts = append(texts, s.ObservedConstraints...)
 	texts = append(texts, s.EnvironmentContract...)

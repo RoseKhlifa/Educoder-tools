@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"educoder-cli/internal/educoder"
 	"educoder-cli/internal/problem"
@@ -76,6 +77,17 @@ func (a *EducoderAdapter) Load(ctx context.Context, target Target) (LoadedProble
 	for _, f := range pt.Files {
 		files = append(files, problem.File{Path: f.Path, Filename: f.Filename, Language: f.Language, Extension: f.Extension, CurrentContent: f.Content, StarterProvenance: "unknown"})
 	}
+	// A header's input parsing and call order may live in a visible, read-only
+	// sibling main. Keep this optional observation outside the writable contract.
+	var readOnly []problem.ReadOnlyFile
+	supportCtx, supportCancel := context.WithTimeout(ctx, 10*time.Second)
+	support, supportErr := a.Client.ReadProgrammingSupport(supportCtx, t)
+	supportCancel()
+	if supportErr == nil {
+		for _, file := range support {
+			readOnly = append(readOnly, problem.ReadOnlyFile{Path: file.Path, Language: file.Language, Content: file.Content})
+		}
+	}
 	public := make([]problem.PublicTest, 0)
 	for _, test := range t.TestSets {
 		// A hidden/custom-checker task can expose a public placeholder with
@@ -94,7 +106,7 @@ func (a *EducoderAdapter) Load(ctx context.Context, target Target) (LoadedProble
 			seen[file.Language] = true
 		}
 	}
-	snap := problem.Snapshot{SchemaVersion: problem.SchemaVersion, Kind: "programming", Title: t.Challenge.Subject, StatementMarkdown: pt.Markdown, Files: files, PublicTests: public, EditMode: "single_file", SnapshotCompleteness: "observed", EnvironmentContract: environment}
+	snap := problem.Snapshot{SchemaVersion: problem.SchemaVersion, Kind: "programming", Title: t.Challenge.Subject, StatementMarkdown: pt.Markdown, Files: files, ReadOnlyFiles: readOnly, PublicTests: public, EditMode: "single_file", SnapshotCompleteness: "observed", EnvironmentContract: environment}
 	return LoadedProblem{Snapshot: snap, ExternalIdentity: questionbank.ExternalIdentity{Experiment: t.Shixun.Name, Title: t.Challenge.Subject, Position: t.Challenge.Position}, Key: strconv.FormatInt(t.MyShixun.ID, 10), target: target}, nil
 }
 

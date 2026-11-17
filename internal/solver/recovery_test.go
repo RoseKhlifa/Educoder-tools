@@ -50,7 +50,9 @@ func TestAllModelProfilesAreEstimatedAndCharged(t *testing.T) {
 	if err != nil || r.Status != "selftest_passed" || r.ModelCalls != 3 || r.CostMicroUSD != 10 || r.ReservedMicroUSD != 0 {
 		t.Fatalf("result=%+v err=%v", r, err)
 	}
-	want := []answer.Profile{answer.DefaultProfile(), answer.RepairProfile(), answer.ProProfile()}
+	finalPro := answer.ProProfile()
+	finalPro.Thinking, finalPro.ReasoningEffort = "disabled", ""
+	want := []answer.Profile{answer.DefaultProfile(), answer.RepairProfile(), finalPro}
 	for i, profile := range want {
 		if p.estimates[i].Profile != profile || p.requests[i].Profile != profile {
 			t.Fatalf("profile %d was not estimated before dispatch", i)

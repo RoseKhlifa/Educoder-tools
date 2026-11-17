@@ -38,7 +38,8 @@ func TestRepositoryReadsSupportingCallerWithoutGrantingWrites(t *testing.T) {
 			if r.Method != http.MethodGet || r.URL.Query().Get("path") != "src/main.cpp" || r.URL.Query().Get("homework_common_id") != "99" {
 				t.Fatal("wrong repository read context")
 			}
-			json.NewEncoder(w).Encode(map[string]any{"filename": "main.cpp", "language": "cpp", "file_type": "txt", "content": map[string]any{"content": base64.StdEncoding.EncodeToString([]byte("#include \"answer.h\"\nint main() { return 0; }\n")), "size": 47}})
+			source := "#include \"answer.h\"\nint main() { return 0; }\n"
+			json.NewEncoder(w).Encode(map[string]any{"filename": "main.cpp", "language": "cpp", "file_type": "txt", "content": map[string]any{"content": base64.StdEncoding.EncodeToString([]byte(source)), "size": len(source)}})
 		default:
 			t.Fatalf("unexpected route: %s", r.URL.Path)
 		}

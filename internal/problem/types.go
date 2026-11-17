@@ -23,19 +23,30 @@ type PublicTest struct {
 	ExpectedStdout string `json:"expected_stdout"`
 }
 
+// ReadOnlyFile is source visible in the upstream repository that helps explain
+// a caller/interface contract. It is never an editable or submission target.
+type ReadOnlyFile struct {
+	Path        string `json:"path"`
+	Language    string `json:"language"`
+	Content     string `json:"content"`
+	ContentHash string `json:"content_hash"`
+}
+
 type Snapshot struct {
-	SchemaVersion        int          `json:"schema_version"`
-	Kind                 string       `json:"kind"`
-	Title                string       `json:"title"`
-	StatementMarkdown    string       `json:"statement_markdown"`
-	Files                []File       `json:"files"`
-	PublicTests          []PublicTest `json:"public_tests"`
-	ObservedConstraints  []string     `json:"observed_constraints"`
-	EnvironmentContract  []string     `json:"environment_contract"`
-	EditMode             string       `json:"edit_mode"`
-	SnapshotCompleteness string       `json:"snapshot_completeness"`
-	RevisionHash         string       `json:"problem_revision_hash"`
-	ContractHash         string       `json:"execution_contract_hash"`
+	SchemaVersion        int            `json:"schema_version"`
+	Kind                 string         `json:"kind"`
+	Title                string         `json:"title"`
+	StatementMarkdown    string         `json:"statement_markdown"`
+	Files                []File         `json:"files"`
+	ReadOnlyFiles        []ReadOnlyFile `json:"read_only_files,omitempty"`
+	ContextHash          string         `json:"context_hash,omitempty"`
+	PublicTests          []PublicTest   `json:"public_tests"`
+	ObservedConstraints  []string       `json:"observed_constraints"`
+	EnvironmentContract  []string       `json:"environment_contract"`
+	EditMode             string         `json:"edit_mode"`
+	SnapshotCompleteness string         `json:"snapshot_completeness"`
+	RevisionHash         string         `json:"problem_revision_hash"`
+	ContractHash         string         `json:"execution_contract_hash"`
 }
 
 type ProblemSnapshot = Snapshot

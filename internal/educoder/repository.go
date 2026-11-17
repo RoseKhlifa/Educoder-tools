@@ -88,8 +88,8 @@ func (c *Client) ReadRepositoryFile(ctx context.Context, t *Task, entry Reposito
 	}
 	var response struct {
 		Content struct {
-			Content string `json:"content"`
-			Size    int64  `json:"size"`
+			Content *string `json:"content"`
+			Size    int64   `json:"size"`
 		} `json:"content"`
 		Filename string `json:"filename"`
 		Language string `json:"language"`
@@ -99,9 +99,18 @@ func (c *Client) ReadRepositoryFile(ctx context.Context, t *Task, entry Reposito
 	if err := c.request(ctx, http.MethodGet, "/api/tasks/"+t.Game.Identifier+"/rep_content.json", query, nil, taskRef(t), &response); err != nil {
 		return nil, err
 	}
-	content, err := base64.StdEncoding.DecodeString(response.Content.Content)
+	if response.Filename != path.Base(entry.Path) {
+		return nil, errors.New("repository response filename does not match the listed file")
+	}
+	if response.Content.Content == nil {
+		return nil, errors.New("repository file response is missing content.content")
+	}
+	content, err := base64.StdEncoding.DecodeString(*response.Content.Content)
 	if err != nil || !utf8.Valid(content) {
 		return nil, errors.New("repository file content is not Base64 UTF-8")
+	}
+	if response.Content.Size != 0 && response.Content.Size != int64(len(content)) {
+		return nil, errors.New("repository file content size is incomplete or inconsistent")
 	}
 	return &CodeFile{Path: entry.Path, Filename: response.Filename, Extension: path.Ext(response.Filename), Language: response.Language, FileType: response.FileType, Content: string(content), Size: response.Content.Size}, nil
 }

@@ -42,7 +42,9 @@ func TestAvailabilityFailuresKeepSelectedProfileAndUnknownCharges(t *testing.T) 
 }
 
 func TestAvailabilityFailuresKeepRepairWithinLifetimeCap(t *testing.T) {
-	want := []answer.Profile{answer.DefaultProfile(), answer.DefaultProfile(), answer.RepairProfile()}
+	finalRepair := answer.RepairProfile()
+	finalRepair.Thinking, finalRepair.ReasoningEffort = "disabled", ""
+	want := []answer.Profile{answer.DefaultProfile(), answer.DefaultProfile(), finalRepair}
 	store := &fakeStore{}
 	p := &scriptedProvider{estimateCost: 10, generate: func(_ context.Context, req answer.Request, n int) (answer.Result, error) {
 		if n > len(want) || req.Profile != want[n-1] {

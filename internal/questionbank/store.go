@@ -187,6 +187,10 @@ func (s *Store) UpsertSnapshot(ctx context.Context, in problem.Snapshot) (Ref, e
 	contract.StatementMarkdown = ""
 	contract.PublicTests = nil
 	contract.ObservedConstraints = nil
+	// Caller observations supplement generation only. Keep the long-lived
+	// execution contract independent, preserving existing candidate lookup keys.
+	contract.ReadOnlyFiles = nil
+	contract.ContextHash = ""
 	for i := range contract.Files {
 		contract.Files[i].CurrentContent = ""
 		contract.Files[i].CurrentContentHash = ""

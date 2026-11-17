@@ -737,13 +737,15 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				_ = s.persist(ctx, result.RunID, state, result.Status, created)
 				return result, nil
 			}
-			profile := state.GenerationRecovery.profile(s.cfg, result.ModelCalls)
 			if previous != nil {
 				if err := validateCandidate(snap, *previous); err != nil {
 					feedback = append(feedback, answer.Feedback{Kind: "schema", Message: err.Error()})
 					previous = nil
 				}
 			}
+			finalRepair := (previous != nil || len(state.RepairHistory) > 0) &&
+				(result.ModelCalls+1 >= req.MaxModelCalls || attempt+1 >= req.MaxEvaluations)
+			profile := state.GenerationRecovery.profile(s.cfg, result.ModelCalls, finalRepair)
 			providerReq := answer.Request{Problem: snap, Previous: previous, Feedback: feedback, RepairHistory: boundedRepairHistory(state.RepairHistory), Profile: profile}
 			freshPro := s.cfg.EnableProFreshSolve && profile.Model == s.cfg.ProProfile.Model && !state.GenerationRecovery.ProFreshSolveUsed
 			if freshPro {

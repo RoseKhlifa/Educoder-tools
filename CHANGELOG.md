@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.119 - 2026-11-17
+
+- Supply public read-only header drivers and reserve complete output for final programming repairs
+
 ## 0.1.118 - 2026-11-08
 
 - Clarify that personalized text-image homework and ZIP materials are excluded from collection and reuse

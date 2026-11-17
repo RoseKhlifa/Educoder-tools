@@ -35,7 +35,7 @@ func (g *generationRecovery) restore(feedback []answer.Feedback) {
 	}
 }
 
-func (g generationRecovery) profile(cfg Config, calls int) answer.Profile {
+func (g generationRecovery) profile(cfg Config, calls int, finalRepair bool) answer.Profile {
 	// Availability failures still consume call and money budgets, but do not
 	// establish that the selected model generated ineffective source. Keep this
 	// distinction durable so an explicit continuation cannot mistake an outage
@@ -53,9 +53,13 @@ func (g generationRecovery) profile(cfg Config, calls int) answer.Profile {
 	if cfg.EnableProFreshSolve && calls >= 2 && !g.ProFreshSolveUsed {
 		p = cfg.ProProfile
 	}
-	if g.CompactOutput {
+	if g.CompactOutput || finalRepair {
 		// Optional reasoning shares the model's output window with source code.
 		// Once a response is cut off, reserve that window for complete JSON.
+		// Do the same before the final source-bound repair: waiting for its
+		// first truncation would require a fourth call that the run cannot make.
+		// Model selection, existing evidence, billing and lifetime caps stay
+		// unchanged; only optional reasoning yields its output window.
 		p.Thinking, p.ReasoningEffort, p.MaxTokens = "disabled", "", 8192
 	}
 	if g.ProBodyDeadlineFallbackUsed {
