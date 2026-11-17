@@ -32,6 +32,7 @@ type consumerRecovery struct {
 	Message    string `json:"message"`
 }
 type consumerResult struct {
+	Attention          string         `json:"attention,omitempty"`
 	Title              string         `json:"title,omitempty"`
 	ExerciseID         int64          `json:"exercise_id,omitempty"`
 	TotalQuestions     int            `json:"total_questions,omitempty"`
@@ -118,6 +119,12 @@ func toConsumerJob(j jobs.Job) consumerJob {
 		out.Kind = "collection"
 	}
 	out.Result.ServiceStatus = status
+	if status == "support" {
+		var reason retryResultState
+		if json.Unmarshal(j.Result, &reason) == nil && hasPublicContractConflict(reason) {
+			out.Result.Attention = "upstream_question_conflict"
+		}
+	}
 	// Decode a tiny typed projection; never copy the executor result map.
 	var summary struct {
 		Status             string        `json:"status"`
@@ -187,6 +194,26 @@ func toConsumerJob(j jobs.Job) consumerJob {
 		}
 	}
 	return out
+}
+
+func hasPublicContractConflict(result retryResultState) bool {
+	if result.Status == "public_contract_conflict" || result.ReasonCode == "public_contract_conflict" {
+		return true
+	}
+	if result.Result != nil && hasPublicContractConflict(*result.Result) {
+		return true
+	}
+	for _, child := range result.Homeworks {
+		if hasPublicContractConflict(child) {
+			return true
+		}
+	}
+	for _, child := range result.Levels {
+		if hasPublicContractConflict(child) {
+			return true
+		}
+	}
+	return false
 }
 
 func publicRecovery(j jobs.Job) consumerRecovery {

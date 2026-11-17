@@ -518,7 +518,7 @@ func statusOf(r *Result, e error) string {
 func terminalBatchStatus(r *Result, e error) string {
 	if r != nil {
 		switch r.Status {
-		case "uncertain", "verification_unconfirmed", "canceled", "budget_exhausted", "model_error", "generation_stalled", "selftest_failed", "attempts_exhausted", "invalid_candidate", "unsupported_multifile", "budget_unavailable", "usage_persistence_failed", "verification_persistence_failed", "resource_unavailable", "prewrite_error", "saved_not_submitted", "save_unverified", "save_error", "editor_changed":
+		case "public_contract_conflict", "context_unavailable", "uncertain", "verification_unconfirmed", "canceled", "budget_exhausted", "model_error", "generation_stalled", "selftest_failed", "attempts_exhausted", "invalid_candidate", "unsupported_multifile", "budget_unavailable", "usage_persistence_failed", "verification_persistence_failed", "resource_unavailable", "prewrite_error", "saved_not_submitted", "save_unverified", "save_error", "editor_changed":
 			return r.Status
 		}
 	}
@@ -533,7 +533,7 @@ func terminalBatchStatus(r *Result, e error) string {
 func batchFailureReason(r *Result, err error) string {
 	if r != nil {
 		switch r.Status {
-		case "generation_stalled":
+		case "public_contract_conflict", "context_unavailable", "generation_stalled":
 			return r.Status
 		case "prewrite_error", "saved_not_submitted", "save_unverified", "save_error", "editor_changed":
 			// Explicit adapter stages are stronger evidence than diagnostic

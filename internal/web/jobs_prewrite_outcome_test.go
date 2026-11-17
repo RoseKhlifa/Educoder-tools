@@ -12,7 +12,7 @@ import (
 )
 
 func TestKnownPreFormalHomeworkFailureAfterSubmissionRemainsRetryable(t *testing.T) {
-	for _, status := range []string{"prewrite_error", "saved_not_submitted", "save_unverified", "save_error", "editor_changed"} {
+	for _, status := range []string{"public_contract_conflict", "context_unavailable", "prewrite_error", "saved_not_submitted", "save_unverified", "save_error", "editor_changed"} {
 		t.Run(status, func(t *testing.T) {
 			batch := &taskservice.BatchResult{
 				Status: status, ReasonCode: status, TotalLevels: 2, CompletedLevels: 1, FailedLevels: 1,

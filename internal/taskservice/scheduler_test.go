@@ -44,6 +44,8 @@ func TestContinueAfterFailureStopsUnknownAndAllowsOnlyConfirmedFailures(t *testi
 	}{
 		{"attempts_exhausted", true},
 		{"generation_stalled", true},
+		{"public_contract_conflict", true},
+		{"context_unavailable", true},
 		{"uncertain", false},
 		{"verification_unconfirmed", false},
 		{"budget_exhausted", false},

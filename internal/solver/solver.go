@@ -723,6 +723,11 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				result.Diagnostics = append(result.Diagnostics, "当前绘图题没有匹配且可验证的外部答案，请检查题目路径或评测反馈")
 				return result, nil
 			}
+			if conflict := problem.DetectPublicSampleConflict(snap); conflict != nil {
+				result.Status = "public_contract_conflict"
+				result.Diagnostics = append(result.Diagnostics, fmt.Sprintf("公开样例矩阵维度与题面明确的删除顶点输出行数冲突，已暂停模型生成 (sample=%d groups=%d expected=%s required=%s)", conflict.SampleIndex, conflict.Groups, conflict.ExpectedShape, conflict.RequiredShape))
+				return result, nil
+			}
 			if s.provider == nil {
 				result.Status = "needs_provider"
 				result.Diagnostics = append(result.Diagnostics, "题库没有可用候选且未配置模型 provider")

@@ -182,7 +182,7 @@ func mayContinueAfterLevel(task *educoder.Task, result *Result, err error) bool 
 		}
 	}
 	switch result.Status {
-	case "attempts_exhausted", "selftest_failed", "generation_stalled", "model_error", "invalid_candidate", "resource_unavailable", "prewrite_error", "save_unverified", "saved_not_submitted", "save_error":
+	case "public_contract_conflict", "context_unavailable", "attempts_exhausted", "selftest_failed", "generation_stalled", "model_error", "invalid_candidate", "resource_unavailable", "prewrite_error", "save_unverified", "saved_not_submitted", "save_error":
 		return true
 	}
 	return false

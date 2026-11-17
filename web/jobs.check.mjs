@@ -2,6 +2,16 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { canRetryJob, canCancelJob, currentServiceJobs, jobProgress, partitionServiceJobs, renderJobs, renderServiceDetail, renderServiceJob, serviceLabel, serviceStatus } from './dist/jobs.js';
 
+await test('only an explicit fixed upstream conflict attention shows the consumer explanation', () => {
+  const value = { id:'conflict',status:'support',phase:'support',request:{scope:'homework',mode:'submit'},result:{attention:'upstream_question_conflict',total_levels:5,completed_levels:4} };
+  const notice = '题目要求与评测样例存在矛盾，已保留进度，待课程方核对后继续。';
+  assert.ok(renderServiceJob(value).includes(notice));
+  assert.ok(renderServiceDetail(value).includes(notice));
+  assert.ok(!renderServiceJob(value, [], true).includes(notice));
+  assert.ok(!renderServiceJob({...value,status:'succeeded',result:{...value.result,service_status:'completed'}}).includes(notice));
+  assert.ok(!renderServiceJob({...value,result:{attention:'PRIVATE_TRACE'}}).includes('PRIVATE_TRACE'));
+});
+
 const job = (id, day, extra = {}) => ({ id, status: 'failed', phase: 'completed', kind: 'answer', request: { mode: 'submit', scope: 'course', course: 'COURSE_A' }, created_at: `2026-01-${String(day).padStart(2, '0')}T00:00:00Z`, updated_at: `2026-01-${String(day).padStart(2, '0')}T00:00:00Z`, ...extra });
 const ids = rows => rows.map(row => row.id);
 const courses = [{ identifier: 'COURSE_A', name: '示例数据结构课程' }, { identifier: 'COURSE_B', name: '示例系统课程' }];

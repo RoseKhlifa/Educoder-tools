@@ -293,7 +293,7 @@ func homeworkOutcome(batch *taskservice.BatchResult, err error) (jobs.Outcome, e
 		return out, nil
 	case "canceled":
 		out.Status, out.ErrorCode, out.Message = jobs.Canceled, "", "后续关卡已停止"
-	case "model_error", "selftest_failed", "attempts_exhausted", "generation_stalled", "runtime_initialization_failed", "invalid_candidate", "budget_exhausted", "budget_unavailable", "unsupported_multifile", "unsupported_roster", "usage_persistence_failed", "verification_persistence_failed", "resource_unavailable", "prewrite_error", "saved_not_submitted", "save_unverified", "save_error", "editor_changed":
+	case "public_contract_conflict", "context_unavailable", "model_error", "selftest_failed", "attempts_exhausted", "generation_stalled", "runtime_initialization_failed", "invalid_candidate", "budget_exhausted", "budget_unavailable", "unsupported_multifile", "unsupported_roster", "usage_persistence_failed", "verification_persistence_failed", "resource_unavailable", "prewrite_error", "saved_not_submitted", "save_unverified", "save_error", "editor_changed":
 		// Earlier levels may have submitted successfully. A known failure in
 		// a later generation, confirmed self-test or explicit pre-formal save
 		// must not become an unknown submission because Manager's mutation flag

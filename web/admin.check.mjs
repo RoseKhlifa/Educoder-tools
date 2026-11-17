@@ -23,6 +23,18 @@ const job = (extra = {}) => ({
 const state = jobs => ({ overview: {}, users: [], jobs, audit: [], loading: false, error: false, jobsKind: 'all' });
 const visible = html => html.replace(/<details\b[\s\S]*?<\/details>/g, '').replace(/<[^>]*>/g, ' ');
 
+await test('public sample conflicts and unavailable callers have actionable non-secret labels', () => {
+  for (const [code, label] of [
+    ['public_contract_conflict', '题面要求与公开评测样例存在明确矛盾'],
+    ['context_unavailable', '公开调用代码读取未确认'],
+  ]) {
+    const value = job({context:undefined, result:{status:code,reason_code:code,diagnostics:['PRIVATE_DIAG']}});
+    const summary = visible(renderAdmin('operations', state([value])));
+    assert.ok(summary.includes(label));
+    assert.doesNotMatch(summary, /PRIVATE_DIAG|public_contract_conflict|context_unavailable/);
+  }
+});
+
 await test('collection capacity and exhaustive completion stay distinct from answer execution and verified captures', () => {
   const screen = state([]);
   screen.overview = { capacity: { jobs: { workers: 16, collection_workers: 1, answer_running: 2, collection_running: 1, collection_queued: 3 } } };

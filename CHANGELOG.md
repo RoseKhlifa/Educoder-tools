@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.122 - 2026-11-17
+
+- Detect explicit public sample conflicts before model generation and show actionable task notices
+
 ## 0.1.121 - 2026-11-17
 
 - Expose guarded single-homework execution for stalled course assignments
