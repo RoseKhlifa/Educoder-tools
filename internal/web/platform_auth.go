@@ -45,9 +45,8 @@ func principalDTO(user platform.User) map[string]any {
 }
 
 func (s *Server) adminSession(w http.ResponseWriter, r *http.Request, requestID string) (Session, bool) {
-	session, ok := s.sessionFromRequest(r)
+	session, ok := s.requireSession(w, r, requestID)
 	if !ok {
-		s.authError(w, requestID)
 		return Session{}, false
 	}
 	if s.platform == nil || !session.Principal.IsAdmin() {

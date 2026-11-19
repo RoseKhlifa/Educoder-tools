@@ -346,9 +346,8 @@ func accountJobOwner(login string) string {
 }
 
 func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, requestID string) {
-	session, ok := s.sessionFromRequest(r)
+	session, ok := s.requireSession(w, r, requestID)
 	if !ok {
-		s.authError(w, requestID)
 		return
 	}
 	owner := sessionJobOwner(session)

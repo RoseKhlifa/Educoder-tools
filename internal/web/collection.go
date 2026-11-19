@@ -35,9 +35,8 @@ func (s *Server) enqueueCollection(ctx context.Context, client EducoderClient, o
 // no reused explicit key can retry after a stop, but never replays credentials
 // or executable closures after service restart.
 func (s *Server) handleCollection(w http.ResponseWriter, r *http.Request, requestID string) {
-	session, ok := s.sessionFromRequest(r)
+	session, ok := s.requireSession(w, r, requestID)
 	if !ok {
-		s.authError(w, requestID)
 		return
 	}
 	if s.jobs == nil || s.jobs.collect == nil {

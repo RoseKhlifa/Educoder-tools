@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.140 - 2026-11-20
+
+- Keep sessions when the platform store cannot be read, answering 503 instead of logging users out on a transient database error
+
 ## 0.1.139 - 2026-11-20
 
 - Treat a game_build status -2 as a refused, never-started evaluation that is retried later instead of an unknown submission

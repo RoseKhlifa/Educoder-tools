@@ -248,9 +248,8 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request, requestID str
 			s.methodError(w, requestID)
 			return
 		}
-		session, ok := s.sessionFromRequest(r)
+		session, ok := s.requireSession(w, r, requestID)
 		if !ok {
-			s.authError(w, requestID)
 			return
 		}
 		if r.URL.RawQuery != "" {
@@ -408,9 +407,8 @@ func resolveAvatarKey(ctx context.Context, client EducoderClient, user educoder.
 }
 
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request, requestID string) {
-	session, ok := s.sessionFromRequest(r)
+	session, ok := s.requireSession(w, r, requestID)
 	if !ok {
-		s.authError(w, requestID)
 		return
 	}
 	s.writeJSON(w, requestID, http.StatusOK, map[string]any{"user": toUserDTO(session.User), "platform": principalDTO(session.Principal)})
@@ -425,9 +423,8 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request, requestID 
 }
 
 func (s *Server) handleCourses(w http.ResponseWriter, r *http.Request, requestID string) {
-	session, ok := s.sessionFromRequest(r)
+	session, ok := s.requireSession(w, r, requestID)
 	if !ok {
-		s.authError(w, requestID)
 		return
 	}
 	status := r.URL.Query().Get("status")
@@ -449,9 +446,8 @@ func (s *Server) handleCourses(w http.ResponseWriter, r *http.Request, requestID
 }
 
 func (s *Server) handleHomeworks(w http.ResponseWriter, r *http.Request, requestID, course string) {
-	session, ok := s.sessionFromRequest(r)
+	session, ok := s.requireSession(w, r, requestID)
 	if !ok {
-		s.authError(w, requestID)
 		return
 	}
 	if err := educoderIdentifier(course); err != nil {
@@ -476,9 +472,8 @@ func (s *Server) handleHomeworks(w http.ResponseWriter, r *http.Request, request
 }
 
 func (s *Server) handleEnter(w http.ResponseWriter, r *http.Request, requestID, course, rawID string) {
-	session, ok := s.sessionFromRequest(r)
+	session, ok := s.requireSession(w, r, requestID)
 	if !ok {
-		s.authError(w, requestID)
 		return
 	}
 	if err := educoderIdentifier(course); err != nil {
@@ -505,33 +500,68 @@ func (s *Server) handleEnter(w http.ResponseWriter, r *http.Request, requestID, 
 	s.writeJSON(w, requestID, http.StatusOK, toTaskDTO(*task))
 }
 
-func (s *Server) sessionFromRequest(r *http.Request) (Session, bool) {
+type sessionState int
+
+const (
+	sessionValid sessionState = iota
+	sessionMissing
+	// sessionUnavailable means the platform store could not answer (busy,
+	// closed or the request was canceled). It says nothing about the account,
+	// so the session is kept.
+	sessionUnavailable
+)
+
+// requireSession resolves the request's session and writes the failure
+// response itself: 401 when the session is missing, revoked or belongs to a
+// disabled account, 503 when the platform store could not be read. A transient
+// store error must never log a user out, because signing back in needs the
+// Educoder password again.
+func (s *Server) requireSession(w http.ResponseWriter, r *http.Request, requestID string) (Session, bool) {
+	session, state := s.lookupSession(r)
+	switch state {
+	case sessionValid:
+		return session, true
+	case sessionUnavailable:
+		s.writeError(w, requestID, http.StatusServiceUnavailable, "SESSION_CHECK_UNAVAILABLE", "服务繁忙，请稍后重试")
+	default:
+		s.authError(w, requestID)
+	}
+	return Session{}, false
+}
+
+func (s *Server) lookupSession(r *http.Request) (Session, sessionState) {
 	cookie, err := r.Cookie(sessionCookieName)
 	if err != nil {
-		return Session{}, false
+		return Session{}, sessionMissing
 	}
 	session, ok := s.store.Get(cookie.Value)
 	if !ok {
-		return Session{}, false
+		return Session{}, sessionMissing
 	}
 	if s.platform != nil {
 		if session.Principal.ID == "" {
 			s.store.Delete(cookie.Value)
-			return Session{}, false
+			return Session{}, sessionMissing
 		}
 		principal, err := s.platform.LookupUser(r.Context(), session.Principal.ID)
+		if err != nil && !errors.Is(err, platform.ErrNotFound) {
+			return Session{}, sessionUnavailable
+		}
 		if err != nil || principal.Status != "active" {
 			s.store.Delete(cookie.Value)
-			return Session{}, false
+			return Session{}, sessionMissing
 		}
 		allowed, err := s.platform.CanAccess(r.Context(), principal)
-		if err != nil || !allowed {
+		if err != nil {
+			return Session{}, sessionUnavailable
+		}
+		if !allowed {
 			s.store.Delete(cookie.Value)
-			return Session{}, false
+			return Session{}, sessionMissing
 		}
 		session.Principal = principal
 	}
-	return session, true
+	return session, sessionValid
 }
 
 func (s *Server) setSessionCookie(w http.ResponseWriter, id string) {

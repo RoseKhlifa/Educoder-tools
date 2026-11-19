@@ -41,9 +41,8 @@ type exerciseDTO struct {
 }
 
 func (s *Server) handleExercises(w http.ResponseWriter, r *http.Request, requestID, course string) {
-	session, ok := s.sessionFromRequest(r)
+	session, ok := s.requireSession(w, r, requestID)
 	if !ok {
-		s.authError(w, requestID)
 		return
 	}
 	if educoderIdentifier(course) != nil {

@@ -18,10 +18,7 @@ func (s *Server) handleTickets(w http.ResponseWriter, r *http.Request, requestID
 	if admin {
 		session, ok = s.adminSession(w, r, requestID)
 	} else {
-		session, ok = s.sessionFromRequest(r)
-		if !ok {
-			s.authError(w, requestID)
-		}
+		session, ok = s.requireSession(w, r, requestID)
 	}
 	if !ok {
 		return

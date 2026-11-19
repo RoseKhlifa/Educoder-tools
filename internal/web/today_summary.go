@@ -55,8 +55,7 @@ func (c *todaySummaryCache) load(ctx context.Context, bank *questionbank.Store, 
 }
 
 func (s *Server) handleTodaySummary(w http.ResponseWriter, r *http.Request, requestID string) {
-	if _, ok := s.sessionFromRequest(r); !ok {
-		s.authError(w, requestID)
+	if _, ok := s.requireSession(w, r, requestID); !ok {
 		return
 	}
 	if r.Method != http.MethodGet {
