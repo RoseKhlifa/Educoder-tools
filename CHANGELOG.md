@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.125 - 2026-11-19
+
+- Document end-to-end solving flows, protocol boundaries and maintainer troubleshooting
+
 ## 0.1.124 - 2026-11-19
 
 - Publish the completion efficiency review and standalone user/admin demo prototypes
