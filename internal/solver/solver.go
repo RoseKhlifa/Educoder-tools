@@ -1029,14 +1029,24 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 		}
 		result.SelfTests = nil
 		result.SelfTestStatus = "skipped"
-		if len(snap.PublicTests) > 0 {
-			result.SelfTestStatus = "running"
+		// Exact bytes that already passed a complete formal evaluation under this
+		// revision and contract learn nothing from the same public samples. The
+		// formal evaluation below stays the only verdict; a failure there returns
+		// to the ordinary repair path with its formal feedback.
+		publicTests := snap.PublicTests
+		if req.Mode == ModeSubmit && formallyVerifiedForSnapshot(bankParent, ref, result.CodeHash) {
+			publicTests = nil
+			result.Diagnostics = append(result.Diagnostics, "题库候选已在相同题目修订下正式评测满分通过，跳过公开自测，直接正式评测")
+		} else {
+			if len(publicTests) > 0 {
+				result.SelfTestStatus = "running"
+			}
+			stage(req, "saving", "准备保存候选代码")
+			stage(req, "selftesting", "正在执行公开自测")
 		}
-		stage(req, "saving", "准备保存候选代码")
-		stage(req, "selftesting", "正在执行公开自测")
 		allPass := true
 		var attemptFeedback []answer.Feedback
-		for _, test := range snap.PublicTests {
+		for _, test := range publicTests {
 			var priorCandidate questionbank.Candidate
 			for _, c := range allCandidates {
 				if c.ID == bankID && c.FilesHash == result.CodeHash {
@@ -1189,7 +1199,7 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			stage(req, "repairing", "公开自测未通过，正在根据反馈自动修复")
 			continue
 		}
-		if len(snap.PublicTests) > 0 {
+		if len(publicTests) > 0 {
 			result.SelfTestStatus = "passed"
 			if !allPass {
 				result.SelfTestStatus = "failed"
@@ -1879,4 +1889,24 @@ func (s *Service) resumeRun(ctx context.Context, adapter Adapter, req Request, r
 	result := &state.Result
 	result.Status = "running"
 	return s.execute(runCtx, adapter, req, snap, ref, state, result, record.CreatedAt)
+}
+
+// formallyVerifiedForSnapshot requires the exact candidate bytes to carry a
+// complete, hash-bound formal pass under the current revision and contract.
+// A status label alone, a normalized derivative or a legacy re-test never
+// qualifies, so those candidates still run every public sample first.
+func formallyVerifiedForSnapshot(c *questionbank.Candidate, ref questionbank.Ref, hash string) bool {
+	if c == nil || c.Status != "upstream_verified" || hash == "" || c.FilesHash != hash || c.Ref != ref {
+		return false
+	}
+	if current, err := problem.HashFiles(c.Files); err != nil || current != hash {
+		return false
+	}
+	for _, v := range c.Validations {
+		if v.Kind == "formal" && v.Result == "passed" && v.FilesHash == hash && v.SavedFilesHash == hash && v.SubmittedFilesHash == hash &&
+			v.RevisionHash == ref.RevisionHash && v.ContractHash == ref.ContractHash && v.Terminal && v.Complete && v.TestCount > 0 && v.PassedCount == v.TestCount {
+			return true
+		}
+	}
+	return false
 }

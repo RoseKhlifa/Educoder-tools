@@ -49,9 +49,11 @@ func TestBoundEmptySelfTestObservationRecovery(t *testing.T) {
 		wantSubmits int
 		wantModels  int
 	}{
-		{"recovers", []string{"", "ok"}, "passed", false, 1, 0},
+		// Submit runs skip public samples for formally verified candidates, so
+		// the empty-observation guard is exercised by an explicit self-test run.
+		{"recovers", []string{"", "ok"}, "selftest_passed", false, 0, 0},
 		{"persistent_conflict", []string{"", ""}, "uncertain", true, 0, 0},
-		{"real_mismatch_after_retry", []string{"", "wrong", "ok"}, "passed", false, 1, 1},
+		{"real_mismatch_after_retry", []string{"", "wrong", "ok"}, "selftest_passed", false, 0, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			snap, c := observationFixture()
@@ -59,7 +61,7 @@ func TestBoundEmptySelfTestObservationRecovery(t *testing.T) {
 			provider := &fakeProvider{candidates: []answer.Candidate{candidate("new-good")}}
 			adapter := &emptyObservationAdapter{fakeAdapter: fakeAdapter{snap: snap}, outputs: tc.outputs}
 			req := formalRuntimeRecoveryRequest()
-			req.MaxModelCalls = 1
+			req.Mode, req.MaxModelCalls = ModeSelfTest, 1
 			r, err := New(store, provider, Config{}).Run(context.Background(), adapter, req)
 			if (err != nil) != tc.wantErr || r.Status != tc.status || adapter.selfTests != 2+tc.wantModels || adapter.submits != tc.wantSubmits || provider.calls != tc.wantModels || r.CostMicroUSD != int64(tc.wantModels) {
 				t.Fatalf("result=%+v err=%v selftests=%d submits=%d model=%d", r, err, adapter.selfTests, adapter.submits, provider.calls)
@@ -187,7 +189,9 @@ func TestEmptyObservationCheckpointFailurePreventsReplay(t *testing.T) {
 	snap, c := observationFixture()
 	store := &observationCheckpointFailureStore{fakeStore: fakeStore{candidates: []questionbank.Candidate{c}}}
 	adapter := &emptyObservationAdapter{fakeAdapter: fakeAdapter{snap: snap}, outputs: []string{"", "ok"}}
-	r, err := New(store, &fakeProvider{}, Config{}).Run(context.Background(), adapter, formalRuntimeRecoveryRequest())
+	req := formalRuntimeRecoveryRequest()
+	req.Mode = ModeSelfTest
+	r, err := New(store, &fakeProvider{}, Config{}).Run(context.Background(), adapter, req)
 	if err == nil || r.Status != "checkpoint_persistence_failed" || adapter.selfTests != 1 || adapter.submits != 0 || r.ModelCalls != 0 {
 		t.Fatalf("replayed without checkpoint: result=%+v err=%v tests=%d submits=%d", r, err, adapter.selfTests, adapter.submits)
 	}

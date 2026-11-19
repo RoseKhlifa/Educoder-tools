@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.132 - 2026-11-20
+
+- Submit candidates with complete formal proof for the same revision directly instead of repeating their public self-tests
+
 ## 0.1.131 - 2026-11-20
 
 - Attach statement figures to programming model requests, reading them only when generation is needed and reporting unavailable figures instead of guessing
