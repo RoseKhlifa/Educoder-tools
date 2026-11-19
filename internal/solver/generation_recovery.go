@@ -278,3 +278,18 @@ func waitRuntimeRetry(ctx context.Context) error {
 		return nil
 	}
 }
+
+// selfTestResourceBackoff spaces retries of a self-test the platform refused
+// for resource pressure. Tests replace it to avoid real waits.
+var selfTestResourceBackoff = []time.Duration{15 * time.Second, 45 * time.Second}
+
+func waitFor(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}

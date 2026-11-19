@@ -164,7 +164,7 @@ func mayContinueAfterLevel(task *educoder.Task, result *Result, err error) bool 
 	}
 	if err != nil {
 		var providerErr *answer.Error
-		if !errors.As(err, &providerErr) && !graphicFailureBeforeWrite(result, err) {
+		if !errors.As(err, &providerErr) && !runtimeFailureBeforeFormal(result, err) {
 			// An untyped error may represent an unknown formal write or persistence
 			// failure. Only confirmed model failures and typed pre-write graphic
 			// failures can continue to another independent level.
@@ -194,6 +194,17 @@ func mayContinueAfterLevel(task *educoder.Task, result *Result, err error) bool 
 // build-sent/accepted mutation remains fail-closed because replaying it could
 // duplicate an upstream submission.
 func graphicFailureBeforeWrite(result *Result, err error) bool {
+	return runtimeFailureBeforeFormal(result, err)
+}
+
+// runtimeFailureBeforeFormal also covers a programming self-test the platform
+// refused before running any code: nothing formal was written, so the level
+// may wait while others run and be retried once at the end of the homework.
+func runtimeFailureBeforeFormal(result *Result, err error) bool {
+	var refused *educoder.SelfTestRefusedError
+	if errors.As(err, &refused) {
+		return true
+	}
 	var mutation *educoder.GraphicMutationError
 	if errors.As(err, &mutation) {
 		switch mutation.Stage {

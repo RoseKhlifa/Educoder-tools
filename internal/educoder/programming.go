@@ -385,11 +385,17 @@ func (c *Client) SelfTest(ctx context.Context, t *Task, filePath, content, input
 	body := map[string]any{"test_case_content": input, "shixun_environment_id": environment.EnvironmentID, "tab_type": environment.TabType, "extras": map[string]any{"homework_common_id": strconv.FormatInt(t.HomeworkID, 10)}}
 	var response struct {
 		Data struct {
-			URL string `json:"wss_url"`
+			URL      string `json:"wss_url"`
+			ErrorMsg string `json:"error_msg"`
 		} `json:"data"`
 	}
 	if err := c.request(ctx, http.MethodPost, "/api/tasks/"+t.Game.Identifier+"/log_output", nil, body, taskRef(t), &response); err != nil {
 		return nil, err
+	}
+	if strings.TrimSpace(response.Data.URL) == "" && strings.TrimSpace(response.Data.ErrorMsg) != "" {
+		// The platform refused to start the run and returned no stream, so the
+		// code never executed. Keep only a fixed classification of its message.
+		return nil, selfTestRefusal(response.Data.ErrorMsg)
 	}
 	endpoint, err := url.Parse(response.Data.URL)
 	if err != nil || (endpoint.Scheme != "wss" && endpoint.Scheme != "ws") || endpoint.Host == "" || endpoint.User != nil || endpoint.Fragment != "" {

@@ -549,6 +549,10 @@ func batchFailureReason(r *Result, err error) string {
 	if errors.As(err, &quotaErr) {
 		return "environment_quota_exhausted"
 	}
+	var refused *educoder.SelfTestRefusedError
+	if errors.As(err, &refused) {
+		return "resource_unavailable"
+	}
 	var resourceErr *educoder.GraphicRuntimeResourceError
 	if errors.As(err, &resourceErr) {
 		return "resource_unavailable"

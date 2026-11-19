@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.138 - 2026-11-20
+
+- Classify platform resource-pressure refusals of the self-test as retryable resource_unavailable instead of an unknown stream failure
+
 ## 0.1.137 - 2026-11-20
 
 - Revert the verified-candidate self-test skip: the platform self-test starts the runtime that game_build needs, and skipping it was rejected with API status -2

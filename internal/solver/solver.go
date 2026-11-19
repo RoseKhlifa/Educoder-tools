@@ -1126,6 +1126,35 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 						_ = s.persist(ctx, result.RunID, state, result.Status, created)
 						return result, errors.New("头歌要求先启动 Hadoop 运行环境")
 					}
+					var refused *educoder.SelfTestRefusedError
+					if errors.As(se, &refused) {
+						// No stream was opened, so the code never ran: this is
+						// neither a code failure nor an unknown write. Wait out
+						// transient platform resource pressure a bounded number of
+						// times with the same candidate, then report it plainly.
+						if refused.Transient() && runtimeAttempt < len(selfTestResourceBackoff) && ctx.Err() == nil {
+							message := "头歌平台运行资源紧张，稍后使用相同代码重试自测"
+							stage(req, "environment_retry", message)
+							result.Diagnostics = append(result.Diagnostics, message)
+							state.Result = *result
+							if err := s.persist(ctx, result.RunID, state, "running", created); err != nil {
+								result.Status = "checkpoint_persistence_failed"
+								return result, err
+							}
+							if waitErr := waitFor(ctx, selfTestResourceBackoff[runtimeAttempt]); waitErr == nil {
+								continue
+							} else {
+								se = waitErr
+							}
+						}
+						if ctx.Err() == nil {
+							result.SelfTestStatus = "unavailable"
+							result.Status = "resource_unavailable"
+							result.Diagnostics = append(result.Diagnostics, se.Error())
+							state.Feedback = append([]answer.Feedback(nil), feedback...)
+							return result, se
+						}
+					}
 					if (startupFailure || emptyConflict) && runtimeAttempt == 0 && ctx.Err() == nil {
 						message := "上游自测环境未启动，稍后使用相同代码重试一次"
 						if emptyConflict {
