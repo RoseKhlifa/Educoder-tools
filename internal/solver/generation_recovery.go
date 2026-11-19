@@ -60,14 +60,14 @@ func (g generationRecovery) profile(cfg Config, calls int, finalRepair bool) ans
 		// first truncation would require a fourth call that the run cannot make.
 		// Model selection, existing evidence, billing and lifetime caps stay
 		// unchanged; only optional reasoning yields its output window.
-		p.Thinking, p.ReasoningEffort, p.MaxTokens = "disabled", "", 8192
+		p.Thinking, p.ReasoningEffort, p.MaxTokens = "disabled", "", answer.MaxOutputTokens
 	}
 	if g.ProBodyDeadlineFallbackUsed {
 		// A complete PRO response did not arrive within its body deadline.
 		// Keep this run on the distinct baseline model after the one-way switch;
 		// call count or repeated code must not select that same stalled PRO again.
 		p = cfg.Profile
-		p.Thinking, p.ReasoningEffort, p.MaxTokens = "disabled", "", 8192
+		p.Thinking, p.ReasoningEffort, p.MaxTokens = "disabled", "", answer.MaxOutputTokens
 	}
 	return p
 }

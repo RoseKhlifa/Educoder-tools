@@ -337,7 +337,7 @@ func buildObjectiveRequest(req ObjectiveRequest) (wireRequest, error) {
 	if p.Model == "" {
 		p = DefaultProfile()
 	}
-	if p.MaxTokens <= 0 || p.MaxTokens > 8192 || (p.Thinking != "disabled" && p.Thinking != "enabled") || (p.Thinking == "disabled" && p.ReasoningEffort != "") {
+	if !validOutputWindow(p) || (p.Thinking == "disabled" && p.ReasoningEffort != "") {
 		return wireRequest{}, &Error{Kind: "invalid_profile"}
 	}
 	if req.Previous != nil {

@@ -51,7 +51,7 @@ func TestAllModelProfilesAreEstimatedAndCharged(t *testing.T) {
 		t.Fatalf("result=%+v err=%v", r, err)
 	}
 	finalPro := answer.ProProfile()
-	finalPro.Thinking, finalPro.ReasoningEffort = "disabled", ""
+	finalPro.Thinking, finalPro.ReasoningEffort, finalPro.MaxTokens = "disabled", "", answer.MaxOutputTokens
 	want := []answer.Profile{answer.DefaultProfile(), answer.RepairProfile(), finalPro}
 	for i, profile := range want {
 		if p.estimates[i].Profile != profile || p.requests[i].Profile != profile {

@@ -38,7 +38,7 @@ func TestRepeatedRejectedOutputStopsWithoutEscalating(t *testing.T) {
 	store := &fakeStore{}
 	a := &fakeAdapter{snap: testSnapshot()}
 	p := &scriptedProvider{estimateCost: 10, generate: func(_ context.Context, req answer.Request, n int) (answer.Result, error) {
-		if req.Profile.Model != answer.DefaultProfile().Model || req.Profile.MaxTokens != 8192 {
+		if req.Profile.Model != answer.DefaultProfile().Model || req.Profile.MaxTokens != answer.OutputTokenLimit(req.Profile.Thinking) {
 			t.Fatalf("unchanged failed answer did not escalate: %+v", req.Profile)
 		}
 		return solved("bad", 2), nil

@@ -45,16 +45,39 @@ type Profile struct {
 	MaxTokens       int    `json:"max_tokens"`
 }
 
+// MaxOutputTokens is the response window for calls without provider
+// reasoning. Their strict JSON answers are short (programming first calls
+// p50 690 tokens), so a longer response is a runaway, not a usable answer.
+const MaxOutputTokens = 8192
+
+// MaxThinkingOutputTokens is the response window when provider reasoning is
+// enabled. Reasoning tokens count toward max_tokens: an 8192 window cut 41% of
+// reasoning repairs before any JSON was emitted, and every such level failed.
+// The provider accepts far larger outputs (deepseek-flash: 384K).
+const MaxThinkingOutputTokens = 32768
+
+// OutputTokenLimit returns the largest max_tokens accepted for a thinking mode.
+func OutputTokenLimit(thinking string) int {
+	if thinking == "enabled" {
+		return MaxThinkingOutputTokens
+	}
+	return MaxOutputTokens
+}
+
+func validOutputWindow(p Profile) bool {
+	return (p.Thinking == "enabled" || p.Thinking == "disabled") && p.MaxTokens > 0 && p.MaxTokens <= OutputTokenLimit(p.Thinking)
+}
+
 func DefaultProfile() Profile {
-	return Profile{Model: "deepseek-flash", Thinking: "disabled", MaxTokens: 8192}
+	return Profile{Model: "deepseek-flash", Thinking: "disabled", MaxTokens: MaxOutputTokens}
 }
 
 func RepairProfile() Profile {
-	return Profile{Model: "deepseek-flash", Thinking: "enabled", ReasoningEffort: "low", MaxTokens: 8192}
+	return Profile{Model: "deepseek-flash", Thinking: "enabled", ReasoningEffort: "low", MaxTokens: MaxThinkingOutputTokens}
 }
 
 func ProProfile() Profile {
-	return Profile{Model: "deepseek-v4-pro", Thinking: "enabled", ReasoningEffort: "low", MaxTokens: 8192}
+	return Profile{Model: "deepseek-v4-pro", Thinking: "enabled", ReasoningEffort: "low", MaxTokens: MaxThinkingOutputTokens}
 }
 
 type Request struct {

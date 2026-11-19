@@ -102,10 +102,7 @@ func buildRequest(req Request) (wireRequest, error) {
 	if p.Model == "" {
 		p = DefaultProfile()
 	}
-	if p.MaxTokens <= 0 || p.MaxTokens > 8192 {
-		return wireRequest{}, &Error{Kind: "invalid_profile"}
-	}
-	if p.Thinking != "disabled" && p.Thinking != "enabled" {
+	if !validOutputWindow(p) {
 		return wireRequest{}, &Error{Kind: "invalid_profile"}
 	}
 	if p.Thinking == "disabled" && p.ReasoningEffort != "" {

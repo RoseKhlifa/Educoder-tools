@@ -165,7 +165,7 @@ func TestObjectiveImageRepairsRetainReasoning(t *testing.T) {
 				t.Fatalf("image repair failed: %+v err=%v estimates=%d submits=%d", result, err, len(provider.estimates), submits.Load())
 			}
 			for index, request := range provider.requests {
-				if len(request.Resources) != 1 || request.Profile.Thinking != tc.thinking[index] || request.Profile.MaxTokens != 8192 || !reflect.DeepEqual(provider.estimates[index].Profile, request.Profile) {
+				if len(request.Resources) != 1 || request.Profile.Thinking != tc.thinking[index] || request.Profile.MaxTokens != answer.OutputTokenLimit(request.Profile.Thinking) || !reflect.DeepEqual(provider.estimates[index].Profile, request.Profile) {
 					t.Fatalf("image/profile drift on attempt %d: %+v resources=%d", index, request.Profile, len(request.Resources))
 				}
 				if request.Profile.Thinking == "enabled" && request.Profile.ReasoningEffort != "low" {

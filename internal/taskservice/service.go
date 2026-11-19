@@ -715,16 +715,15 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			if independent != nil {
 				profile = answer.RepairProfile()
 			}
-			// Objective answers are compact, but reasoning-enabled repair and
-			// pro profiles can consume the entire 4096-token budget before the
-			// JSON answer is emitted. Leave enough room for a complete candidate.
-			profile.MaxTokens = 8192
+			// Profiles carry their own output windows: non-thinking calls use
+			// MaxOutputTokens and reasoning repairs MaxThinkingOutputTokens, because
+			// reasoning tokens share max_tokens with the JSON answer.
 			if compactOutput {
 				// Only an observed truncated response needs a compact retry.
 				// Images (including shared tutorial figures) are not evidence that
 				// semantic repair should lose reasoning. Retain the observed
 				// truncation fallback for the remainder of this run.
-				profile.Thinking, profile.ReasoningEffort = "disabled", ""
+				profile.Thinking, profile.ReasoningEffort, profile.MaxTokens = "disabled", "", answer.MaxOutputTokens
 			}
 			pr := answer.ObjectiveRequest{Problem: snapshot, Previous: previous, Feedback: append(append([]answer.Feedback(nil), legacyFeedback...), attemptHistory.feedback(feedback)...), Profile: profile, Resources: resources}
 			pr.RequireRankedAnswers = req.Mode == solver.ModeSubmit && independent == nil

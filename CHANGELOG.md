@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.129 - 2026-11-20
+
+- Give reasoning repairs a 32K output window so reasoning no longer truncates the answer, and record the correctness speed and capacity plan
+
 ## 0.1.128 - 2026-11-20
 
 - Read the configured origin URL so global insteadOf rewrites cannot reject pinned answer-bank checkouts
