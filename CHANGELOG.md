@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.124 - 2026-11-19
+
+- Publish the completion efficiency review and standalone user/admin demo prototypes
+
 ## 0.1.123 - 2026-11-17
 
 - Normalize single-file execution candidates before hashing while preserving historical verified bank records

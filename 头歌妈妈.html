@@ -1,0 +1,1425 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>头歌妈妈 · touge.mom</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --ink: #1c1612;
+    --ink-soft: #3d322a;
+    --muted: #6b5e54;
+    --muted-2: #8a7b6e;
+    --paper: #f4ebe1;
+    --paper-deep: #ebe0d3;
+    --surface: #fffaf4;
+    --surface-2: #f8f0e7;
+    --line: #ddcfc0;
+    --line-strong: #cbb9a6;
+    --coral: #c24a32;
+    --coral-deep: #8f3422;
+    --coral-soft: rgba(194, 74, 50, 0.12);
+    --coral-mid: rgba(194, 74, 50, 0.18);
+    --coral-ring: rgba(194, 74, 50, 0.22);
+    --amber: #9a6b12;
+    --amber-bg: #f5e6c8;
+    --teal: #1f6b5c;
+    --teal-bg: #dceee8;
+    --blue-ink: #2c4a6e;
+    --blue-bg: #dce6f2;
+    --nav: #221910;
+    --nav-ink: #f6ebe0;
+    --ok: #1f6b5c;
+    --ok-bg: #dceee8;
+    --warn: #9a6b12;
+    --warn-bg: #f5e6c8;
+    --doing: #2c4a6e;
+    --doing-bg: #dce6f2;
+    --radius: 10px;
+    --radius-sm: 7px;
+    --shadow: 0 1px 0 rgba(28,22,18,0.04), 0 8px 24px rgba(28,22,18,0.06);
+    --space-1: 6px;
+    --space-2: 10px;
+    --space-3: 14px;
+    --space-4: 18px;
+    --font: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    --serif: "Noto Serif SC", "Songti SC", "SimSun", serif;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; min-height: 100%;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font);
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input, select { font: inherit; }
+  button { cursor: pointer; }
+  a { color: var(--coral); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .hidden { display: none !important; }
+  :focus-visible {
+    outline: 2px solid var(--coral);
+    outline-offset: 2px;
+  }
+
+  /* ——— Login ——— */
+  #view-login {
+    min-height: 100vh;
+    display: grid;
+    grid-template-columns: minmax(300px, 0.92fr) minmax(360px, 1.08fr);
+  }
+  .login-brand {
+    background:
+      linear-gradient(165deg, rgba(194,74,50,0.18), transparent 42%),
+      radial-gradient(ellipse 80% 60% at 20% 90%, rgba(154,107,18,0.16), transparent 55%),
+      var(--nav);
+    color: var(--nav-ink);
+    padding: 36px 40px 40px;
+    display: flex; flex-direction: column;
+    position: relative;
+    overflow: hidden;
+  }
+  .login-brand::before {
+    content: "";
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(246,235,224,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(246,235,224,0.04) 1px, transparent 1px);
+    background-size: 28px 28px;
+    mask-image: linear-gradient(180deg, #000 30%, transparent 95%);
+    pointer-events: none;
+  }
+  .login-brand > * { position: relative; }
+  .brand-mark {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 40px;
+  }
+  .mark-seal {
+    width: 40px; height: 40px; border-radius: 10px;
+    background: var(--coral);
+    color: #fffaf4;
+    display: grid; place-items: center;
+    font-family: var(--serif);
+    font-weight: 700; font-size: 18px;
+    box-shadow: 0 6px 16px rgba(194,74,50,0.35);
+  }
+  .mark-text strong {
+    display: block; font-size: 17px; font-weight: 700; letter-spacing: 0.02em;
+  }
+  .mark-text span {
+    display: block; font-size: 12px; color: rgba(246,235,224,0.62);
+    letter-spacing: 0.04em; margin-top: 2px;
+  }
+  .login-brand h1 {
+    margin: 0 0 12px;
+    font-family: var(--serif);
+    font-size: 38px; font-weight: 700;
+    line-height: 1.22; letter-spacing: 0.01em;
+  }
+  .login-brand .lede {
+    margin: 0 0 24px;
+    font-size: 15px; line-height: 1.65;
+    color: rgba(246,235,224,0.78);
+    max-width: 32em;
+  }
+  .brand-points {
+    display: grid; gap: 8px;
+    margin-top: auto;
+  }
+  .brand-points ul { margin: 0; padding: 0; display: contents; }
+  .brand-points li {
+    list-style: none;
+    display: grid;
+    grid-template-columns: 22px 1fr;
+    gap: 10px;
+    align-items: start;
+    padding: 11px 13px;
+    border: 1px solid rgba(246,235,224,0.12);
+    border-radius: var(--radius);
+    background: rgba(246,235,224,0.05);
+    font-size: 14px;
+    color: rgba(246,235,224,0.88);
+  }
+  .dot {
+    width: 22px; height: 22px; border-radius: 50%;
+    display: grid; place-items: center;
+    font-size: 11px; font-weight: 700;
+    background: rgba(194,74,50,0.9); color: #fff;
+  }
+
+  .login-panel {
+    background: var(--paper);
+    display: flex; flex-direction: column;
+    justify-content: center;
+    padding: 40px 48px;
+    border-left: 1px solid var(--line);
+  }
+  .login-panel-inner {
+    width: min(440px, 100%);
+    margin: 0 auto;
+  }
+  .login-kicker {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12px; font-weight: 700;
+    color: var(--coral-deep); letter-spacing: 0.06em;
+    margin-bottom: 10px;
+  }
+  .login-kicker::before {
+    content: ""; width: 18px; height: 2px; background: var(--coral-deep);
+  }
+  .login-panel h2 {
+    margin: 0 0 6px;
+    font-size: 26px; font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .login-panel .sub {
+    margin: 0 0 20px; color: var(--muted); font-size: 14px;
+  }
+  .login-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px 20px 16px;
+    box-shadow: var(--shadow);
+  }
+  .field { margin-bottom: 14px; }
+  .field label {
+    display: block; font-size: 13px; font-weight: 600;
+    color: var(--ink-soft); margin-bottom: 6px;
+  }
+  .field input, .field select {
+    width: 100%; height: 44px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    padding: 0 12px;
+    background: #fff; color: var(--ink);
+    outline: none; font-size: 15px;
+  }
+  .field input::placeholder { color: #a89888; }
+  .field input:focus, .field select:focus {
+    border-color: var(--coral);
+    box-shadow: 0 0 0 3px var(--coral-ring);
+  }
+  .btn-primary {
+    width: 100%; height: 46px; margin-top: 4px;
+    border: 0; border-radius: var(--radius-sm);
+    background: var(--coral); color: #fffaf4;
+    font-size: 15px; font-weight: 600;
+    transition: background .15s ease, transform .1s ease;
+  }
+  .btn-primary:hover { background: var(--coral-deep); }
+  .btn-primary:active { transform: translateY(1px); }
+  .login-meta {
+    display: flex; justify-content: space-between; gap: 12px;
+    margin-top: 14px; font-size: 12px; color: var(--muted);
+  }
+  .login-foot {
+    margin-top: 18px; padding-top: 14px;
+    border-top: 1px dashed var(--line);
+    font-size: 14px; color: var(--muted); line-height: 1.55;
+  }
+  .login-foot strong { color: var(--ink-soft); font-weight: 600; }
+
+  /* ——— App shell ——— */
+  #view-app { min-height: 100vh; display: flex; flex-direction: column; }
+  .global-nav {
+    position: sticky; top: 0; z-index: 20;
+    height: 56px;
+    background: var(--nav);
+    color: var(--nav-ink);
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    padding: 0 20px 0 18px;
+    border-bottom: 1px solid rgba(246,235,224,0.08);
+  }
+  .nav-brand {
+    display: flex; align-items: center; gap: 10px;
+    border: 0; background: none; color: inherit; padding: 0;
+    text-align: left;
+  }
+  .nav-brand:hover .name { color: #fff; }
+  .nav-brand .mark-seal { width: 30px; height: 30px; font-size: 14px; border-radius: 8px; box-shadow: none; }
+  .nav-brand .name { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; transition: color .15s; }
+  .nav-brand .domain {
+    font-size: 11px; color: rgba(246,235,224,0.55);
+    margin-left: 2px; font-weight: 500; letter-spacing: 0.04em;
+  }
+  .nav-links {
+    display: flex; gap: 4px;
+    background: rgba(246,235,224,0.06);
+    padding: 4px; border-radius: 999px;
+  }
+  .nav-link {
+    border: 0; background: transparent;
+    padding: 7px 16px; border-radius: 999px;
+    font-size: 13px; font-weight: 500;
+    color: rgba(246,235,224,0.62);
+    transition: background .15s, color .15s;
+  }
+  .nav-link:hover { color: #fff; background: rgba(246,235,224,0.08); }
+  .nav-link.active {
+    background: var(--coral); color: #fff; font-weight: 600;
+  }
+  .nav-link.active:hover { background: var(--coral); color: #fff; }
+  .nav-user {
+    justify-self: end;
+    display: flex; align-items: center; gap: 10px;
+    font-size: 13px; color: rgba(246,235,224,0.72);
+  }
+  .avatar {
+    width: 30px; height: 30px; border-radius: 50%;
+    background: var(--coral-soft); color: #ffd7cc;
+    border: 1px solid rgba(246,235,224,0.18);
+    display: grid; place-items: center;
+    font-size: 12px; font-weight: 700;
+  }
+
+  .workspace {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 220px minmax(0, 1fr);
+    min-height: calc(100vh - 56px);
+  }
+  .side {
+    background: var(--paper-deep);
+    border-right: 1px solid var(--line);
+    padding: 16px 12px;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .side-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: var(--space-3);
+  }
+  .side-card h3 {
+    margin: 0 0 10px;
+    font-size: 12px; font-weight: 700;
+    letter-spacing: 0.06em; color: var(--muted);
+  }
+  .stat-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 7px 0; border-bottom: 1px solid var(--line);
+    font-size: 14px;
+  }
+  .stat-row:last-child { border-bottom: 0; padding-bottom: 0; }
+  .stat-row .n {
+    font-family: var(--serif);
+    font-size: 22px; font-weight: 700; color: var(--ink);
+    line-height: 1;
+  }
+  .stat-row .l { color: var(--muted); font-size: 13px; }
+  .side-note {
+    font-size: 12px; color: var(--muted); line-height: 1.55;
+    margin: 0;
+  }
+  .side-pill {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 10px; border-radius: 999px;
+    background: var(--coral-soft); color: var(--coral-deep);
+    font-size: 12px; font-weight: 600;
+  }
+  .side-pill i {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--coral); display: inline-block;
+  }
+
+  .main {
+    padding: 18px 22px 36px;
+    background:
+      linear-gradient(180deg, rgba(194,74,50,0.04), transparent 120px),
+      var(--paper);
+  }
+  .page-head {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    gap: 14px; margin-bottom: 14px; flex-wrap: wrap;
+  }
+  .page-head h1 {
+    margin: 0 0 4px;
+    font-size: 22px; font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .page-head p {
+    margin: 0; font-size: 14px; color: var(--muted); max-width: 42em;
+  }
+  .head-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .btn {
+    height: 38px; padding: 0 14px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--line-strong);
+    background: var(--surface);
+    color: var(--ink); font-size: 14px; font-weight: 600;
+    transition: background .15s, border-color .15s, color .15s, opacity .15s, box-shadow .15s;
+  }
+  .btn:hover:not(:disabled) { background: #fff; border-color: #b9a690; }
+  .btn:active:not(:disabled) { transform: translateY(1px); }
+  .btn.accent {
+    background: var(--coral); border-color: var(--coral); color: #fff;
+    box-shadow: 0 1px 0 rgba(143,52,34,0.2);
+  }
+  .btn.accent:hover:not(:disabled) {
+    background: var(--coral-deep); border-color: var(--coral-deep);
+  }
+  .btn:disabled {
+    opacity: 1;
+    cursor: not-allowed;
+    background: var(--paper-deep);
+    border-color: var(--line);
+    color: var(--muted-2);
+    box-shadow: none;
+  }
+  .btn.accent:disabled {
+    background: rgba(194,74,50,0.28);
+    border-color: transparent;
+    color: rgba(255,250,244,0.72);
+  }
+
+  .strip {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .strip-item {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+  }
+  .strip-item .k {
+    font-size: 12px; color: var(--muted); font-weight: 600; margin-bottom: 4px;
+  }
+  .strip-item .v {
+    font-family: var(--serif);
+    font-size: 22px; font-weight: 700; line-height: 1.1;
+  }
+  .strip-item .h { font-size: 12px; color: var(--muted-2); margin-top: 4px; }
+
+  .panel-box {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .panel-toolbar {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; flex-wrap: wrap;
+    padding: 11px 14px;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--line);
+  }
+  .panel-toolbar .stats {
+    margin: 0; font-size: 13px; color: var(--muted);
+  }
+  .panel-toolbar .stats strong { color: var(--ink); font-weight: 700; }
+
+  .course-table { width: 100%; border-collapse: collapse; }
+  .course-table thead th {
+    text-align: left; font-size: 12px; font-weight: 700;
+    color: var(--muted); letter-spacing: 0.04em;
+    padding: 10px 14px; background: #faf4ec;
+    border-bottom: 1px solid var(--line);
+  }
+  .course-row td {
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: middle;
+    font-size: 14px;
+    transition: background .12s;
+  }
+  .course-row:last-child td { border-bottom: 0; }
+  .course-row { cursor: pointer; }
+  .course-row:hover td { background: rgba(194,74,50,0.04); }
+  .course-row.selected td {
+    background: var(--coral-soft);
+    box-shadow: inset 3px 0 0 var(--coral);
+  }
+  .course-row.selected:hover td { background: var(--coral-mid); }
+  .course-row .check {
+    width: 16px; height: 16px; accent-color: var(--coral);
+    cursor: pointer;
+  }
+  .course-name {
+    font-size: 15px; font-weight: 700; color: var(--ink);
+    margin: 0 0 2px;
+  }
+  .course-meta { font-size: 12px; color: var(--muted); }
+  .badge {
+    display: inline-flex; align-items: center; height: 24px;
+    padding: 0 9px; border-radius: 999px;
+    font-size: 12px; font-weight: 600; white-space: nowrap;
+    background: var(--paper-deep); color: var(--muted);
+  }
+  .badge.todo { background: var(--warn-bg); color: var(--warn); }
+  .badge.doing { background: var(--doing-bg); color: var(--doing); }
+  .badge.done { background: var(--ok-bg); color: var(--ok); }
+  .badge.friend {
+    background: var(--coral-soft); color: var(--coral-deep);
+    border: 1px solid rgba(194,74,50,0.28);
+  }
+  .badge.remain { background: var(--coral-soft); color: var(--coral-deep); }
+  .badge.pct {
+    background: var(--surface-2); color: var(--ink-soft);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Homework */
+  .hw-summary {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    margin-bottom: 12px;
+  }
+  .hw-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 30px; padding: 0 12px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--surface);
+    font-size: 13px; font-weight: 600; color: var(--ink-soft);
+  }
+  .hw-chip b { font-family: var(--serif); font-size: 16px; color: var(--ink); }
+  .hw-list { display: flex; flex-direction: column; gap: 12px; }
+  .hw-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+    border-left: 3px solid var(--line-strong);
+  }
+  .hw-card.status-todo { border-left-color: var(--warn); }
+  .hw-card.status-doing { border-left-color: var(--doing); }
+  .hw-card.status-done { border-left-color: var(--ok); }
+  .hw-top {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 12px; align-items: start;
+    padding: 14px 16px 8px;
+  }
+  .hw-top h3 {
+    margin: 0 0 3px; font-size: 16px; font-weight: 700;
+  }
+  .hw-top .meta { font-size: 13px; color: var(--muted); }
+  .hw-badges { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+  .bar-wrap { padding: 0 16px 12px; }
+  .bar-meta {
+    display: flex; justify-content: space-between;
+    font-size: 12px; color: var(--muted); margin-bottom: 6px;
+  }
+  .bar-meta strong { color: var(--ink-soft); font-weight: 600; }
+  .bar {
+    height: 8px; background: var(--paper-deep); border-radius: 999px;
+    overflow: hidden;
+  }
+  .bar > i {
+    display: block; height: 100%;
+    background: linear-gradient(90deg, var(--coral), #e07a5f);
+    border-radius: inherit;
+    transition: width .35s ease;
+  }
+  .bar.done > i { background: linear-gradient(90deg, var(--ok), #4a9a88); }
+  .tasks {
+    border-top: 1px solid var(--line);
+    display: grid;
+  }
+  .task {
+    display: grid;
+    grid-template-columns: 1fr auto auto;
+    gap: 12px; align-items: center;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--line);
+    font-size: 14px;
+  }
+  .task:nth-child(even) { background: rgba(244,235,225,0.35); }
+  .task:last-child { border-bottom: 0; }
+  .task.friend-row { background: rgba(194,74,50,0.06); }
+  .task .who { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .task .who.friend {
+    color: var(--coral-deep); font-weight: 700;
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .task .who.friend::before {
+    content: ""; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--coral);
+    box-shadow: 0 0 0 3px var(--coral-soft);
+  }
+
+  /* Settings — compact preference list */
+  .settings-shell {
+    display: grid;
+    grid-template-columns: 168px minmax(0, 1fr);
+    gap: 12px;
+    align-items: start;
+  }
+  .settings-nav {
+    position: sticky; top: 70px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    padding: 8px;
+    display: flex; flex-direction: column; gap: 2px;
+  }
+  .settings-nav-item {
+    border: 0; background: transparent;
+    text-align: left;
+    padding: 9px 12px;
+    border-radius: 8px;
+    font-size: 13px; font-weight: 600;
+    color: var(--muted);
+    transition: background .12s, color .12s;
+  }
+  .settings-nav-item:hover { background: rgba(194,74,50,0.06); color: var(--ink-soft); }
+  .settings-nav-item.active {
+    background: var(--coral-soft);
+    color: var(--coral-deep);
+  }
+  .settings-panels {
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .settings-block {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .settings-block > header {
+    display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+    padding: 12px 16px 10px;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--line);
+  }
+  .settings-block > header h3 {
+    margin: 0; font-size: 14px; font-weight: 700; color: var(--ink);
+  }
+  .settings-block > header .desc {
+    margin: 0; font-size: 12px; color: var(--muted); line-height: 1.4;
+    text-align: right; max-width: 28em;
+  }
+  .settings-list { display: flex; flex-direction: column; }
+  .settings-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 14px; align-items: center;
+    min-height: 48px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--line);
+    font-size: 14px;
+  }
+  .settings-item:last-child { border-bottom: 0; }
+  .settings-item:nth-child(even) { background: rgba(244,235,225,0.28); }
+  .settings-item .item-copy { min-width: 0; }
+  .settings-item .item-title {
+    display: block; font-weight: 600; color: var(--ink-soft); line-height: 1.35;
+  }
+  .settings-item .item-hint {
+    display: block; margin-top: 2px;
+    font-size: 12px; color: var(--muted-2); line-height: 1.4;
+  }
+  .settings-item .item-control {
+    display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+  }
+  .settings-select {
+    height: 34px; min-width: 148px; max-width: 220px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    padding: 0 30px 0 11px;
+    background:
+      #fff
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%236b5e54' d='M1.1 1.2 6 6.1l4.9-4.9 1.1 1.1L6 8.2.0 2.3z'/%3E%3C/svg%3E")
+      no-repeat right 10px center;
+    color: var(--ink);
+    appearance: none; -webkit-appearance: none;
+    font-size: 13px; font-weight: 600;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.7);
+  }
+  .settings-select:hover { border-color: #b9a690; }
+  .settings-select:focus {
+    outline: none;
+    border-color: var(--coral);
+    box-shadow: 0 0 0 3px var(--coral-ring);
+  }
+  .account-chip {
+    display: inline-flex; align-items: center; gap: 10px;
+  }
+  .account-chip .avatar {
+    width: 34px; height: 34px;
+    background: var(--coral-soft);
+    color: var(--coral-deep);
+    border: 1px solid rgba(194,74,50,0.22);
+  }
+  .account-chip .who strong {
+    display: block; font-size: 14px; font-weight: 700; color: var(--ink); line-height: 1.2;
+  }
+  .account-chip .who span {
+    display: block; font-size: 12px; color: var(--muted); margin-top: 2px;
+  }
+  .btn.quiet {
+    height: 34px; padding: 0 12px;
+    background: transparent;
+    border: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 13px; font-weight: 600;
+    box-shadow: none;
+  }
+  .btn.quiet:hover:not(:disabled) {
+    background: var(--paper-deep);
+    border-color: var(--line-strong);
+    color: var(--ink-soft);
+  }
+  .about-grid {
+    display: grid;
+    grid-template-columns: 1.2fr 0.8fr;
+    gap: 0;
+  }
+  .about-grid .settings-item { align-items: start; }
+  .about-meta {
+    display: flex; flex-wrap: wrap; gap: 6px 10px;
+    margin-top: 8px;
+  }
+  .about-meta span {
+    display: inline-flex; align-items: center;
+    height: 24px; padding: 0 9px;
+    border-radius: 999px;
+    background: var(--paper-deep);
+    color: var(--muted);
+    font-size: 12px; font-weight: 600;
+  }
+  .about-meta span.brand {
+    background: var(--coral-soft);
+    color: var(--coral-deep);
+  }
+  .toggle {
+    position: relative; width: 42px; height: 24px; flex-shrink: 0;
+  }
+  .toggle input { opacity: 0; width: 0; height: 0; position: absolute; }
+  .toggle span {
+    position: absolute; inset: 0;
+    background: var(--line-strong);
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background .15s;
+  }
+  .toggle span::after {
+    content: ""; position: absolute;
+    width: 18px; height: 18px; border-radius: 50%;
+    background: #fff; top: 3px; left: 3px;
+    box-shadow: 0 1px 3px rgba(28,22,18,0.2);
+    transition: transform .15s;
+  }
+  .toggle input:checked + span { background: var(--coral); }
+  .toggle input:checked + span::after { transform: translateX(18px); }
+  .page-head .demo-hint {
+    margin: 6px 0 0;
+    font-size: 12px; color: var(--muted-2);
+  }
+
+  .empty {
+    padding: 36px 24px; text-align: center; color: var(--muted);
+    border: 1px dashed var(--line-strong); border-radius: 12px;
+    background: var(--surface); font-size: 14px;
+  }
+
+  .toast {
+    position: fixed; left: 50%; bottom: 28px;
+    transform: translateX(-50%) translateY(12px);
+    background: var(--nav); color: var(--nav-ink);
+    padding: 12px 18px; border-radius: 999px;
+    font-size: 14px; font-weight: 500; white-space: nowrap;
+    opacity: 0; pointer-events: none; z-index: 40;
+    box-shadow: 0 10px 30px rgba(28,22,18,0.25);
+    transition: opacity .22s ease, transform .22s ease;
+    border: 1px solid rgba(246,235,224,0.12);
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  @media (max-width: 980px) {
+    #view-login { grid-template-columns: 1fr; }
+    .login-brand { min-height: auto; padding-bottom: 28px; }
+    .workspace { grid-template-columns: 1fr; }
+    .side { display: none; }
+    .strip { grid-template-columns: repeat(2, 1fr); }
+    .settings-shell { grid-template-columns: 1fr; }
+    .settings-nav {
+      position: static;
+      flex-direction: row; flex-wrap: wrap; gap: 4px;
+    }
+    .settings-nav-item { padding: 8px 11px; }
+    .settings-block > header { flex-direction: column; align-items: flex-start; }
+    .settings-block > header .desc { text-align: left; max-width: none; }
+    .about-grid { grid-template-columns: 1fr; }
+    .global-nav { grid-template-columns: auto 1fr auto; gap: 8px; }
+    .nav-brand .domain { display: none; }
+  }
+  @media (max-width: 640px) {
+    .login-panel { padding: 28px 20px; }
+    .login-brand { padding: 28px 22px; }
+    .login-brand h1 { font-size: 28px; }
+    .main { padding: 14px 12px 28px; }
+    .page-head h1 { font-size: 20px; }
+    .hw-top { grid-template-columns: 1fr; }
+    .hw-badges { justify-content: flex-start; }
+    .task { grid-template-columns: 1fr; gap: 6px; }
+    .course-table thead { display: none; }
+    .course-row, .course-row td { display: block; width: 100%; }
+    .course-row td { border-bottom: 0; padding: 5px 14px; }
+    .course-row td:first-child { padding-top: 12px; }
+    .course-row td:last-child { padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+    .course-row.selected td { box-shadow: none; }
+    .course-row.selected { box-shadow: inset 3px 0 0 var(--coral); }
+    .nav-link { padding: 7px 10px; font-size: 12px; }
+    .strip { grid-template-columns: 1fr 1fr; }
+  }
+</style>
+</head>
+<body>
+  <div id="view-login">
+    <aside class="login-brand" aria-label="品牌介绍">
+      <div class="brand-mark">
+        <div class="mark-seal" aria-hidden="true">妈</div>
+        <div class="mark-text">
+          <strong>头歌妈妈</strong>
+          <span>touge.mom</span>
+        </div>
+      </div>
+      <h1>盯着头歌<br />把课刷完</h1>
+      <p class="lede">头歌平台刷课助手。勾选未完成课程，一键交给代做；作业状态可查，「好友代做中」看得见。</p>
+      <div class="brand-points">
+        <ul>
+          <li><span class="dot">1</span><span>未完成课程多选，一键全部刷课</span></li>
+          <li><span class="dot">2</span><span>作业：待开始 / 进行中 / 已完成</span></li>
+          <li><span class="dot">3</span><span>「好友代做中」进度可见</span></li>
+        </ul>
+      </div>
+    </aside>
+    <section class="login-panel">
+      <div class="login-panel-inner">
+        <div class="login-kicker">TOUGE.MOM</div>
+        <h2>登录头歌妈妈</h2>
+        <p class="sub">使用头歌 / 学习平台账号进入。本页为可点原型，不连接真实接口。</p>
+        <form class="login-card" id="login-form">
+          <div class="field">
+            <label for="account">学习账号</label>
+            <input id="account" name="account" autocomplete="username" placeholder="学号、手机号或头歌账号" value="张同学" required />
+          </div>
+          <div class="field">
+            <label for="password">密码</label>
+            <input id="password" name="password" type="password" autocomplete="current-password" placeholder="学习平台密码" required />
+          </div>
+          <button class="btn-primary" type="submit">进入工作台</button>
+          <div class="login-meta">
+            <span>演示：任意非空账号密码即可</span>
+            <span>对象：头歌平台</span>
+          </div>
+        </form>
+        <p class="login-foot">刷课对象是<strong>头歌</strong>，域名是 <strong>touge.mom</strong>，所以叫<strong>头歌妈妈</strong>。诚实演示，不编造评价或完成率。</p>
+      </div>
+    </section>
+  </div>
+
+  <div id="view-app" class="hidden">
+    <header class="global-nav">
+      <button class="nav-brand" type="button" id="brand-home">
+        <span class="mark-seal" aria-hidden="true">妈</span>
+        <span class="name">头歌妈妈</span>
+        <span class="domain">touge.mom</span>
+      </button>
+      <nav class="nav-links" aria-label="主导航">
+        <button class="nav-link active" data-nav="courses" type="button">未完成课程</button>
+        <button class="nav-link" data-nav="homework" type="button">作业状态</button>
+        <button class="nav-link" data-nav="settings" type="button">设置</button>
+      </nav>
+      <div class="nav-user">
+        <span id="user-name">张同学</span>
+        <div class="avatar" id="user-avatar">张</div>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="side" aria-label="侧栏概况">
+        <div class="side-card">
+          <h3>今日概况</h3>
+          <div class="stat-row"><span class="l">未完成课程</span><span class="n" id="side-courses">5</span></div>
+          <div class="stat-row"><span class="l">已选中</span><span class="n" id="side-selected">0</span></div>
+          <div class="stat-row"><span class="l">好友代做中</span><span class="n" id="side-friend">4</span></div>
+        </div>
+        <div class="side-card">
+          <h3>平台</h3>
+          <span class="side-pill"><i></i> 头歌 / touge.mom</span>
+          <p class="side-note" style="margin-top:10px">本地 mock 状态机。勾选与刷课不调用真实接口，也不改动头歌账号数据。</p>
+        </div>
+        <div class="side-card">
+          <h3>状态图例</h3>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            <span class="badge todo">待开始</span>
+            <span class="badge doing">进行中</span>
+            <span class="badge done">已完成</span>
+            <span class="badge friend">好友代做中</span>
+          </div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <div id="panel-courses">
+          <div class="page-head">
+            <div>
+              <h1>未完成课程</h1>
+              <p>勾选需要处理的课程，或一键全部刷课。提交后到「作业状态」查看好友代做进度。</p>
+            </div>
+            <div class="head-actions">
+              <button class="btn" type="button" id="btn-select-all">一键全部刷课</button>
+              <button class="btn accent" type="button" id="btn-start" disabled>开始刷选中</button>
+            </div>
+          </div>
+
+          <div class="strip" aria-label="课程摘要">
+            <div class="strip-item"><div class="k">未完成课程</div><div class="v" id="course-count">5</div><div class="h">头歌平台同步，演示数据</div></div>
+            <div class="strip-item"><div class="k">待处理作业</div><div class="v" id="task-total">14</div><div class="h">含测验 / 报告 / 主观题</div></div>
+            <div class="strip-item"><div class="k">已选中</div><div class="v" id="selected-count">0</div><div class="h">可多选后开始刷课</div></div>
+            <div class="strip-item"><div class="k">好友代做中</div><div class="v" id="friend-strip">4</div><div class="h">进度在作业页可见</div></div>
+          </div>
+
+          <div class="panel-box">
+            <div class="panel-toolbar">
+              <p class="stats">列表共 <strong id="course-count-2">5</strong> 门 · 已选 <strong id="selected-count-2">0</strong> 门</p>
+              <div class="actions" style="display:flex;gap:8px">
+                <button class="btn" type="button" id="btn-clear">清空选择</button>
+              </div>
+            </div>
+            <table class="course-table" aria-label="未完成课程列表">
+              <thead>
+                <tr>
+                  <th style="width:44px">选</th>
+                  <th>课程</th>
+                  <th style="width:120px">学期</th>
+                  <th style="width:90px">学分</th>
+                  <th style="width:120px">未完成</th>
+                  <th style="width:100px">可代做</th>
+                </tr>
+              </thead>
+              <tbody id="course-grid"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div id="panel-homework" class="hidden">
+          <div class="page-head">
+            <div>
+              <h1>作业完成状态</h1>
+              <p>按课程查看进度。标有「好友代做中」的条目正由好友处理，不是黑箱。</p>
+            </div>
+            <div class="head-actions">
+              <button class="btn" type="button" id="btn-to-courses">返回选课</button>
+            </div>
+          </div>
+          <div class="hw-summary" id="hw-summary" aria-label="作业汇总"></div>
+          <div class="hw-list" id="homework-list"></div>
+        </div>
+
+        <div id="panel-settings" class="hidden">
+          <div class="page-head">
+            <div>
+              <h1>设置</h1>
+              <p>刷课节奏、通知与代做策略。改动只留在本页。</p>
+              <p class="demo-hint">本地演示偏好，不会同步到头歌平台。</p>
+            </div>
+          </div>
+          <div class="settings-shell">
+            <nav class="settings-nav" aria-label="设置分组">
+              <button type="button" class="settings-nav-item active" data-settings-nav="sec-speed">刷课倍速</button>
+              <button type="button" class="settings-nav-item" data-settings-nav="sec-notify">通知偏好</button>
+              <button type="button" class="settings-nav-item" data-settings-nav="sec-delegate">代做偏好</button>
+              <button type="button" class="settings-nav-item" data-settings-nav="sec-account">账号与绑定</button>
+              <button type="button" class="settings-nav-item" data-settings-nav="sec-about">关于</button>
+            </nav>
+            <div class="settings-panels">
+              <section class="settings-block" id="sec-speed">
+                <header>
+                  <h3>刷课倍速</h3>
+                  <p class="desc">模拟观看 / 测验节奏</p>
+                </header>
+                <div class="settings-list">
+                  <div class="settings-item">
+                    <div class="item-copy">
+                      <label class="item-title" for="set-speed">默认倍速</label>
+                      <span class="item-hint">正式版对接平台限速策略</span>
+                    </div>
+                    <div class="item-control">
+                      <select class="settings-select" id="set-speed">
+                        <option value="1">1.0×</option>
+                        <option value="1.25">1.25×</option>
+                        <option value="1.5" selected>1.5×</option>
+                        <option value="2">2.0×</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="settings-item">
+                    <div class="item-copy">
+                      <label class="item-title" for="set-auto-next">自动下一节</label>
+                      <span class="item-hint">本节结束后接续下一节</span>
+                    </div>
+                    <div class="item-control">
+                      <label class="toggle"><input id="set-auto-next" type="checkbox" checked /><span></span></label>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="settings-block" id="sec-notify">
+                <header>
+                  <h3>通知偏好</h3>
+                  <p class="desc">作业进度变化时的提醒</p>
+                </header>
+                <div class="settings-list">
+                  <div class="settings-item">
+                    <div class="item-copy">
+                      <label class="item-title" for="set-notify-friend">好友代做进度更新</label>
+                      <span class="item-hint">「好友代做中」状态变化时提示</span>
+                    </div>
+                    <div class="item-control">
+                      <label class="toggle"><input id="set-notify-friend" type="checkbox" checked /><span></span></label>
+                    </div>
+                  </div>
+                  <div class="settings-item">
+                    <div class="item-copy">
+                      <label class="item-title" for="set-notify-done">整课完成提醒</label>
+                      <span class="item-hint">一门课全部项完成后汇总</span>
+                    </div>
+                    <div class="item-control">
+                      <label class="toggle"><input id="set-notify-done" type="checkbox" checked /><span></span></label>
+                    </div>
+                  </div>
+                  <div class="settings-item">
+                    <div class="item-copy">
+                      <label class="item-title" for="set-notify-quiet">勿扰时段</label>
+                      <span class="item-hint">23:00–07:00 静音本地提示</span>
+                    </div>
+                    <div class="item-control">
+                      <label class="toggle"><input id="set-notify-quiet" type="checkbox" /><span></span></label>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="settings-block" id="sec-delegate">
+                <header>
+                  <h3>代做偏好</h3>
+                  <p class="desc">提交刷课时的默认策略</p>
+                </header>
+                <div class="settings-list">
+                  <div class="settings-item">
+                    <div class="item-copy">
+                      <label class="item-title" for="set-friend-pref">默认交给</label>
+                      <span class="item-hint">一键 / 选中提交时的分配方式</span>
+                    </div>
+                    <div class="item-control">
+                      <select class="settings-select" id="set-friend-pref">
+                        <option value="any" selected>任意在线好友</option>
+                        <option value="fast">优先最快完成</option>
+                        <option value="careful">优先细心打分</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div class="settings-item">
+                    <div class="item-copy">
+                      <label class="item-title" for="set-subjective">主观题也代做</label>
+                      <span class="item-hint">报告 / 简答一并进入好友队列</span>
+                    </div>
+                    <div class="item-control">
+                      <label class="toggle"><input id="set-subjective" type="checkbox" checked /><span></span></label>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="settings-block" id="sec-account">
+                <header>
+                  <h3>账号与绑定</h3>
+                  <p class="desc">头歌学习账号（演示）</p>
+                </header>
+                <div class="settings-list">
+                  <div class="settings-item">
+                    <div class="item-copy">
+                      <span class="item-title">当前账号</span>
+                      <span class="item-hint">用于顶栏显示与作业归属示意</span>
+                    </div>
+                    <div class="item-control">
+                      <div class="account-chip">
+                        <div class="avatar" id="set-account-avatar">张</div>
+                        <div class="who">
+                          <strong id="set-account-label">张同学</strong>
+                          <span>头歌学习账号</span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="settings-item">
+                    <div class="item-copy">
+                      <label class="item-title" for="set-keep-login">保持登录 7 天</label>
+                      <span class="item-hint">本机记住演示会话</span>
+                    </div>
+                    <div class="item-control">
+                      <label class="toggle"><input id="set-keep-login" type="checkbox" checked /><span></span></label>
+                    </div>
+                  </div>
+                  <div class="settings-item">
+                    <div class="item-copy">
+                      <span class="item-title">退出登录</span>
+                      <span class="item-hint">返回登录页，清空本页选择</span>
+                    </div>
+                    <div class="item-control">
+                      <button class="btn quiet" type="button" id="btn-logout">退出登录</button>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section class="settings-block" id="sec-about">
+                <header>
+                  <h3>关于头歌妈妈</h3>
+                  <p class="desc">品牌与版本</p>
+                </header>
+                <div class="settings-list about-grid">
+                  <div class="settings-item">
+                    <div class="item-copy">
+                      <span class="item-title">面向头歌平台的刷课助手</span>
+                      <span class="item-hint">刷课对象是头歌，域名是 touge.mom，所以叫头歌妈妈。</span>
+                      <div class="about-meta">
+                        <span class="brand">touge.mom</span>
+                        <span>暖纸编辑台</span>
+                        <span>本地演示</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="settings-item">
+                    <div class="item-copy">
+                      <span class="item-title">版本</span>
+                      <span class="item-hint">界面迭代标识</span>
+                    </div>
+                    <div class="item-control">
+                      <strong style="font-size:13px;color:var(--ink-soft);font-variant-numeric:tabular-nums">v3 · 设置精修</strong>
+                    </div>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status"></div>
+
+<script>
+const COURSES = [
+  { id: 'phy', name: '大学物理实验', remain: 3, credit: 1.0, term: '2025 秋' },
+  { id: 'marx', name: '马克思主义基本原理', remain: 2, credit: 3.0, term: '2025 秋' },
+  { id: 'py', name: 'Python 程序设计', remain: 4, credit: 2.5, term: '2025 秋' },
+  { id: 'math', name: '高等数学 A', remain: 2, credit: 4.0, term: '2025 秋' },
+  { id: 'eng', name: '大学英语 IV', remain: 3, credit: 2.0, term: '2025 秋' },
+];
+
+const HOMEWORK = {
+  phy: { status: 'doing', progress: 45, tasks: [
+    { name: '力学实验报告', status: 'done', who: '已完成' },
+    { name: '光学章节测验', status: 'doing', who: '好友代做中' },
+    { name: '实验预习主观题', status: 'todo', who: '待开始' },
+  ]},
+  marx: { status: 'todo', progress: 0, tasks: [
+    { name: '第三章节测验', status: 'todo', who: '待开始' },
+    { name: '主观题作业：唯物史观', status: 'todo', who: '待开始' },
+  ]},
+  py: { status: 'doing', progress: 60, tasks: [
+    { name: '列表与字典章节测验', status: 'done', who: '已完成' },
+    { name: '爬虫小实验报告', status: 'doing', who: '好友代做中' },
+    { name: '函数编程主观题', status: 'doing', who: '好友代做中' },
+    { name: '期末综合测验', status: 'todo', who: '待开始' },
+  ]},
+  math: { status: 'doing', progress: 30, tasks: [
+    { name: '极限与连续章节测验', status: 'done', who: '已完成' },
+    { name: '积分主观题作业', status: 'doing', who: '好友代做中' },
+  ]},
+  eng: { status: 'done', progress: 100, tasks: [
+    { name: 'Unit 4 听力测验', status: 'done', who: '已完成' },
+    { name: '议论文写作', status: 'done', who: '已完成' },
+    { name: '口语录音作业', status: 'done', who: '已完成' },
+  ]},
+};
+
+const STATUS_LABEL = { todo: '待开始', doing: '进行中', done: '已完成' };
+const selected = new Set();
+
+function $(id){ return document.getElementById(id); }
+function showToast(msg){
+  const t = $('toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(showToast._t); showToast._t = setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+function friendCount(){
+  let n = 0;
+  Object.values(HOMEWORK).forEach(h => h.tasks.forEach(t => { if (t.who === '好友代做中') n++; }));
+  return n;
+}
+
+function taskStats(){
+  let todo = 0, doing = 0, done = 0, friend = 0, total = 0;
+  Object.values(HOMEWORK).forEach(h => h.tasks.forEach(t => {
+    total++;
+    if (t.status === 'todo') todo++;
+    else if (t.status === 'doing') doing++;
+    else if (t.status === 'done') done++;
+    if (t.who === '好友代做中') friend++;
+  }));
+  return { todo, doing, done, friend, total };
+}
+
+function recomputeCourse(id){
+  const h = HOMEWORK[id];
+  if (!h) return;
+  const n = h.tasks.length || 1;
+  const doneN = h.tasks.filter(t => t.status === 'done').length;
+  const doingN = h.tasks.filter(t => t.status === 'doing').length;
+  h.progress = Math.round((doneN / n) * 100);
+  if (doneN === n) h.status = 'done';
+  else if (doingN > 0 || doneN > 0) h.status = 'doing';
+  else h.status = 'todo';
+}
+
+/** Mark todo tasks in selected courses as friend-doing; bump progress. */
+function submitBrush(ids){
+  let touched = 0;
+  ids.forEach(id => {
+    const h = HOMEWORK[id];
+    if (!h) return;
+    h.tasks.forEach(t => {
+      if (t.status === 'todo') {
+        t.status = 'doing';
+        t.who = '好友代做中';
+        touched++;
+      }
+    });
+    recomputeCourse(id);
+  });
+  return touched;
+}
+
+function setView(view){
+  if (view === 'login') {
+    $('view-login').classList.remove('hidden');
+    $('view-app').classList.add('hidden');
+    location.hash = '#login';
+    return;
+  }
+  $('view-login').classList.add('hidden');
+  $('view-app').classList.remove('hidden');
+  setPanel(view === 'homework' ? 'homework' : view === 'settings' ? 'settings' : 'courses');
+}
+
+function setPanel(panel){
+  ['courses','homework','settings'].forEach(p => {
+    $('panel-' + p).classList.toggle('hidden', p !== panel);
+    document.querySelector(`.nav-link[data-nav="${p}"]`)?.classList.toggle('active', p === panel);
+  });
+  location.hash = '#' + panel;
+  if (panel === 'homework') renderHomework();
+  if (panel === 'courses') syncSide();
+  if (panel === 'settings') {
+    syncAccountUI($('user-name').textContent);
+  }
+}
+
+document.querySelectorAll('[data-settings-nav]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const id = btn.dataset.settingsNav;
+    document.querySelectorAll('[data-settings-nav]').forEach(b => b.classList.toggle('active', b === btn));
+    const el = $(id);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+});
+
+function syncSide(){
+  const st = taskStats();
+  $('side-courses').textContent = COURSES.length;
+  $('side-selected').textContent = selected.size;
+  $('side-friend').textContent = st.friend;
+  $('course-count').textContent = COURSES.length;
+  $('course-count-2').textContent = COURSES.length;
+  $('selected-count').textContent = selected.size;
+  $('selected-count-2').textContent = selected.size;
+  $('friend-strip').textContent = st.friend;
+  $('task-total').textContent = st.total;
+  const btn = $('btn-start');
+  btn.disabled = selected.size === 0;
+  btn.textContent = selected.size ? `开始刷选中（${selected.size}）` : '开始刷选中';
+}
+
+function renderCourses(){
+  syncSide();
+  $('course-grid').innerHTML = COURSES.map(c => `
+    <tr class="course-row ${selected.has(c.id) ? 'selected' : ''}" data-id="${c.id}">
+      <td><input class="check" type="checkbox" ${selected.has(c.id) ? 'checked' : ''} data-id="${c.id}" aria-label="选择 ${c.name}" /></td>
+      <td>
+        <p class="course-name">${c.name}</p>
+        <div class="course-meta">头歌平台 · 可代做</div>
+      </td>
+      <td>${c.term}</td>
+      <td>${c.credit}</td>
+      <td><span class="badge remain">未完成 ${c.remain} 项</span></td>
+      <td><span class="badge">可代做</span></td>
+    </tr>
+  `).join('');
+  $('course-grid').querySelectorAll('.check').forEach(el => {
+    el.addEventListener('change', () => {
+      if (el.checked) selected.add(el.dataset.id); else selected.delete(el.dataset.id);
+      renderCourses();
+    });
+  });
+  $('course-grid').querySelectorAll('.course-row').forEach(row => {
+    row.addEventListener('click', (e) => {
+      if (e.target.classList.contains('check')) return;
+      const id = row.dataset.id;
+      const box = row.querySelector('.check');
+      if (selected.has(id)) { selected.delete(id); box.checked = false; }
+      else { selected.add(id); box.checked = true; }
+      renderCourses();
+    });
+  });
+}
+
+function renderHomework(){
+  const st = taskStats();
+  $('hw-summary').innerHTML = `
+    <span class="hw-chip">待开始 <b>${st.todo}</b></span>
+    <span class="hw-chip">进行中 <b>${st.doing}</b></span>
+    <span class="hw-chip">已完成 <b>${st.done}</b></span>
+    <span class="hw-chip"><span class="badge friend" style="height:22px">好友代做中</span> <b>${st.friend}</b></span>
+  `;
+  $('homework-list').innerHTML = COURSES.map(c => {
+    const h = HOMEWORK[c.id];
+    const friendN = h.tasks.filter(t => t.who === '好友代做中').length;
+    return `
+      <article class="hw-card status-${h.status}">
+        <div class="hw-top">
+          <div>
+            <h3>${c.name}</h3>
+            <div class="meta">作业 ${h.tasks.length} 项 · ${c.term}${friendN ? ` · ${friendN} 项好友代做中` : ''}</div>
+          </div>
+          <div class="hw-badges">
+            <span class="badge ${h.status}">${STATUS_LABEL[h.status]}</span>
+            <span class="badge pct">${h.progress}%</span>
+          </div>
+        </div>
+        <div class="bar-wrap">
+          <div class="bar-meta"><span>完成进度</span><strong>${h.progress}%</strong></div>
+          <div class="bar ${h.status === 'done' ? 'done' : ''}"><i style="width:${h.progress}%"></i></div>
+        </div>
+        <div class="tasks">
+          ${h.tasks.map(t => `
+            <div class="task${t.who === '好友代做中' ? ' friend-row' : ''}">
+              <span>${t.name}</span>
+              <span class="who${t.who === '好友代做中' ? ' friend' : ''}">${t.who}</span>
+              <span class="badge ${t.status}">${STATUS_LABEL[t.status]}</span>
+            </div>
+          `).join('')}
+        </div>
+      </article>`;
+  }).join('');
+  syncSide();
+}
+
+function applyHash(){
+  const h = (location.hash || '#login').slice(1);
+  if (h === 'login') setView('login');
+  else if (['courses','homework','settings'].includes(h)) {
+    $('view-login').classList.add('hidden');
+    $('view-app').classList.remove('hidden');
+    setPanel(h);
+  } else setView('login');
+}
+
+function prettyName(raw){
+  const name = (raw || '').trim();
+  if (!name) return '张同学';
+  if (/^\d{1,4}$/.test(name)) return '张同学';
+  return name;
+}
+
+function syncAccountUI(raw){
+  const name = prettyName(raw);
+  $('user-name').textContent = name;
+  $('user-avatar').textContent = name.slice(0, 1);
+  const label = $('set-account-label');
+  const avatar = $('set-account-avatar');
+  if (label) label.textContent = name;
+  if (avatar) avatar.textContent = name.slice(0, 1);
+}
+
+$('login-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const account = $('account').value.trim();
+  const password = $('password').value.trim();
+  if (!account || !password) return;
+  syncAccountUI(account);
+  setView('courses');
+  showToast('已登录头歌妈妈，未完成课程已同步（演示）');
+});
+
+document.querySelectorAll('.nav-link').forEach(btn => {
+  btn.addEventListener('click', () => setPanel(btn.dataset.nav));
+});
+
+$('brand-home').addEventListener('click', () => setPanel('courses'));
+$('btn-to-courses').addEventListener('click', () => setPanel('courses'));
+
+$('btn-clear').addEventListener('click', () => {
+  selected.clear();
+  renderCourses();
+  showToast('已清空选择');
+});
+
+$('btn-select-all').addEventListener('click', () => {
+  COURSES.forEach(c => selected.add(c.id));
+  const n = submitBrush([...selected]);
+  renderCourses();
+  showToast(n ? `已全选并提交 ${COURSES.length} 门 · ${n} 项交给好友代做` : `已全选 ${COURSES.length} 门 · 暂无新的待办可提交`);
+  setTimeout(() => setPanel('homework'), 650);
+});
+
+$('btn-start').addEventListener('click', () => {
+  if (!selected.size) return;
+  const ids = [...selected];
+  const n = submitBrush(ids);
+  showToast(n ? `已提交 ${ids.length} 门 · ${n} 项好友代做中` : `已提交 ${ids.length} 门 · 暂无新的待办`);
+  selected.clear();
+  renderCourses();
+  setTimeout(() => setPanel('homework'), 650);
+});
+
+$('btn-logout').addEventListener('click', () => {
+  selected.clear();
+  setView('login');
+  showToast('已退出演示登录');
+});
+
+['set-speed','set-auto-next','set-notify-friend','set-notify-done','set-notify-quiet','set-friend-pref','set-subjective','set-keep-login'].forEach(id => {
+  const el = $(id);
+  if (!el) return;
+  el.addEventListener('change', () => showToast('设置已更新（仅本页演示）'));
+});
+
+renderCourses();
+applyHash();
+window.addEventListener('hashchange', applyHash);
+</script>
+</body>
+</html>

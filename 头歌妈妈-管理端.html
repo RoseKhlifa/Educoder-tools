@@ -1,0 +1,1435 @@
+<!DOCTYPE html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>头歌妈妈 · 管理端演示 · touge.mom</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --ink: #1c1612;
+    --ink-soft: #3d322a;
+    --muted: #6b5e54;
+    --muted-2: #8a7b6e;
+    --paper: #f4ebe1;
+    --paper-deep: #ebe0d3;
+    --surface: #fffaf4;
+    --surface-2: #f8f0e7;
+    --line: #ddcfc0;
+    --line-strong: #cbb9a6;
+    --coral: #c24a32;
+    --coral-deep: #8f3422;
+    --coral-soft: rgba(194, 74, 50, 0.12);
+    --coral-mid: rgba(194, 74, 50, 0.18);
+    --coral-ring: rgba(194, 74, 50, 0.22);
+    --amber: #9a6b12;
+    --amber-bg: #f5e6c8;
+    --teal: #1f6b5c;
+    --teal-bg: #dceee8;
+    --blue-ink: #2c4a6e;
+    --blue-bg: #dce6f2;
+    --nav: #221910;
+    --nav-ink: #f6ebe0;
+    --ok: #1f6b5c;
+    --ok-bg: #dceee8;
+    --warn: #9a6b12;
+    --warn-bg: #f5e6c8;
+    --doing: #2c4a6e;
+    --doing-bg: #dce6f2;
+    --danger: #a12c2c;
+    --danger-bg: #f3d6d2;
+    --radius: 10px;
+    --radius-sm: 7px;
+    --shadow: 0 1px 0 rgba(28,22,18,0.04), 0 8px 24px rgba(28,22,18,0.06);
+    --space-1: 6px;
+    --space-2: 10px;
+    --space-3: 14px;
+    --space-4: 18px;
+    --font: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    --serif: "Noto Serif SC", "Songti SC", "SimSun", serif;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; min-height: 100%;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font);
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  button, input, select { font: inherit; }
+  button { cursor: pointer; }
+  a { color: var(--coral); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .hidden { display: none !important; }
+  :focus-visible {
+    outline: 2px solid var(--coral);
+    outline-offset: 2px;
+  }
+
+  /* ——— Login ——— */
+  #view-login {
+    min-height: 100vh;
+    display: grid;
+    grid-template-columns: minmax(280px, 0.85fr) minmax(360px, 1.15fr);
+  }
+  .login-brand {
+    background:
+      linear-gradient(165deg, rgba(194,74,50,0.2), transparent 42%),
+      radial-gradient(ellipse 80% 60% at 20% 90%, rgba(154,107,18,0.16), transparent 55%),
+      var(--nav);
+    color: var(--nav-ink);
+    padding: 36px 40px 40px;
+    display: flex; flex-direction: column;
+    position: relative;
+    overflow: hidden;
+  }
+  .login-brand::before {
+    content: "";
+    position: absolute; inset: 0;
+    background-image:
+      linear-gradient(rgba(246,235,224,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(246,235,224,0.04) 1px, transparent 1px);
+    background-size: 28px 28px;
+    mask-image: linear-gradient(180deg, #000 30%, transparent 95%);
+    pointer-events: none;
+  }
+  .login-brand > * { position: relative; }
+  .brand-mark {
+    display: flex; align-items: center; gap: 12px;
+    margin-bottom: 36px;
+  }
+  .mark-seal {
+    width: 40px; height: 40px; border-radius: 10px;
+    background: var(--coral);
+    color: #fffaf4;
+    display: grid; place-items: center;
+    font-family: var(--serif);
+    font-weight: 700; font-size: 18px;
+    box-shadow: 0 6px 16px rgba(194,74,50,0.35);
+  }
+  .mark-text strong {
+    display: block; font-size: 17px; font-weight: 700; letter-spacing: 0.02em;
+  }
+  .mark-text span {
+    display: block; font-size: 12px; color: rgba(246,235,224,0.62);
+    letter-spacing: 0.04em; margin-top: 2px;
+  }
+  .login-brand h1 {
+    margin: 0 0 12px;
+    font-family: var(--serif);
+    font-size: 34px; font-weight: 700;
+    line-height: 1.25; letter-spacing: 0.01em;
+  }
+  .login-brand .lede {
+    margin: 0 0 22px;
+    font-size: 15px; line-height: 1.65;
+    color: rgba(246,235,224,0.78);
+    max-width: 30em;
+  }
+  .brand-points { display: grid; gap: 8px; margin-top: auto; }
+  .brand-points li {
+    list-style: none;
+    display: grid;
+    grid-template-columns: 22px 1fr;
+    gap: 10px;
+    align-items: start;
+    padding: 11px 13px;
+    border: 1px solid rgba(246,235,224,0.12);
+    border-radius: var(--radius);
+    background: rgba(246,235,224,0.05);
+    font-size: 14px;
+    color: rgba(246,235,224,0.88);
+  }
+  .brand-points ul { margin: 0; padding: 0; display: contents; }
+  .dot {
+    width: 22px; height: 22px; border-radius: 50%;
+    display: grid; place-items: center;
+    font-size: 11px; font-weight: 700;
+    background: rgba(194,74,50,0.9); color: #fff;
+  }
+  .login-panel {
+    background: var(--paper);
+    display: flex; flex-direction: column;
+    justify-content: center;
+    padding: 40px 48px;
+    border-left: 1px solid var(--line);
+  }
+  .login-panel-inner { width: min(440px, 100%); margin: 0 auto; }
+  .login-kicker {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12px; font-weight: 700;
+    color: var(--coral-deep); letter-spacing: 0.06em;
+    margin-bottom: 10px;
+  }
+  .login-kicker::before {
+    content: ""; width: 18px; height: 2px; background: var(--coral-deep);
+  }
+  .login-panel h2 {
+    margin: 0 0 6px;
+    font-size: 26px; font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .login-panel .sub {
+    margin: 0 0 20px; color: var(--muted); font-size: 14px;
+  }
+  .login-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 20px 20px 16px;
+    box-shadow: var(--shadow);
+  }
+  .field { margin-bottom: 14px; }
+  .field label {
+    display: block; font-size: 13px; font-weight: 600;
+    color: var(--ink-soft); margin-bottom: 6px;
+  }
+  .field input, .field select, .search-input {
+    width: 100%; height: 44px;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-sm);
+    padding: 0 12px;
+    background: #fff; color: var(--ink);
+    outline: none; font-size: 15px;
+  }
+  .field input::placeholder, .search-input::placeholder { color: #a89888; }
+  .field input:focus, .field select:focus, .search-input:focus {
+    border-color: var(--coral);
+    box-shadow: 0 0 0 3px var(--coral-ring);
+  }
+  .btn-primary {
+    width: 100%; height: 46px; margin-top: 4px;
+    border: 0; border-radius: var(--radius-sm);
+    background: var(--coral); color: #fffaf4;
+    font-size: 15px; font-weight: 600;
+    transition: background .15s ease, transform .1s ease;
+  }
+  .btn-primary:hover { background: var(--coral-deep); }
+  .btn-primary:active { transform: translateY(1px); }
+  .login-meta {
+    display: flex; justify-content: space-between; gap: 12px;
+    margin-top: 14px; font-size: 12px; color: var(--muted);
+  }
+  .login-foot {
+    margin-top: 18px; padding-top: 14px;
+    border-top: 1px dashed var(--line);
+    font-size: 13px; color: var(--muted); line-height: 1.55;
+  }
+  .login-foot strong { color: var(--ink-soft); font-weight: 600; }
+  .skip-link {
+    display: inline-flex; align-items: center; gap: 6px;
+    margin-top: 12px; font-size: 13px; font-weight: 600;
+    color: var(--coral-deep); border: 0; background: none; padding: 0;
+  }
+  .skip-link:hover { text-decoration: underline; }
+
+  /* ——— App shell ——— */
+  #view-app { min-height: 100vh; display: flex; flex-direction: column; }
+  .topbar {
+    position: sticky; top: 0; z-index: 30;
+    height: 54px;
+    background: var(--nav);
+    color: var(--nav-ink);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 18px 0 16px;
+    border-bottom: 1px solid rgba(246,235,224,0.08);
+  }
+  .top-left { display: flex; align-items: center; gap: 12px; }
+  .nav-brand {
+    display: flex; align-items: center; gap: 10px;
+    border: 0; background: none; color: inherit; padding: 0;
+  }
+  .nav-brand .mark-seal { width: 28px; height: 28px; font-size: 13px; border-radius: 8px; box-shadow: none; }
+  .nav-brand .name { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; }
+  .admin-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 24px; padding: 0 10px;
+    border-radius: 999px;
+    background: rgba(194,74,50,0.28);
+    border: 1px solid rgba(246,235,224,0.14);
+    color: #ffd7cc;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.04em;
+  }
+  .admin-chip i {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #ffb39f; display: inline-block;
+  }
+  .top-right {
+    display: flex; align-items: center; gap: 12px;
+    font-size: 13px; color: rgba(246,235,224,0.72);
+  }
+  .demo-banner {
+    height: 28px;
+    display: flex; align-items: center; justify-content: center;
+    gap: 8px;
+    background: var(--amber-bg);
+    color: var(--amber);
+    font-size: 12px; font-weight: 600;
+    border-bottom: 1px solid #e6d3a8;
+  }
+  .demo-banner span { opacity: 0.85; font-weight: 500; }
+  .avatar {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--coral-soft); color: #ffd7cc;
+    border: 1px solid rgba(246,235,224,0.18);
+    display: grid; place-items: center;
+    font-size: 11px; font-weight: 700;
+  }
+  .btn-quiet {
+    height: 30px; padding: 0 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(246,235,224,0.18);
+    background: transparent; color: rgba(246,235,224,0.78);
+    font-size: 12px; font-weight: 600;
+  }
+  .btn-quiet:hover { background: rgba(246,235,224,0.08); color: #fff; }
+
+  .shell {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 212px minmax(0, 1fr);
+    min-height: calc(100vh - 82px);
+  }
+  .side {
+    background: var(--paper-deep);
+    border-right: 1px solid var(--line);
+    padding: 14px 10px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .side-label {
+    margin: 2px 8px 4px;
+    font-size: 11px; font-weight: 700;
+    letter-spacing: 0.08em; color: var(--muted);
+  }
+  .side-nav { display: flex; flex-direction: column; gap: 3px; }
+  .side-link {
+    display: flex; align-items: center; gap: 10px;
+    width: 100%; text-align: left;
+    border: 0; background: transparent;
+    padding: 9px 11px; border-radius: 8px;
+    font-size: 13px; font-weight: 600;
+    color: var(--ink-soft);
+    transition: background .12s, color .12s;
+  }
+  .side-link:hover { background: rgba(194,74,50,0.07); color: var(--ink); }
+  .side-link.active {
+    background: var(--coral); color: #fffaf4;
+    box-shadow: 0 1px 0 rgba(143,52,34,0.2);
+  }
+  .side-link .ico {
+    width: 18px; height: 18px; border-radius: 5px;
+    display: grid; place-items: center;
+    font-size: 11px; font-weight: 700;
+    background: rgba(28,22,18,0.06); color: inherit;
+    flex-shrink: 0;
+  }
+  .side-link.active .ico { background: rgba(255,250,244,0.18); }
+  .side-link .cnt {
+    margin-left: auto;
+    min-width: 20px; height: 18px; padding: 0 6px;
+    border-radius: 999px;
+    background: rgba(28,22,18,0.08);
+    font-size: 11px; font-weight: 700;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .side-link.active .cnt { background: rgba(255,250,244,0.22); color: #fff; }
+  .side-foot {
+    margin-top: auto;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 12px;
+  }
+  .side-foot .t { font-size: 12px; font-weight: 700; color: var(--ink-soft); margin: 0 0 4px; }
+  .side-foot p { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+  .main {
+    padding: 16px 20px 32px;
+    background:
+      linear-gradient(180deg, rgba(194,74,50,0.04), transparent 110px),
+      var(--paper);
+  }
+  .page-head {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    gap: 14px; margin-bottom: 12px; flex-wrap: wrap;
+  }
+  .page-head h1 {
+    margin: 0 0 3px;
+    font-size: 21px; font-weight: 700;
+    letter-spacing: -0.01em;
+  }
+  .page-head p {
+    margin: 0; font-size: 13px; color: var(--muted); max-width: 48em;
+  }
+  .head-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+  .btn {
+    height: 36px; padding: 0 13px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--line-strong);
+    background: var(--surface);
+    color: var(--ink); font-size: 13px; font-weight: 600;
+    transition: background .15s, border-color .15s, color .15s;
+  }
+  .btn:hover { background: #fff; border-color: #b9a690; }
+  .btn:active { transform: translateY(1px); }
+  .btn.accent {
+    background: var(--coral); border-color: var(--coral); color: #fff;
+  }
+  .btn.accent:hover { background: var(--coral-deep); border-color: var(--coral-deep); }
+  .btn.ghost {
+    background: transparent; border-color: transparent; color: var(--muted);
+  }
+  .btn.ghost:hover { background: rgba(28,22,18,0.04); color: var(--ink); }
+
+  .strip {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .strip.cols-3 { grid-template-columns: repeat(3, 1fr); }
+  .strip.cols-5 { grid-template-columns: repeat(5, 1fr); }
+  .strip-item {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    position: relative;
+    overflow: hidden;
+  }
+  .strip-item::after {
+    content: "";
+    position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    background: var(--line-strong);
+  }
+  .strip-item.coral::after { background: var(--coral); }
+  .strip-item.teal::after { background: var(--teal); }
+  .strip-item.amber::after { background: var(--amber); }
+  .strip-item.blue::after { background: var(--blue-ink); }
+  .strip-item.danger::after { background: var(--danger); }
+  .strip-item .k {
+    font-size: 12px; color: var(--muted); font-weight: 600; margin-bottom: 4px;
+  }
+  .strip-item .v {
+    font-family: var(--serif);
+    font-size: 24px; font-weight: 700; line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+  }
+  .strip-item .h { font-size: 12px; color: var(--muted-2); margin-top: 4px; }
+  .strip-item .delta {
+    display: inline-flex; align-items: center;
+    margin-left: 6px; font-size: 11px; font-weight: 700;
+    color: var(--teal); font-family: var(--font);
+  }
+  .strip-item .delta.down { color: var(--danger); }
+
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1.35fr 1fr;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .grid-2.equal { grid-template-columns: 1fr 1fr; }
+
+  .panel-box {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .panel-toolbar {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; flex-wrap: wrap;
+    padding: 10px 14px;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--line);
+  }
+  .panel-toolbar h2 {
+    margin: 0; font-size: 14px; font-weight: 700; color: var(--ink);
+  }
+  .panel-toolbar .stats {
+    margin: 0; font-size: 12px; color: var(--muted);
+  }
+  .panel-toolbar .stats strong { color: var(--ink); font-weight: 700; }
+  .panel-body { padding: 12px 14px; }
+  .panel-body.tight { padding: 0; }
+
+  .data-table { width: 100%; border-collapse: collapse; }
+  .data-table thead th {
+    text-align: left; font-size: 11px; font-weight: 700;
+    color: var(--muted); letter-spacing: 0.05em;
+    padding: 9px 14px; background: #faf4ec;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  .data-table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: middle;
+    font-size: 13px;
+  }
+  .data-table tr:last-child td { border-bottom: 0; }
+  .data-table tbody tr:hover td { background: rgba(194,74,50,0.04); }
+  .cell-strong { font-weight: 700; color: var(--ink); }
+  .cell-meta { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .mono { font-variant-numeric: tabular-nums; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+
+  .badge {
+    display: inline-flex; align-items: center; height: 22px;
+    padding: 0 8px; border-radius: 999px;
+    font-size: 11px; font-weight: 700; white-space: nowrap;
+    background: var(--paper-deep); color: var(--muted);
+  }
+  .badge.ok { background: var(--ok-bg); color: var(--ok); }
+  .badge.warn { background: var(--warn-bg); color: var(--warn); }
+  .badge.doing { background: var(--doing-bg); color: var(--doing); }
+  .badge.fail { background: var(--danger-bg); color: var(--danger); }
+  .badge.queue { background: var(--paper-deep); color: var(--ink-soft); }
+  .badge.off { background: #eee6dc; color: var(--muted-2); }
+  .badge.coral { background: var(--coral-soft); color: var(--coral-deep); }
+
+  .toolbar-row {
+    display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+  }
+  .search-input { width: 220px; height: 36px; font-size: 13px; }
+  .filter-seg {
+    display: inline-flex; gap: 2px;
+    background: var(--paper-deep);
+    padding: 3px; border-radius: 999px;
+    border: 1px solid var(--line);
+  }
+  .filter-seg button {
+    border: 0; background: transparent;
+    height: 28px; padding: 0 11px; border-radius: 999px;
+    font-size: 12px; font-weight: 600; color: var(--muted);
+  }
+  .filter-seg button.active {
+    background: var(--surface); color: var(--ink);
+    box-shadow: 0 1px 2px rgba(28,22,18,0.06);
+  }
+
+  .feed-list { display: flex; flex-direction: column; gap: 0; }
+  .feed-item {
+    display: grid;
+    grid-template-columns: 64px 1fr auto;
+    gap: 10px; align-items: start;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line);
+    font-size: 13px;
+  }
+  .feed-item:last-child { border-bottom: 0; padding-bottom: 0; }
+  .feed-item:first-child { padding-top: 0; }
+  .feed-time { font-size: 11px; color: var(--muted-2); font-variant-numeric: tabular-nums; padding-top: 2px; }
+  .feed-title { font-weight: 600; color: var(--ink); }
+  .feed-desc { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+  .node-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+  }
+  .node-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 12px 13px;
+  }
+  .node-card .top {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 8px; margin-bottom: 8px;
+  }
+  .node-card .name { font-weight: 700; font-size: 14px; }
+  .node-meta {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 6px 10px;
+    font-size: 12px; color: var(--muted);
+  }
+  .node-meta b { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+  .bar {
+    margin-top: 10px; height: 7px; border-radius: 999px;
+    background: var(--paper-deep); overflow: hidden;
+  }
+  .bar > i {
+    display: block; height: 100%; border-radius: 999px;
+    background: linear-gradient(90deg, var(--coral), #d9785a);
+  }
+  .bar.teal > i { background: linear-gradient(90deg, var(--teal), #3a9a86); }
+  .bar.warn > i { background: linear-gradient(90deg, var(--amber), #c4922a); }
+
+  .settings-list { display: flex; flex-direction: column; }
+  .settings-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 16px; align-items: center;
+    padding: 14px 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .settings-row:last-child { border-bottom: 0; }
+  .settings-row h3 { margin: 0 0 3px; font-size: 14px; font-weight: 700; }
+  .settings-row p { margin: 0; font-size: 12px; color: var(--muted); }
+  .toggle {
+    width: 42px; height: 24px; border-radius: 999px;
+    border: 0; background: var(--line-strong); position: relative;
+    transition: background .15s;
+  }
+  .toggle.on { background: var(--coral); }
+  .toggle::after {
+    content: "";
+    position: absolute; top: 3px; left: 3px;
+    width: 18px; height: 18px; border-radius: 50%;
+    background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+    transition: left .15s;
+  }
+  .toggle.on::after { left: 21px; }
+
+  .ai-cards {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+  .mini-stat {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    padding: 12px;
+  }
+  .mini-stat .k { font-size: 12px; color: var(--muted); font-weight: 600; }
+  .mini-stat .v {
+    margin-top: 4px;
+    font-family: var(--serif); font-size: 22px; font-weight: 700;
+  }
+  .mini-stat .h { margin-top: 3px; font-size: 11px; color: var(--muted-2); }
+
+  .empty-hint {
+    padding: 28px 16px; text-align: center;
+    color: var(--muted); font-size: 13px;
+  }
+
+  @media (max-width: 1100px) {
+    .strip, .strip.cols-5 { grid-template-columns: repeat(2, 1fr); }
+    .grid-2, .ai-cards, .node-grid { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 860px) {
+    #view-login { grid-template-columns: 1fr; }
+    .login-brand { display: none; }
+    .shell { grid-template-columns: 1fr; }
+    .side { display: none; }
+    .search-input { width: 160px; }
+  }
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="view-login">
+  <aside class="login-brand">
+    <div class="brand-mark">
+      <div class="mark-seal">妈</div>
+      <div class="mark-text">
+        <strong>头歌妈妈</strong>
+        <span>touge.mom · 管理端</span>
+      </div>
+    </div>
+    <h1>运营后台<br/>暖纸编辑台</h1>
+    <p class="lede">管理刷课队列、代做节点与用户状态。本页为<strong>管理端演示原型</strong>，数据均为 mock，不连接真实头歌平台。</p>
+    <div class="brand-points">
+      <ul>
+        <li><span class="dot">1</span><span>总览今日刷课、作业代做与异常</span></li>
+        <li><span class="dot">2</span><span>队列 / 节点 / 用户一屏可切</span></li>
+        <li><span class="dot">3</span><span>视觉延续用户端：深暖顶栏 · 纸感 · 珊瑚</span></li>
+      </ul>
+    </div>
+  </aside>
+  <section class="login-panel">
+    <div class="login-panel-inner">
+      <div class="login-kicker">ADMIN DEMO</div>
+      <h2>管理员登录</h2>
+      <p class="sub">演示账号任意填写即可进入；也可跳过直接进后台。</p>
+      <form class="login-card" id="login-form" autocomplete="on">
+        <div class="field">
+          <label for="admin-user">管理员账号</label>
+          <input id="admin-user" name="user" type="text" placeholder="例如 admin" value="admin" />
+        </div>
+        <div class="field">
+          <label for="admin-pass">密码</label>
+          <input id="admin-pass" name="pass" type="password" placeholder="演示随意" value="demo" />
+        </div>
+        <button class="btn-primary" type="submit">进入管理端</button>
+        <div class="login-meta">
+          <span>角色：超级管理员（mock）</span>
+          <span>环境：演示</span>
+        </div>
+      </form>
+      <button type="button" class="skip-link" id="skip-login">跳过登录，直接进后台 →</button>
+      <div class="login-foot">
+        <strong>管理端演示</strong> · 与用户端 <code style="font-size:12px">头歌妈妈.html</code> 分文件存放，互不覆盖。截图与交互仅用于原型评审。
+      </div>
+    </div>
+  </section>
+</div>
+
+<!-- APP -->
+<div id="view-app" class="hidden">
+  <header class="topbar">
+    <div class="top-left">
+      <button class="nav-brand" type="button" id="brand-home" title="回到总览">
+        <div class="mark-seal">妈</div>
+        <span class="name">头歌妈妈</span>
+      </button>
+      <span class="admin-chip"><i></i>管理端演示</span>
+    </div>
+    <div class="top-right">
+      <span>今日 21:14 · Asia/Shanghai</span>
+      <div class="avatar">运</div>
+      <span>运营小陈</span>
+      <button type="button" class="btn-quiet" id="btn-logout">退出</button>
+    </div>
+  </header>
+  <div class="demo-banner">
+    管理端演示原型 · mock 数据 · 不写库 / 不调真实接口
+    <span>视觉：暖纸编辑台（深暖顶栏 · 纸感底 · 珊瑚主色 · 中高密度）</span>
+  </div>
+
+  <div class="shell">
+    <aside class="side">
+      <div class="side-label">运营</div>
+      <nav class="side-nav" aria-label="管理导航">
+        <button class="side-link active" data-nav="overview" type="button"><span class="ico">览</span>总览</button>
+        <button class="side-link" data-nav="users" type="button"><span class="ico">户</span>用户管理</button>
+        <button class="side-link" data-nav="tasks" type="button"><span class="ico">队</span>任务队列<span class="cnt">7</span></button>
+        <button class="side-link" data-nav="nodes" type="button"><span class="ico">点</span>好友 / 节点</button>
+        <button class="side-link" data-nav="ai" type="button"><span class="ico">库</span>题库 / AI</button>
+        <button class="side-link" data-nav="settings" type="button"><span class="ico">设</span>系统设置</button>
+      </nav>
+      <div class="side-foot">
+        <p class="t">节点健康</p>
+        <p>在线 5 / 6 · 平均负载 46% · 异常队列 2 条待处理</p>
+      </div>
+    </aside>
+
+    <main class="main">
+      <!-- OVERVIEW -->
+      <section id="panel-overview">
+        <div class="page-head">
+          <div>
+            <h1>运营总览</h1>
+            <p>今日刷课、作业代做、在线好友与异常一目了然。以下为演示 mock，便于评审信息密度与模块切换。</p>
+          </div>
+          <div class="head-actions">
+            <button class="btn" type="button">刷新 mock</button>
+            <button class="btn accent" type="button">导出日报</button>
+          </div>
+        </div>
+        <div class="strip">
+          <div class="strip-item coral">
+            <div class="k">今日刷课完成</div>
+            <div class="v">128<span class="delta">↑12%</span></div>
+            <div class="h">课时 · 较昨日</div>
+          </div>
+          <div class="strip-item teal">
+            <div class="k">作业代做</div>
+            <div class="v">46<span class="delta">↑8%</span></div>
+            <div class="h">已提交 39 · 进行中 7</div>
+          </div>
+          <div class="strip-item blue">
+            <div class="k">在线好友</div>
+            <div class="v">5</div>
+            <div class="h">节点共 6 · 1 维护中</div>
+          </div>
+          <div class="strip-item danger">
+            <div class="k">异常数</div>
+            <div class="v">2<span class="delta down">需关注</span></div>
+            <div class="h">登录失效 1 · 超时 1</div>
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="panel-box">
+            <div class="panel-toolbar">
+              <h2>进行中任务</h2>
+              <p class="stats">共 <strong>4</strong> 条 · 更新于 21:12</p>
+            </div>
+            <div class="panel-body tight">
+              <table class="data-table" aria-label="进行中任务">
+                <thead>
+                  <tr><th>任务</th><th>用户</th><th>节点</th><th>进度</th><th>状态</th></tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><div class="cell-strong">C 语言 · 第 3 章刷课</div><div class="cell-meta">队列 #TQ-2041</div></td>
+                    <td>张同学</td>
+                    <td>好友-阿木</td>
+                    <td class="mono">72%</td>
+                    <td><span class="badge doing">进行中</span></td>
+                  </tr>
+                  <tr>
+                    <td><div class="cell-strong">数据结构 · 实验二代做</div><div class="cell-meta">队列 #TQ-2040</div></td>
+                    <td>李同学</td>
+                    <td>节点-南区-02</td>
+                    <td class="mono">41%</td>
+                    <td><span class="badge doing">进行中</span></td>
+                  </tr>
+                  <tr>
+                    <td><div class="cell-strong">Python · 单元测验</div><div class="cell-meta">队列 #TQ-2038</div></td>
+                    <td>王同学</td>
+                    <td>好友-小满</td>
+                    <td class="mono">88%</td>
+                    <td><span class="badge doing">进行中</span></td>
+                  </tr>
+                  <tr>
+                    <td><div class="cell-strong">高等数学 · 视频课时</div><div class="cell-meta">队列 #TQ-2036</div></td>
+                    <td>赵同学</td>
+                    <td>节点-东区-01</td>
+                    <td class="mono">15%</td>
+                    <td><span class="badge doing">进行中</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div class="panel-box">
+            <div class="panel-toolbar">
+              <h2>最近动态</h2>
+              <p class="stats">近 1 小时</p>
+            </div>
+            <div class="panel-body">
+              <div class="feed-list">
+                <div class="feed-item">
+                  <div class="feed-time">21:11</div>
+                  <div>
+                    <div class="feed-title">节点-南区-02 负载升高</div>
+                    <div class="feed-desc">当前 78%，已自动限流新任务</div>
+                  </div>
+                  <span class="badge warn">负载</span>
+                </div>
+                <div class="feed-item">
+                  <div class="feed-time">21:04</div>
+                  <div>
+                    <div class="feed-title">用户「陈同学」登录失效</div>
+                    <div class="feed-desc">刷课任务 #TQ-2029 已标记失败，待重试</div>
+                  </div>
+                  <span class="badge fail">异常</span>
+                </div>
+                <div class="feed-item">
+                  <div class="feed-time">20:51</div>
+                  <div>
+                    <div class="feed-title">作业代做完成 · 离散数学</div>
+                    <div class="feed-desc">用户 周同学 · 好友-阿木 提交</div>
+                  </div>
+                  <span class="badge ok">完成</span>
+                </div>
+                <div class="feed-item">
+                  <div class="feed-time">20:38</div>
+                  <div>
+                    <div class="feed-title">新用户注册</div>
+                    <div class="feed-desc">学号绑定成功 · 待首次刷课</div>
+                  </div>
+                  <span class="badge coral">用户</span>
+                </div>
+                <div class="feed-item">
+                  <div class="feed-time">20:22</div>
+                  <div>
+                    <div class="feed-title">AI 题库缓存命中率回升</div>
+                    <div class="feed-desc">近 30 分钟 86% · 调用 312 次</div>
+                  </div>
+                  <span class="badge doing">AI</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- USERS -->
+      <section id="panel-users" class="hidden">
+        <div class="page-head">
+          <div>
+            <h1>用户管理</h1>
+            <p>搜索、状态筛选与列表查看。演示数据，停用仅为 UI 态，不落库。</p>
+          </div>
+          <div class="head-actions">
+            <button class="btn" type="button">批量导出</button>
+            <button class="btn accent" type="button">邀请码</button>
+          </div>
+        </div>
+        <div class="panel-box">
+          <div class="panel-toolbar">
+            <div class="toolbar-row">
+              <input class="search-input" type="search" placeholder="搜索昵称 / 学号 / 手机号…" id="user-search" />
+              <div class="filter-seg" id="user-filter">
+                <button type="button" class="active" data-filter="all">全部</button>
+                <button type="button" data-filter="ok">正常</button>
+                <button type="button" data-filter="off">停用</button>
+              </div>
+            </div>
+            <p class="stats">共 <strong id="user-count">8</strong> 人</p>
+          </div>
+          <div class="panel-body tight">
+            <table class="data-table" aria-label="用户列表" id="user-table">
+              <thead>
+                <tr>
+                  <th>用户</th><th>学号 / 绑定</th><th>今日任务</th><th>最近活跃</th><th>状态</th><th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr data-status="ok">
+                  <td><div class="cell-strong">张同学</div><div class="cell-meta">UID · u_10241</div></td>
+                  <td><span class="mono">2023010881</span><div class="cell-meta">头歌已绑定</div></td>
+                  <td>刷课 2 · 作业 1</td>
+                  <td>21:05</td>
+                  <td><span class="badge ok">正常</span></td>
+                  <td><button class="btn ghost" type="button">详情</button></td>
+                </tr>
+                <tr data-status="ok">
+                  <td><div class="cell-strong">李同学</div><div class="cell-meta">UID · u_10238</div></td>
+                  <td><span class="mono">2023010452</span><div class="cell-meta">头歌已绑定</div></td>
+                  <td>刷课 1 · 作业 0</td>
+                  <td>20:58</td>
+                  <td><span class="badge ok">正常</span></td>
+                  <td><button class="btn ghost" type="button">详情</button></td>
+                </tr>
+                <tr data-status="ok">
+                  <td><div class="cell-strong">王同学</div><div class="cell-meta">UID · u_10220</div></td>
+                  <td><span class="mono">2023020117</span><div class="cell-meta">头歌已绑定</div></td>
+                  <td>刷课 3 · 作业 1</td>
+                  <td>20:44</td>
+                  <td><span class="badge ok">正常</span></td>
+                  <td><button class="btn ghost" type="button">详情</button></td>
+                </tr>
+                <tr data-status="off">
+                  <td><div class="cell-strong">陈同学</div><div class="cell-meta">UID · u_10195</div></td>
+                  <td><span class="mono">2023010770</span><div class="cell-meta">登录失效</div></td>
+                  <td>—</td>
+                  <td>昨日</td>
+                  <td><span class="badge off">停用</span></td>
+                  <td><button class="btn ghost" type="button">恢复</button></td>
+                </tr>
+                <tr data-status="ok">
+                  <td><div class="cell-strong">赵同学</div><div class="cell-meta">UID · u_10188</div></td>
+                  <td><span class="mono">2023020333</span><div class="cell-meta">头歌已绑定</div></td>
+                  <td>刷课 1 · 作业 0</td>
+                  <td>20:30</td>
+                  <td><span class="badge ok">正常</span></td>
+                  <td><button class="btn ghost" type="button">详情</button></td>
+                </tr>
+                <tr data-status="ok">
+                  <td><div class="cell-strong">周同学</div><div class="cell-meta">UID · u_10172</div></td>
+                  <td><span class="mono">2023010099</span><div class="cell-meta">头歌已绑定</div></td>
+                  <td>刷课 0 · 作业 1</td>
+                  <td>20:18</td>
+                  <td><span class="badge ok">正常</span></td>
+                  <td><button class="btn ghost" type="button">详情</button></td>
+                </tr>
+                <tr data-status="ok">
+                  <td><div class="cell-strong">孙同学</div><div class="cell-meta">UID · u_10160</div></td>
+                  <td><span class="mono">2023020488</span><div class="cell-meta">待绑定</div></td>
+                  <td>—</td>
+                  <td>19:50</td>
+                  <td><span class="badge ok">正常</span></td>
+                  <td><button class="btn ghost" type="button">详情</button></td>
+                </tr>
+                <tr data-status="off">
+                  <td><div class="cell-strong">吴同学</div><div class="cell-meta">UID · u_10141</div></td>
+                  <td><span class="mono">2023010221</span><div class="cell-meta">违规停用</div></td>
+                  <td>—</td>
+                  <td>3 天前</td>
+                  <td><span class="badge off">停用</span></td>
+                  <td><button class="btn ghost" type="button">恢复</button></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- TASKS -->
+      <section id="panel-tasks" class="hidden">
+        <div class="page-head">
+          <div>
+            <h1>任务 / 刷课队列</h1>
+            <p>进行中、排队、失败三类状态。可按状态筛选；失败项可模拟「重试」。</p>
+          </div>
+          <div class="head-actions">
+            <button class="btn" type="button">暂停接单</button>
+            <button class="btn accent" type="button">清理失败</button>
+          </div>
+        </div>
+        <div class="strip cols-3">
+          <div class="strip-item blue">
+            <div class="k">进行中</div>
+            <div class="v">4</div>
+            <div class="h">平均进度 54%</div>
+          </div>
+          <div class="strip-item amber">
+            <div class="k">排队中</div>
+            <div class="v">3</div>
+            <div class="h">预计等待 &lt; 8 分钟</div>
+          </div>
+          <div class="strip-item danger">
+            <div class="k">失败</div>
+            <div class="v">2</div>
+            <div class="h">可重试 · mock</div>
+          </div>
+        </div>
+        <div class="panel-box">
+          <div class="panel-toolbar">
+            <div class="toolbar-row">
+              <div class="filter-seg" id="task-filter">
+                <button type="button" class="active" data-filter="all">全部</button>
+                <button type="button" data-filter="doing">进行中</button>
+                <button type="button" data-filter="queue">排队</button>
+                <button type="button" data-filter="fail">失败</button>
+              </div>
+            </div>
+            <p class="stats">队列长度 <strong id="task-count">9</strong></p>
+          </div>
+          <div class="panel-body tight">
+            <table class="data-table" aria-label="任务队列" id="task-table">
+              <thead>
+                <tr>
+                  <th>队列 ID</th><th>类型</th><th>课程 / 作业</th><th>用户</th><th>节点</th><th>进度</th><th>状态</th><th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr data-status="doing">
+                  <td class="mono">#TQ-2041</td>
+                  <td><span class="badge coral">刷课</span></td>
+                  <td class="cell-strong">C 语言 · 第 3 章</td>
+                  <td>张同学</td>
+                  <td>好友-阿木</td>
+                  <td class="mono">72%</td>
+                  <td><span class="badge doing">进行中</span></td>
+                  <td><button class="btn ghost" type="button">详情</button></td>
+                </tr>
+                <tr data-status="doing">
+                  <td class="mono">#TQ-2040</td>
+                  <td><span class="badge doing">代做</span></td>
+                  <td class="cell-strong">数据结构 · 实验二</td>
+                  <td>李同学</td>
+                  <td>南区-02</td>
+                  <td class="mono">41%</td>
+                  <td><span class="badge doing">进行中</span></td>
+                  <td><button class="btn ghost" type="button">详情</button></td>
+                </tr>
+                <tr data-status="doing">
+                  <td class="mono">#TQ-2038</td>
+                  <td><span class="badge coral">刷课</span></td>
+                  <td class="cell-strong">Python · 单元测验</td>
+                  <td>王同学</td>
+                  <td>好友-小满</td>
+                  <td class="mono">88%</td>
+                  <td><span class="badge doing">进行中</span></td>
+                  <td><button class="btn ghost" type="button">详情</button></td>
+                </tr>
+                <tr data-status="doing">
+                  <td class="mono">#TQ-2036</td>
+                  <td><span class="badge coral">刷课</span></td>
+                  <td class="cell-strong">高等数学 · 视频课时</td>
+                  <td>赵同学</td>
+                  <td>东区-01</td>
+                  <td class="mono">15%</td>
+                  <td><span class="badge doing">进行中</span></td>
+                  <td><button class="btn ghost" type="button">详情</button></td>
+                </tr>
+                <tr data-status="queue">
+                  <td class="mono">#TQ-2042</td>
+                  <td><span class="badge coral">刷课</span></td>
+                  <td class="cell-strong">Java · 第 5 章</td>
+                  <td>周同学</td>
+                  <td>—</td>
+                  <td class="mono">—</td>
+                  <td><span class="badge queue">排队</span></td>
+                  <td><button class="btn ghost" type="button">插队</button></td>
+                </tr>
+                <tr data-status="queue">
+                  <td class="mono">#TQ-2043</td>
+                  <td><span class="badge doing">代做</span></td>
+                  <td class="cell-strong">操作系统 · 实验一</td>
+                  <td>孙同学</td>
+                  <td>—</td>
+                  <td class="mono">—</td>
+                  <td><span class="badge queue">排队</span></td>
+                  <td><button class="btn ghost" type="button">插队</button></td>
+                </tr>
+                <tr data-status="queue">
+                  <td class="mono">#TQ-2044</td>
+                  <td><span class="badge coral">刷课</span></td>
+                  <td class="cell-strong">线性代数 · 习题课</td>
+                  <td>张同学</td>
+                  <td>—</td>
+                  <td class="mono">—</td>
+                  <td><span class="badge queue">排队</span></td>
+                  <td><button class="btn ghost" type="button">插队</button></td>
+                </tr>
+                <tr data-status="fail">
+                  <td class="mono">#TQ-2029</td>
+                  <td><span class="badge coral">刷课</span></td>
+                  <td class="cell-strong">大学英语 · 听力</td>
+                  <td>陈同学</td>
+                  <td>西区-03</td>
+                  <td class="mono">12%</td>
+                  <td><span class="badge fail">失败</span></td>
+                  <td><button class="btn ghost retry-btn" type="button">重试</button></td>
+                </tr>
+                <tr data-status="fail">
+                  <td class="mono">#TQ-2025</td>
+                  <td><span class="badge doing">代做</span></td>
+                  <td class="cell-strong">编译原理 · 作业 3</td>
+                  <td>吴同学</td>
+                  <td>好友-阿木</td>
+                  <td class="mono">0%</td>
+                  <td><span class="badge fail">失败</span></td>
+                  <td><button class="btn ghost retry-btn" type="button">重试</button></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- NODES -->
+      <section id="panel-nodes" class="hidden">
+        <div class="page-head">
+          <div>
+            <h1>好友 / 代做节点</h1>
+            <p>在线状态与负载。好友为人工代做位，节点为自动执行机。</p>
+          </div>
+          <div class="head-actions">
+            <button class="btn" type="button">同步心跳</button>
+            <button class="btn accent" type="button">添加节点</button>
+          </div>
+        </div>
+        <div class="strip">
+          <div class="strip-item teal"><div class="k">在线</div><div class="v">5</div><div class="h">好友 2 · 节点 3</div></div>
+          <div class="strip-item amber"><div class="k">维护 / 离线</div><div class="v">1</div><div class="h">西区-03 维护中</div></div>
+          <div class="strip-item coral"><div class="k">平均负载</div><div class="v">46%</div><div class="h">峰值 78% · 南区-02</div></div>
+          <div class="strip-item blue"><div class="k">今日承接</div><div class="v">174</div><div class="h">任务 · mock</div></div>
+        </div>
+        <div class="node-grid">
+          <div class="node-card">
+            <div class="top">
+              <div class="name">好友-阿木</div>
+              <span class="badge ok">在线</span>
+            </div>
+            <div class="node-meta">
+              <span>类型 <b>好友代做</b></span>
+              <span>承接 <b>28</b></span>
+              <span>当前任务 <b>2</b></span>
+              <span>负载 <b>62%</b></span>
+            </div>
+            <div class="bar"><i style="width:62%"></i></div>
+          </div>
+          <div class="node-card">
+            <div class="top">
+              <div class="name">好友-小满</div>
+              <span class="badge ok">在线</span>
+            </div>
+            <div class="node-meta">
+              <span>类型 <b>好友代做</b></span>
+              <span>承接 <b>19</b></span>
+              <span>当前任务 <b>1</b></span>
+              <span>负载 <b>38%</b></span>
+            </div>
+            <div class="bar teal"><i style="width:38%"></i></div>
+          </div>
+          <div class="node-card">
+            <div class="top">
+              <div class="name">节点-东区-01</div>
+              <span class="badge ok">在线</span>
+            </div>
+            <div class="node-meta">
+              <span>类型 <b>自动节点</b></span>
+              <span>承接 <b>41</b></span>
+              <span>当前任务 <b>1</b></span>
+              <span>负载 <b>33%</b></span>
+            </div>
+            <div class="bar teal"><i style="width:33%"></i></div>
+          </div>
+          <div class="node-card">
+            <div class="top">
+              <div class="name">节点-南区-02</div>
+              <span class="badge warn">繁忙</span>
+            </div>
+            <div class="node-meta">
+              <span>类型 <b>自动节点</b></span>
+              <span>承接 <b>52</b></span>
+              <span>当前任务 <b>3</b></span>
+              <span>负载 <b>78%</b></span>
+            </div>
+            <div class="bar warn"><i style="width:78%"></i></div>
+          </div>
+          <div class="node-card">
+            <div class="top">
+              <div class="name">节点-北区-04</div>
+              <span class="badge ok">在线</span>
+            </div>
+            <div class="node-meta">
+              <span>类型 <b>自动节点</b></span>
+              <span>承接 <b>34</b></span>
+              <span>当前任务 <b>0</b></span>
+              <span>负载 <b>18%</b></span>
+            </div>
+            <div class="bar teal"><i style="width:18%"></i></div>
+          </div>
+          <div class="node-card">
+            <div class="top">
+              <div class="name">节点-西区-03</div>
+              <span class="badge off">维护</span>
+            </div>
+            <div class="node-meta">
+              <span>类型 <b>自动节点</b></span>
+              <span>承接 <b>—</b></span>
+              <span>当前任务 <b>0</b></span>
+              <span>负载 <b>—</b></span>
+            </div>
+            <div class="bar"><i style="width:0%"></i></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- AI -->
+      <section id="panel-ai" class="hidden">
+        <div class="page-head">
+          <div>
+            <h1>题库 / AI 调用简况</h1>
+            <p>今日调用次数、缓存命中与模型分布（mock）。用于评审信息架构，非真实计费。</p>
+          </div>
+          <div class="head-actions">
+            <button class="btn" type="button">清空缓存占位</button>
+            <button class="btn accent" type="button">查看日志</button>
+          </div>
+        </div>
+        <div class="strip">
+          <div class="strip-item coral"><div class="k">今日调用</div><div class="v">1,284</div><div class="h">较昨日 ↑9%</div></div>
+          <div class="strip-item teal"><div class="k">缓存命中</div><div class="v">86%</div><div class="h">命中 1,104 次</div></div>
+          <div class="strip-item blue"><div class="k">平均耗时</div><div class="v">1.4s</div><div class="h">P95 · 3.2s</div></div>
+          <div class="strip-item amber"><div class="k">失败率</div><div class="v">0.7%</div><div class="h">9 次超时 / 限流</div></div>
+        </div>
+        <div class="grid-2 equal">
+          <div class="panel-box">
+            <div class="panel-toolbar"><h2>模型分布（mock）</h2><p class="stats">按调用占比</p></div>
+            <div class="panel-body">
+              <div class="ai-cards" style="grid-template-columns:1fr; margin:0">
+                <div class="mini-stat"><div class="k">题库检索 / 本地缓存</div><div class="v">62%</div><div class="h">796 次</div></div>
+                <div class="mini-stat"><div class="k">主模型 · 作业解析</div><div class="v">28%</div><div class="h">360 次</div></div>
+                <div class="mini-stat"><div class="k">兜底模型</div><div class="v">10%</div><div class="h">128 次</div></div>
+              </div>
+            </div>
+          </div>
+          <div class="panel-box">
+            <div class="panel-toolbar"><h2>热门题型</h2><p class="stats">今日 Top</p></div>
+            <div class="panel-body tight">
+              <table class="data-table">
+                <thead><tr><th>题型</th><th>调用</th><th>命中率</th></tr></thead>
+                <tbody>
+                  <tr><td class="cell-strong">编程填空</td><td class="mono">412</td><td><span class="badge ok">91%</span></td></tr>
+                  <tr><td class="cell-strong">选择题</td><td class="mono">358</td><td><span class="badge ok">94%</span></td></tr>
+                  <tr><td class="cell-strong">简答 / 论述</td><td class="mono">210</td><td><span class="badge warn">71%</span></td></tr>
+                  <tr><td class="cell-strong">实验报告辅助</td><td class="mono">176</td><td><span class="badge doing">83%</span></td></tr>
+                  <tr><td class="cell-strong">其它</td><td class="mono">128</td><td><span class="badge queue">66%</span></td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- SETTINGS -->
+      <section id="panel-settings" class="hidden">
+        <div class="page-head">
+          <div>
+            <h1>系统设置</h1>
+            <p>占位配置，演示开关态；保存不会写入真实配置。</p>
+          </div>
+          <div class="head-actions">
+            <button class="btn accent" type="button" id="save-settings">保存（演示）</button>
+          </div>
+        </div>
+        <div class="panel-box">
+          <div class="panel-toolbar"><h2>运行策略</h2><p class="stats">管理端演示</p></div>
+          <div class="panel-body">
+            <div class="settings-list">
+              <div class="settings-row">
+                <div>
+                  <h3>新任务自动调度</h3>
+                  <p>开启后按节点负载轮询分配刷课 / 代做任务。</p>
+                </div>
+                <button type="button" class="toggle on" aria-pressed="true" data-toggle></button>
+              </div>
+              <div class="settings-row">
+                <div>
+                  <h3>失败自动重试</h3>
+                  <p>登录失效类不重试；超时最多 2 次（mock）。</p>
+                </div>
+                <button type="button" class="toggle on" aria-pressed="true" data-toggle></button>
+              </div>
+              <div class="settings-row">
+                <div>
+                  <h3>高负载限流</h3>
+                  <p>单节点负载 ≥ 75% 时暂停派发新任务。</p>
+                </div>
+                <button type="button" class="toggle on" aria-pressed="true" data-toggle></button>
+              </div>
+              <div class="settings-row">
+                <div>
+                  <h3>异常钉钉 / 企微通知</h3>
+                  <p>占位：绑定 webhook 后推送（未接真实通道）。</p>
+                </div>
+                <button type="button" class="toggle" aria-pressed="false" data-toggle></button>
+              </div>
+              <div class="settings-row">
+                <div>
+                  <h3>维护模式</h3>
+                  <p>开启后用户端只读，管理端仍可查看队列。</p>
+                </div>
+                <button type="button" class="toggle" aria-pressed="false" data-toggle></button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="panel-box" style="margin-top:12px">
+          <div class="panel-toolbar"><h2>关于本原型</h2></div>
+          <div class="panel-body">
+            <p style="margin:0;font-size:13px;color:var(--muted);line-height:1.65">
+              <strong style="color:var(--ink-soft)">头歌妈妈 · 管理端演示</strong> · 域名 touge.mom · 视觉延续用户端「暖纸编辑台」。
+              文件：<code style="font-size:12px">/workspace/touge-mom-ui/头歌妈妈-管理端.html</code>，不覆盖用户端。
+            </p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script>
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const panels = ['overview', 'users', 'tasks', 'nodes', 'ai', 'settings'];
+
+  function enterApp() {
+    $('view-login').classList.add('hidden');
+    $('view-app').classList.remove('hidden');
+  }
+  function leaveApp() {
+    $('view-app').classList.add('hidden');
+    $('view-login').classList.remove('hidden');
+  }
+  function setPanel(name) {
+    panels.forEach((p) => {
+      const el = $('panel-' + p);
+      if (el) el.classList.toggle('hidden', p !== name);
+    });
+    document.querySelectorAll('.side-link').forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.nav === name);
+    });
+  }
+
+  $('login-form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    enterApp();
+    setPanel('overview');
+  });
+  $('skip-login').addEventListener('click', () => {
+    enterApp();
+    setPanel('overview');
+  });
+  $('btn-logout').addEventListener('click', leaveApp);
+  $('brand-home').addEventListener('click', () => setPanel('overview'));
+
+  document.querySelectorAll('.side-link').forEach((btn) => {
+    btn.addEventListener('click', () => setPanel(btn.dataset.nav));
+  });
+
+  // User filter + search
+  const userFilter = $('user-filter');
+  const userSearch = $('user-search');
+  let userStatus = 'all';
+  function applyUserFilter() {
+    const q = (userSearch.value || '').trim().toLowerCase();
+    let n = 0;
+    document.querySelectorAll('#user-table tbody tr').forEach((tr) => {
+      const st = tr.dataset.status;
+      const text = tr.textContent.toLowerCase();
+      const okStatus = userStatus === 'all' || st === userStatus;
+      const okText = !q || text.includes(q);
+      const show = okStatus && okText;
+      tr.style.display = show ? '' : 'none';
+      if (show) n++;
+    });
+    $('user-count').textContent = String(n);
+  }
+  userFilter.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-filter]');
+    if (!btn) return;
+    userStatus = btn.dataset.filter;
+    userFilter.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === btn));
+    applyUserFilter();
+  });
+  userSearch.addEventListener('input', applyUserFilter);
+
+  // Task filter
+  const taskFilter = $('task-filter');
+  let taskStatus = 'all';
+  function applyTaskFilter() {
+    let n = 0;
+    document.querySelectorAll('#task-table tbody tr').forEach((tr) => {
+      const st = tr.dataset.status;
+      const show = taskStatus === 'all' || st === taskStatus;
+      tr.style.display = show ? '' : 'none';
+      if (show) n++;
+    });
+    $('task-count').textContent = String(n);
+  }
+  taskFilter.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-filter]');
+    if (!btn) return;
+    taskStatus = btn.dataset.filter;
+    taskFilter.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === btn));
+    applyTaskFilter();
+  });
+  document.querySelectorAll('.retry-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const tr = btn.closest('tr');
+      if (!tr) return;
+      tr.dataset.status = 'queue';
+      const badge = tr.querySelector('td:nth-child(7) .badge');
+      if (badge) {
+        badge.className = 'badge queue';
+        badge.textContent = '排队';
+      }
+      btn.textContent = '已入队';
+      btn.disabled = true;
+      applyTaskFilter();
+    });
+  });
+
+  // Settings toggles
+  document.querySelectorAll('[data-toggle]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const on = !btn.classList.contains('on');
+      btn.classList.toggle('on', on);
+      btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    });
+  });
+  $('save-settings').addEventListener('click', () => {
+    const old = $('save-settings').textContent;
+    $('save-settings').textContent = '已保存（演示）';
+    setTimeout(() => { $('save-settings').textContent = old; }, 1200);
+  });
+
+  // Deep link helpers for screenshots / demo
+  window.__admin = {
+    enter: enterApp,
+    leave: leaveApp,
+    setPanel,
+    skipLogin: () => { enterApp(); setPanel('overview'); }
+  };
+})();
+</script>
+</body>
+</html>
