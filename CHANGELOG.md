@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.136 - 2026-11-20
+
+- Process up to three homeworks of a course job in parallel with budget reservations that never exceed the sequential cap
+
 ## 0.1.135 - 2026-11-20
 
 - Bound in-flight upstream requests per Educoder account and for the whole process before enabling parallel homework execution

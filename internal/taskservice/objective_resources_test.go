@@ -45,9 +45,10 @@ func objectiveResourcePNG(t *testing.T, value byte) []byte {
 }
 
 func TestPrepareObjectiveResourcesBindsStemAndOptionsWithoutPersistingURLs(t *testing.T) {
-	requests := 0
+	// Figures are fetched concurrently; count requests atomically.
+	var requests atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests++
+		requests.Add(1)
 		if !strings.HasPrefix(r.URL.Path, "/api/attachments/") {
 			t.Error("unexpected image path")
 		}
@@ -63,8 +64,8 @@ func TestPrepareObjectiveResourcesBindsStemAndOptionsWithoutPersistingURLs(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if requests != 5 || len(resources) != 5 || resources[0].QuestionPosition != 5 || resources[0].OptionLabel != "" {
-		t.Fatalf("wrong image count or stem binding: requests=%d resources=%d", requests, len(resources))
+	if requests.Load() != 5 || len(resources) != 5 || resources[0].QuestionPosition != 5 || resources[0].OptionLabel != "" {
+		t.Fatalf("wrong image count or stem binding: requests=%d resources=%d", requests.Load(), len(resources))
 	}
 	for i := 1; i < 5; i++ {
 		if resources[i].QuestionPosition != 7 || resources[i].OptionLabel != string(rune('A'+i-1)) {
@@ -122,16 +123,16 @@ func TestPrepareObjectiveResourcesRejectsCorruptImageAndUnavailableResponse(t *t
 }
 
 func TestPrepareObjectiveResourcesSharedImagesUseMemoryCacheAndCountLimit(t *testing.T) {
-	requests := 0
+	var requests atomic.Int64
 	content := objectiveResourcePNG(t, 42)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests++; w.Write(content) }))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests.Add(1); w.Write(content) }))
 	defer server.Close()
 	choice := objectiveResourceFixture()
 	choice.Task.Challenge.Description = `<img src="/api/attachments/shared?signature=fixture-private">`
 	choice.Questions[0].Subject = `![repeat](/api/attachments/shared?signature=fixture-private)`
 	snapshot, resources, err := prepareObjectiveResources(context.Background(), educoder.New(server.URL), choice)
-	if err != nil || requests != 1 || len(resources) != 1 {
-		t.Fatalf("shared resource dedupe failed: requests=%d resources=%d err=%v", requests, len(resources), err)
+	if err != nil || requests.Load() != 1 || len(resources) != 1 {
+		t.Fatalf("shared resource dedupe failed: requests=%d resources=%d err=%v", requests.Load(), len(resources), err)
 	}
 	if len(resources[0].Bindings) != 2 || resources[0].Bindings[0] != (answer.ImageBinding{QuestionPosition: 5}) || resources[0].Bindings[1] != (answer.ImageBinding{QuestionPosition: 7}) {
 		t.Fatalf("shared resource bindings lost: %#v", resources[0].Bindings)

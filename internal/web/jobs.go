@@ -42,6 +42,7 @@ func loadJobConfig(cfg *Config) error {
 		"JOB_PER_ACCOUNT_PENDING": &cfg.JobPerOwner, "JOB_PER_ACCOUNT_RUNNING": &cfg.JobPerOwnerRunning,
 		"MODEL_CONCURRENCY":            &cfg.ModelConcurrency,
 		"UPSTREAM_ACCOUNT_CONCURRENCY": &cfg.UpstreamAccountConcurrency, "UPSTREAM_GLOBAL_CONCURRENCY": &cfg.UpstreamGlobalConcurrency,
+		"HOMEWORK_PARALLELISM": &cfg.HomeworkParallelism,
 	} {
 		if raw := os.Getenv(name); raw != "" {
 			n, err := strconv.Atoi(raw)
@@ -56,6 +57,9 @@ func loadJobConfig(cfg *Config) error {
 	}
 	if cfg.UpstreamAccountConcurrency > 256 || cfg.UpstreamGlobalConcurrency > 4096 || cfg.UpstreamAccountConcurrency > cfg.UpstreamGlobalConcurrency {
 		return errors.New("invalid upstream concurrency limits")
+	}
+	if cfg.HomeworkParallelism > 4 {
+		return errors.New("invalid HOMEWORK_PARALLELISM: at most 4")
 	}
 	for name, value := range map[string]*time.Duration{"JOB_TIMEOUT": &cfg.JobTimeout, "MODEL_TIMEOUT": &cfg.ModelTimeout} {
 		if raw := os.Getenv(name); raw != "" {
@@ -148,7 +152,7 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 		bank.Close()
 		return nil, err
 	}
-	service := taskservice.New(bank, provider, taskservice.Config{ModelConcurrency: cfg.ModelConcurrency, Timeout: cfg.JobTimeout, DisableLegacyIndependentReview: true})
+	service := taskservice.New(bank, provider, taskservice.Config{ModelConcurrency: cfg.ModelConcurrency, Timeout: cfg.JobTimeout, DisableLegacyIndependentReview: true, HomeworkParallelism: cfg.HomeworkParallelism})
 	runtime := &JobRuntime{manager: manager, bank: bank, modelConfigured: key != "", modelConcurrency: cfg.ModelConcurrency}
 	collector := &taskservice.Collector{Bank: bank, Limits: taskservice.DefaultCollectionLimits()}
 	runtime.collect = func(ctx context.Context, client EducoderClient, owner string, report func(jobs.Event)) (jobs.Outcome, error) {

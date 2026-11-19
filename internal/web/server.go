@@ -42,13 +42,15 @@ type Config struct {
 	// Upstream request limits per Educoder account and for the whole process.
 	UpstreamAccountConcurrency int
 	UpstreamGlobalConcurrency  int
-	ModelAPIKeyFile            string
-	ModelBaseURL               string
-	PlatformAdminUserIDs       []int64
+	// HomeworkParallelism bounds concurrent homeworks inside one course job.
+	HomeworkParallelism  int
+	ModelAPIKeyFile      string
+	ModelBaseURL         string
+	PlatformAdminUserIDs []int64
 }
 
 func DefaultConfig() Config {
-	return Config{HTTPAddr: "0.0.0.0:11454", APIBaseURL: educoder.DefaultBaseURL, SessionTTL: 8 * time.Hour, StaticDir: filepath.FromSlash("web"), DataDir: "data", JobWorkers: 16, JobQueueSize: 256, JobPerOwner: 16, JobPerOwnerRunning: 4, JobTimeout: 2 * time.Hour, ModelConcurrency: 8, ModelTimeout: 4 * time.Minute, UpstreamAccountConcurrency: educoder.DefaultAccountUpstreamConcurrency, UpstreamGlobalConcurrency: educoder.DefaultGlobalUpstreamConcurrency}
+	return Config{HTTPAddr: "0.0.0.0:11454", APIBaseURL: educoder.DefaultBaseURL, SessionTTL: 8 * time.Hour, StaticDir: filepath.FromSlash("web"), DataDir: "data", JobWorkers: 16, JobQueueSize: 256, JobPerOwner: 16, JobPerOwnerRunning: 4, JobTimeout: 2 * time.Hour, ModelConcurrency: 8, ModelTimeout: 4 * time.Minute, UpstreamAccountConcurrency: educoder.DefaultAccountUpstreamConcurrency, UpstreamGlobalConcurrency: educoder.DefaultGlobalUpstreamConcurrency, HomeworkParallelism: 3}
 }
 
 func LoadConfig() (Config, error) {

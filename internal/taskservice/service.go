@@ -38,6 +38,9 @@ type Config struct {
 	DisableLegacyIndependentReview bool
 	BudgetMicroUSD                 int64
 	ProviderRetryWait              answer.RetryWait `json:"-"`
+	// HomeworkParallelism bounds how many homeworks of one course or all-course
+	// job run at once. Zero keeps the sequential order; at most 4.
+	HomeworkParallelism int
 }
 type Request struct {
 	Owner, Course, Game, IdempotencyKey string
@@ -118,6 +121,12 @@ func New(store *questionbank.Store, provider Provider, cfg Config) *Service {
 	}
 	if cfg.BudgetMicroUSD <= 0 || cfg.BudgetMicroUSD > 50000 {
 		cfg.BudgetMicroUSD = 50000
+	}
+	if cfg.HomeworkParallelism < 1 {
+		cfg.HomeworkParallelism = 1
+	}
+	if cfg.HomeworkParallelism > 4 {
+		cfg.HomeworkParallelism = 4
 	}
 	var wrapped Provider
 	var prog answer.Provider

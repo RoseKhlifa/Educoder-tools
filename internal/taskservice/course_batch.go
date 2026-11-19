@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sync"
 	"time"
 )
 
@@ -187,27 +188,82 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 	if key == "" {
 		key = runID()
 	}
-	for i, p := range plan {
-		if err := ctx.Err(); err != nil {
-			return stop(err, "canceled")
+	parallel := s.cfg.HomeworkParallelism
+	if parallel < 1 {
+		parallel = 1
+	}
+	// Distinct homeworks own distinct runtimes, so up to `parallel` of them run
+	// at once; runtime, target and graphic account locks still serialize any
+	// shared resource. Counters, the budget and events are guarded by mu, and
+	// each worker writes only its own out.Homeworks[i].
+	var mu sync.Mutex
+	budgetReleased := sync.NewCond(&mu)
+	var reservedBudget int64
+	var stopErr error
+	locked := func(f func()) {
+		mu.Lock()
+		defer mu.Unlock()
+		f()
+	}
+	emitFor := func(current ServiceProgress, phase, message string, batch *BatchProgress) {
+		if report == nil {
+			return
 		}
-		current = ServiceProgress{CurrentCourse: p.course.Identifier, CurrentHomeworkID: p.hw.ID, CurrentTitle: p.hw.Name}
-		emit("loading", "正在处理作业", nil)
+		p := current
+		locked(func() {
+			p.TotalHomeworks, p.CompletedHomeworks, p.SkippedHomeworks, p.NeedsServiceHomeworks = out.TotalHomeworks, out.CompletedHomeworks, out.SkippedHomeworks, out.NeedsServiceHomeworks
+		})
+		if batch != nil {
+			copy := *batch
+			p.Batch = &copy
+		}
+		report(Progress{Phase: phase, Kind: "service", Message: message, Service: &p})
+	}
+	halt := func(err error) {
+		locked(func() {
+			if stopErr == nil {
+				stopErr = err
+			}
+		})
+	}
+	process := func(i int, p courseHomeworkPlan) {
+		current := ServiceProgress{CurrentCourse: p.course.Identifier, CurrentHomeworkID: p.hw.ID, CurrentTitle: p.hw.Name}
+		emitFor(current, "loading", "正在处理作业", nil)
 		h := &out.Homeworks[i]
+		needsService := func(reason, message string, result *BatchResult) {
+			locked(func() {
+				h.Status, h.ReasonCode = "needs_service", reason
+				if result != nil {
+					h.Result = result
+				}
+				out.NeedsServiceHomeworks++
+			})
+			emitFor(current, "service_pending", message, nil)
+		}
+		skippedOptional := func() {
+			locked(func() {
+				h.Status, h.ReasonCode = "skipped_optional", "no_required_levels"
+				out.TotalHomeworks--
+			})
+			emitFor(current, "verified", "这份作业没有需要安排的必做关卡", nil)
+		}
+		interrupted := func(err error) {
+			locked(func() {
+				h.Status, h.ReasonCode = "needs_service", "interrupted"
+				out.NeedsServiceHomeworks++
+			})
+			halt(err)
+		}
 		// A request can be queued before the deadline and begin afterwards.
 		// Recheck the locally supplied deadline immediately before any progress
 		// read, runtime entry, model call, or mutation.
 		if p.hw.IsClosed(time.Now()) {
-			h.Status, h.ReasonCode = "needs_service", "deadline_passed"
-			out.NeedsServiceHomeworks++
-			emit("service_pending", "这份作业已超过截止时间，已停止安排", nil)
-			continue
+			needsService("deadline_passed", "这份作业已超过截止时间，已停止安排", nil)
+			return
 		}
 		if !p.hw.IsShixun || !courseIdentifier.MatchString(p.hw.ShixunIdentifier) {
-			h.Status, h.ReasonCode = "needs_service", "unsupported_homework"
-			out.NeedsServiceHomeworks++
-			emit("service_pending", "这份作业已转交服务人员处理", nil)
-			continue
+			needsService("unsupported_homework", "这份作业已转交服务人员处理", nil)
+			return
 		}
 		// Summary passed_count/finished_count are insufficient evidence. Only an
 		// unambiguous, complete assigned score roster with exact full scores can
@@ -215,69 +271,91 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 		progress, e := client.HomeworkProgress(ctx, p.course.Identifier, p.hw.ID)
 		if e != nil {
 			if ctx.Err() != nil {
-				return stop(e, "canceled")
+				halt(e)
+				return
 			}
-			h.Status, h.ReasonCode = "needs_service", "progress_unavailable"
+			var result *BatchResult
 			var readError *educoder.HomeworkProgressReadError
 			if errors.As(e, &readError) {
-				h.Result = &BatchResult{Kind: "homework", Scope: "homework", Status: "progress_unavailable", ReasonCode: "progress_unavailable", Diagnostics: []string{readError.Error()}}
+				result = &BatchResult{Kind: "homework", Scope: "homework", Status: "progress_unavailable", ReasonCode: "progress_unavailable", Diagnostics: []string{readError.Error()}}
 			}
-			out.NeedsServiceHomeworks++
-			emit("service_pending", "这份作业已转交服务人员处理", nil)
-			continue
+			needsService("progress_unavailable", "这份作业已转交服务人员处理", result)
+			return
 		}
 		if required, valid := requiredHomeworkCount(p.hw, progress); valid && required == 0 {
-			h.Status, h.ReasonCode = "skipped_optional", "no_required_levels"
-			out.TotalHomeworks--
-			emit("verified", "这份作业没有需要安排的必做关卡", nil)
-			continue
+			skippedOptional()
+			return
 		}
 		if homeworkExactlyComplete(p.hw, progress) {
-			h.Status = "skipped"
-			out.CompletedHomeworks++
-			out.SkippedHomeworks++
-			emit("verified", "已完成的作业已自动跳过", nil)
-			continue
+			locked(func() {
+				h.Status = "skipped"
+				out.CompletedHomeworks++
+				out.SkippedHomeworks++
+			})
+			emitFor(current, "verified", "已完成的作业已自动跳过", nil)
+			return
 		}
 		resolvedHomework := p.hw
 		childRequest := Request{Owner: req.Owner, Course: p.course.Identifier, HomeworkID: p.hw.ID, Homework: &resolvedHomework, Mode: solver.ModeSubmit}
 		block, fuseErr := s.homeworkFuse(ctx, childRequest, p.hw, progress, time.Now().UTC())
 		if fuseErr != nil {
-			h.Status, h.ReasonCode = "needs_service", "blocker_state_unavailable"
-			out.NeedsServiceHomeworks++
-			emit("service_pending", "这份作业的恢复状态需要核验，已保留进度", nil)
-			continue
+			needsService("blocker_state_unavailable", "这份作业的恢复状态需要核验，已保留进度", nil)
+			return
 		}
 		if block != nil {
-			h.Status, h.ReasonCode = "needs_service", "unchanged_failure_cooldown"
-			h.Result = &BatchResult{Kind: "homework", Scope: "homework", Status: "needs_service", ReasonCode: block.Reason,
-				Diagnostics: []string{"上次已确认失败且作业进度未变化；24 小时内不重复消耗资源，可单独重试这份作业。"}}
-			out.NeedsServiceHomeworks++
-			emit("service_pending", "这份作业没有新的可用进展，已暂停重复安排", nil)
-			continue
+			needsService("unchanged_failure_cooldown", "这份作业没有新的可用进展，已暂停重复安排", &BatchResult{Kind: "homework", Scope: "homework", Status: "needs_service", ReasonCode: block.Reason,
+				Diagnostics: []string{"上次已确认失败且作业进度未变化；24 小时内不重复消耗资源，可单独重试这份作业。"}})
+			return
 		}
-		remaining := budget - out.CostMicroUSD - out.ReservedMicroUSD
-		if remaining <= 0 {
-			h.Status, h.ReasonCode = "needs_service", "budget_exhausted"
-			out.NeedsServiceHomeworks++
-			emit("service_pending", "这份作业已转交服务人员处理", nil)
-			continue
+		// Reserve the child's whole cap before it starts, so concurrently running
+		// children never commit more than the course budget together. A child
+		// receives exactly the cap it would get running alone; while concurrent
+		// reservations leave less than that it waits for them to settle, instead
+		// of starting with (or failing on) a sliver the sequential order would
+		// never produce. Waiting implies another child holds a reservation, and
+		// that child always releases it and broadcasts when it returns.
+		var childCap int64
+		mu.Lock()
+		for {
+			spent := out.CostMicroUSD + out.ReservedMicroUSD
+			full := min(budget-spent, batchBudgetMicroUSD)
+			if full <= 0 || ctx.Err() != nil {
+				break
+			}
+			if budget-spent-reservedBudget >= full {
+				childCap = full
+				reservedBudget += childCap
+				break
+			}
+			budgetReleased.Wait()
+		}
+		mu.Unlock()
+		if childCap <= 0 && ctx.Err() != nil {
+			halt(ctx.Err())
+			return
+		}
+		if childCap <= 0 {
+			needsService("budget_exhausted", "这份作业已转交服务人员处理", nil)
+			return
 		}
 		childKey := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%d", key, p.course.Identifier, p.hw.ID)))
-		childRequest.IdempotencyKey, childRequest.BudgetMicroUSD = fmt.Sprintf("course-%x", childKey), remaining
-		batch, childErr := s.RunHomework(ctx, client, childRequest, func(p Progress) {
-			emit(p.Phase, "正在处理作业", p.Batch)
+		childRequest.IdempotencyKey, childRequest.BudgetMicroUSD = fmt.Sprintf("course-%x", childKey), childCap
+		batch, childErr := s.RunHomework(ctx, client, childRequest, func(update Progress) {
+			emitFor(current, update.Phase, "正在处理作业", update.Batch)
 		})
-		h.Result = batch
-		if batch != nil {
-			out.ModelCalls += batch.ModelCalls
-			out.CostMicroUSD += batch.CostMicroUSD
-			out.ReservedMicroUSD += batch.ReservedMicroUSD
-		}
+		locked(func() {
+			reservedBudget -= childCap
+			budgetReleased.Broadcast()
+			h.Result = batch
+			if batch != nil {
+				out.ModelCalls += batch.ModelCalls
+				out.CostMicroUSD += batch.CostMicroUSD
+				out.ReservedMicroUSD += batch.ReservedMicroUSD
+			}
+		})
 		if ctx.Err() != nil {
-			h.Status, h.ReasonCode = "needs_service", "interrupted"
-			out.NeedsServiceHomeworks++
-			return stop(childErr, "canceled")
+			interrupted(childErr)
+			return
 		}
 		// A child can only verify its own plan. Independently require complete
 		// official assignment evidence before trusting passed/no-required; a
@@ -285,9 +363,8 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 		if childErr == nil && batch != nil && batch.Status == "passed" {
 			latest, readErr := client.HomeworkProgress(ctx, p.course.Identifier, p.hw.ID)
 			if ctx.Err() != nil {
-				h.Status, h.ReasonCode = "needs_service", "interrupted"
-				out.NeedsServiceHomeworks++
-				return stop(ctx.Err(), "canceled")
+				interrupted(ctx.Err())
+				return
 			}
 			var verificationErr error
 			if readErr != nil {
@@ -305,39 +382,65 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 				// The independent official read also owns late optional changes.
 				// Do not keep an assignment in course totals just because the
 				// child completed it before it became wholly optional.
-				h.Status, h.ReasonCode = "skipped_optional", "no_required_levels"
-				out.TotalHomeworks--
-				emit("verified", "这份作业没有需要安排的必做关卡", nil)
-				continue
+				skippedOptional()
+				return
 			}
 		}
 		if childErr == nil && batch != nil && batch.Status == "passed" && batch.TotalLevels == 0 && batch.ReasonCode == "no_required_levels" {
-			h.Status, h.ReasonCode = "skipped_optional", "no_required_levels"
-			out.TotalHomeworks--
-			emit("verified", "这份作业没有需要安排的必做关卡", nil)
-			continue
+			skippedOptional()
+			return
 		}
 		if childErr == nil && batch != nil && batch.Status == "passed" && batch.TotalLevels > 0 && batch.CompletedLevels == batch.TotalLevels && batch.FailedLevels == 0 {
-			h.Status = "passed"
-			out.CompletedHomeworks++
-			emit("verified", "这份作业已完成", nil)
-		} else {
-			h.Status, h.ReasonCode = "needs_service", "execution_failed"
-			if batch != nil && batch.ReasonCode != "" {
-				h.ReasonCode = batch.ReasonCode
-			}
-			if deterministicHomeworkFailure(h.ReasonCode) {
-				// Persist only after an independent read proves the exact canonical
-				// score/requirement roster is unchanged. A partial read cannot fuse.
-				if after, readErr := client.HomeworkProgress(ctx, p.course.Identifier, p.hw.ID); readErr == nil {
-					if saveErr := s.rememberHomeworkFailure(ctx, childRequest, p.hw, progress, after, batch, time.Now().UTC()); saveErr != nil {
-						h.ReasonCode = "blocker_state_persistence_failed"
-					}
+			locked(func() {
+				h.Status = "passed"
+				out.CompletedHomeworks++
+			})
+			emitFor(current, "verified", "这份作业已完成", nil)
+			return
+		}
+		reason := "execution_failed"
+		if batch != nil && batch.ReasonCode != "" {
+			reason = batch.ReasonCode
+		}
+		if deterministicHomeworkFailure(reason) {
+			// Persist only after an independent read proves the exact canonical
+			// score/requirement roster is unchanged. A partial read cannot fuse.
+			if after, readErr := client.HomeworkProgress(ctx, p.course.Identifier, p.hw.ID); readErr == nil {
+				if saveErr := s.rememberHomeworkFailure(ctx, childRequest, p.hw, progress, after, batch, time.Now().UTC()); saveErr != nil {
+					reason = "blocker_state_persistence_failed"
 				}
 			}
-			out.NeedsServiceHomeworks++
-			emit("service_pending", "这份作业已转交服务人员处理", nil)
 		}
+		needsService(reason, "这份作业已转交服务人员处理", nil)
+	}
+	slots := make(chan struct{}, parallel)
+	var workers sync.WaitGroup
+dispatch:
+	for i, p := range plan {
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+			break dispatch
+		}
+		halted := false
+		locked(func() { halted = stopErr != nil })
+		if halted || ctx.Err() != nil {
+			<-slots
+			break
+		}
+		workers.Add(1)
+		go func(i int, p courseHomeworkPlan) {
+			defer workers.Done()
+			defer func() { <-slots }()
+			process(i, p)
+		}(i, p)
+	}
+	workers.Wait()
+	if err := ctx.Err(); err != nil {
+		if stopErr == nil {
+			stopErr = err
+		}
+		return stop(stopErr, "canceled")
 	}
 	current = ServiceProgress{}
 	if out.CompletedHomeworks == out.TotalHomeworks && out.NeedsServiceHomeworks == 0 {
