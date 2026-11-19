@@ -136,7 +136,10 @@ func (s *Store) ImportExternalDirectory(ctx context.Context, opts ExternalImport
 	// A checkout supplies a verifiable commit identity. Exported snapshots are
 	// also supported, with exact per-entry hashes and caller-supplied commit.
 	if _, gitErr := os.Lstat(filepath.Join(root, ".git")); gitErr == nil {
-		remoteCommand := exec.CommandContext(ctx, "git", "-C", root, "remote", "get-url", "origin")
+		// Read the configured origin literally. `git remote get-url` applies
+		// url.<base>.insteadOf rewrites from the caller's global config (for
+		// example https→SSH), which says nothing about the checkout's provenance.
+		remoteCommand := exec.CommandContext(ctx, "git", "-C", root, "config", "--get", "remote.origin.url")
 		remote, remoteErr := remoteCommand.Output()
 		remoteRepository, canonicalErr := canonicalExternalRepository(strings.TrimSpace(string(remote)))
 		if remoteErr != nil || canonicalErr != nil || remoteRepository != repo {

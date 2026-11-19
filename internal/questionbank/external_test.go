@@ -332,6 +332,9 @@ func TestExternalCheckoutProvenanceRejectsWrongCommitAndDirtyFiles(t *testing.T)
 	}
 	git("init")
 	git("remote", "add", "origin", "https://github.com/example/public-bank.git")
+	// Developer machines commonly rewrite https GitHub URLs to SSH. Provenance
+	// must use the configured origin, not the rewritten transport URL.
+	git("config", "url.git@github.com:.insteadOf", "https://github.com/")
 	git("add", "solutions")
 	git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "-m", "Synthetic fixture")
 	opts := externalOptions(root)

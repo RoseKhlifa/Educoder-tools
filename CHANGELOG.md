@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.128 - 2026-11-20
+
+- Read the configured origin URL so global insteadOf rewrites cannot reject pinned answer-bank checkouts
+
 ## 0.1.127 - 2026-11-19
 
 - Keep README project-focused while documenting the solution and protocol lifecycle
