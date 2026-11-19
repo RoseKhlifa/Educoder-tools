@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.137 - 2026-11-20
+
+- Revert the verified-candidate self-test skip: the platform self-test starts the runtime that game_build needs, and skipping it was rejected with API status -2
+
 ## 0.1.136 - 2026-11-20
 
 - Process up to three homeworks of a course job in parallel with budget reservations that never exceed the sequential cap

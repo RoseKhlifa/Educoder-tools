@@ -141,9 +141,7 @@ func TestSingleFileLFParentDoesNotCreateDerivative(t *testing.T) {
 	req := recoveryRequest()
 	req.Mode = ModeSubmit
 	result, err := New(store, nil, Config{Timeout: time.Second}).Run(context.Background(), adapter, req)
-	// The exact LF bytes are already formally verified: no derivative, no
-	// repeated public sample, one formal evaluation.
-	if err != nil || result.Status != "passed" || len(store.candidates) != 1 || adapter.selfTests != 0 || adapter.submits != 1 {
+	if err != nil || result.Status != "passed" || len(store.candidates) != 1 || adapter.selfTests != 1 || adapter.submits != 1 {
 		t.Fatalf("result=%+v err=%v candidates=%d self=%d submit=%d", result, err, len(store.candidates), adapter.selfTests, adapter.submits)
 	}
 }
@@ -246,13 +244,7 @@ func TestSingleFileSQLiteDerivativePersistsLFProofAndRanksVerifiedChildFirst(t *
 		req := recoveryRequest()
 		req.Mode, req.IdempotencyKey = ModeSubmit, "sqlite-newline-"+string(rune('1'+run))
 		result, err := New(store, nil, Config{Timeout: time.Second}).Run(ctx, adapter, req)
-		// Run 1 creates and proves the LF child; run 2 reuses the proven child
-		// directly, so only the first run executes the public sample.
-		wantSelfTests := 1
-		if run == 1 {
-			wantSelfTests = 0
-		}
-		if err != nil || result.Status != "passed" || result.ModelCalls != 0 || adapter.selfTests != wantSelfTests || adapter.submits != 1 || result.CandidateID == parent.ID {
+		if err != nil || result.Status != "passed" || result.ModelCalls != 0 || adapter.selfTests != 1 || adapter.submits != 1 || result.CandidateID == parent.ID {
 			t.Fatalf("SQLite run %d result=%+v err=%v self=%d submit=%d", run, result, err, adapter.selfTests, adapter.submits)
 		}
 		if run == 0 {
