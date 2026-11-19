@@ -2,8 +2,11 @@ package taskservice
 
 import (
 	"context"
+	"fmt"
 	"html"
+	"os"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -34,7 +37,11 @@ func prepareObjectiveResources(ctx context.Context, client *educoder.Client, cho
 	// Every call downloads the current bytes again (a formal submission must
 	// never inherit an earlier read of a changed figure); distinct figures are
 	// only fetched concurrently instead of one after another.
-	prefetched := prefetchObjectiveImages(ctx, client, objectiveImageLocators(snapshot))
+	var fetch func(context.Context, string) (educoder.QuestionImage, error)
+	if client != nil {
+		fetch = client.FetchQuestionImage
+	}
+	prefetched := prefetchObjectiveImages(ctx, fetch, objectiveImageLocators(snapshot))
 	cache := map[string]educoder.QuestionImage{}
 	resourceIndexes := map[string]int{}
 	locators := map[string]string{}
@@ -226,14 +233,15 @@ const objectiveImageFetchConcurrency = 4
 // prefetchObjectiveImages downloads distinct figures with bounded concurrency
 // through the same guarded attachment reader. It stops scheduling new reads
 // once the resource limits used by prepareObjectiveResources are reached.
-func prefetchObjectiveImages(ctx context.Context, client *educoder.Client, locators []string) map[string]prefetchedObjectiveImage {
+func prefetchObjectiveImages(ctx context.Context, fetch func(context.Context, string) (educoder.QuestionImage, error), locators []string) map[string]prefetchedObjectiveImage {
 	out := make(map[string]prefetchedObjectiveImage, len(locators))
-	if client == nil || len(locators) < 2 {
+	if fetch == nil || len(locators) < 2 {
 		return out
 	}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	total, failed := 0, false
+	var fetchPanic any
 	slots := make(chan struct{}, objectiveImageFetchConcurrency)
 schedule:
 	for i, locator := range locators {
@@ -256,7 +264,20 @@ schedule:
 		go func(locator string) {
 			defer wg.Done()
 			defer func() { <-slots }()
-			image, err := client.FetchQuestionImage(ctx, locator)
+			defer func() {
+				// Figures are untrusted input. A panic while reading one is
+				// re-raised on the caller below, as when figures were read there.
+				if r := recover(); r != nil {
+					fmt.Fprintf(os.Stderr, "objective figure read panic (%T)\n%s", r, debug.Stack())
+					mu.Lock()
+					if fetchPanic == nil {
+						fetchPanic = r
+					}
+					failed = true
+					mu.Unlock()
+				}
+			}()
+			image, err := fetch(ctx, locator)
 			mu.Lock()
 			out[locator] = prefetchedObjectiveImage{image: image, err: err}
 			total += len(image.Content)
@@ -265,5 +286,8 @@ schedule:
 		}(locator)
 	}
 	wg.Wait()
+	if fetchPanic != nil {
+		panic(fetchPanic)
+	}
 	return out
 }

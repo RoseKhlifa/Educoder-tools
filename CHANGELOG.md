@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.143 - 2026-11-20
+
+- Contain panics in parallel homework and concurrent figure goroutines so one faulty homework fails its job as before instead of ending the whole service
+
 ## 0.1.142 - 2026-11-20
 
 - Pass the upstream, parallel-homework and new collection-lane settings through compose so operator values reach the process, guarded by a test against the code defaults

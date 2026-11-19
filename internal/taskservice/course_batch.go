@@ -7,7 +7,9 @@ import (
 	"educoder-cli/internal/solver"
 	"errors"
 	"fmt"
+	"os"
 	"regexp"
+	"runtime/debug"
 	"sync"
 	"time"
 )
@@ -63,6 +65,8 @@ type courseHomeworkPlan struct {
 	course educoder.Course
 	hw     educoder.Homework
 }
+
+var errHomeworkWorkerPanicked = errors.New("homework worker stopped unexpectedly")
 
 // RunCourses completes the unfinished assignments in one authenticated course,
 // or in all active courses when Course is empty. A failed assignment is handed
@@ -200,6 +204,9 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 	budgetReleased := sync.NewCond(&mu)
 	var reservedBudget int64
 	var stopErr error
+	// workerPanic holds the first panic of a homework goroutine. It is
+	// re-raised on this (the job's) goroutine once in-flight homeworks finish.
+	var workerPanic any
 	locked := func(f func()) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -315,8 +322,13 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 		// never produce. Waiting implies another child holds a reservation, and
 		// that child always releases it and broadcasts when it returns.
 		var childCap int64
+		halted := false
 		mu.Lock()
 		for {
+			if stopErr != nil {
+				halted = true
+				break
+			}
 			spent := out.CostMicroUSD + out.ReservedMicroUSD
 			full := min(budget-spent, batchBudgetMicroUSD)
 			if full <= 0 || ctx.Err() != nil {
@@ -330,6 +342,11 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 			budgetReleased.Wait()
 		}
 		mu.Unlock()
+		if halted {
+			// Another homework stopped the job while this one waited for budget;
+			// it never started and stays planned, as in sequential order.
+			return
+		}
 		if childCap <= 0 && ctx.Err() != nil {
 			halt(ctx.Err())
 			return
@@ -432,10 +449,35 @@ dispatch:
 		go func(i int, p courseHomeworkPlan) {
 			defer workers.Done()
 			defer func() { <-slots }()
+			defer func() {
+				// A panic here must not end the process. Stop dispatching and wake
+				// budget waiters: they check stopErr before budget, so a reservation
+				// the panicked homework still holds cannot keep them waiting. The
+				// panic is re-raised after in-flight homeworks finish.
+				if r := recover(); r != nil {
+					// Type and stack only: a panic value may carry upstream text.
+					fmt.Fprintf(os.Stderr, "course homework worker panic (%T)\n%s", r, debug.Stack())
+					locked(func() {
+						if workerPanic == nil {
+							workerPanic = r
+						}
+						if stopErr == nil {
+							stopErr = errHomeworkWorkerPanicked
+						}
+						budgetReleased.Broadcast()
+					})
+				}
+			}()
 			process(i, p)
 		}(i, p)
 	}
 	workers.Wait()
+	if workerPanic != nil {
+		// Same outcome as before homeworks ran in parallel: the job goroutine
+		// unwinds and the job manager's recover fails (or, after a write,
+		// marks uncertain) this job while the service keeps running.
+		panic(workerPanic)
+	}
 	if err := ctx.Err(); err != nil {
 		if stopErr == nil {
 			stopErr = err
