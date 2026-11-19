@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.127 - 2026-11-19
+
+- Keep README project-focused while documenting the solution and protocol lifecycle
+
 ## 0.1.126 - 2026-11-19
 
 - Clarify the README solving lifecycle, protocol evidence and maintainer troubleshooting
