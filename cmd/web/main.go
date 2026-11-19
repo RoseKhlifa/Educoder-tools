@@ -12,6 +12,7 @@ import (
 	"time"
 
 	buildinfo "educoder-cli"
+	"educoder-cli/internal/educoder"
 	"educoder-cli/internal/platform"
 	"educoder-cli/internal/web"
 )
@@ -26,6 +27,11 @@ func main() {
 func run() error {
 	cfg, err := web.LoadConfig()
 	if err != nil {
+		return err
+	}
+	// Apply before any session client exists; every client created later
+	// shares the global pool and receives its own per-account pool.
+	if err := educoder.SetUpstreamLimits(cfg.UpstreamAccountConcurrency, cfg.UpstreamGlobalConcurrency); err != nil {
 		return err
 	}
 	app := web.NewServer(cfg)

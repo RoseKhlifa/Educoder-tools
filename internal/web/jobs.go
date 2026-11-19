@@ -40,7 +40,8 @@ func loadJobConfig(cfg *Config) error {
 	for name, value := range map[string]*int{
 		"JOB_WORKERS": &cfg.JobWorkers, "JOB_QUEUE_SIZE": &cfg.JobQueueSize,
 		"JOB_PER_ACCOUNT_PENDING": &cfg.JobPerOwner, "JOB_PER_ACCOUNT_RUNNING": &cfg.JobPerOwnerRunning,
-		"MODEL_CONCURRENCY": &cfg.ModelConcurrency,
+		"MODEL_CONCURRENCY":            &cfg.ModelConcurrency,
+		"UPSTREAM_ACCOUNT_CONCURRENCY": &cfg.UpstreamAccountConcurrency, "UPSTREAM_GLOBAL_CONCURRENCY": &cfg.UpstreamGlobalConcurrency,
 	} {
 		if raw := os.Getenv(name); raw != "" {
 			n, err := strconv.Atoi(raw)
@@ -52,6 +53,9 @@ func loadJobConfig(cfg *Config) error {
 	}
 	if cfg.JobWorkers > 256 || cfg.ModelConcurrency > 256 || cfg.JobPerOwner > cfg.JobQueueSize+cfg.JobWorkers || cfg.JobPerOwnerRunning > cfg.JobWorkers {
 		return errors.New("invalid worker/model concurrency or account pending limit")
+	}
+	if cfg.UpstreamAccountConcurrency > 256 || cfg.UpstreamGlobalConcurrency > 4096 || cfg.UpstreamAccountConcurrency > cfg.UpstreamGlobalConcurrency {
+		return errors.New("invalid upstream concurrency limits")
 	}
 	for name, value := range map[string]*time.Duration{"JOB_TIMEOUT": &cfg.JobTimeout, "MODEL_TIMEOUT": &cfg.ModelTimeout} {
 		if raw := os.Getenv(name); raw != "" {

@@ -235,7 +235,9 @@ func New(baseURL string) *Client {
 		baseURL = DefaultBaseURL
 	}
 	jar, _ := cookiejar.New(nil)
-	return &Client{HTTP: &http.Client{Transport: upstreamTransport, Jar: jar, Timeout: 45 * time.Second}, BaseURL: strings.TrimRight(baseURL, "/"), Origin: DefaultOrigin, courseMetadataCache: &courseMetadataCache{}}
+	// Each session client owns one account slot pool; every clone (bound job
+	// clients, read-only collection) wraps this transport and shares it.
+	return &Client{HTTP: &http.Client{Transport: newAccountTransport(upstreamTransport), Jar: jar, Timeout: 45 * time.Second}, BaseURL: strings.TrimRight(baseURL, "/"), Origin: DefaultOrigin, courseMetadataCache: &courseMetadataCache{}}
 }
 
 func (c *Client) request(ctx context.Context, method, path string, query url.Values, body any, ref string, out any) error {

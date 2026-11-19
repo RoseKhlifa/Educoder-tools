@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.135 - 2026-11-20
+
+- Bound in-flight upstream requests per Educoder account and for the whole process before enabling parallel homework execution
+
 ## 0.1.134 - 2026-11-20
 
 - Download distinct objective figures concurrently while still re-reading every figure before each formal submission
