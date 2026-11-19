@@ -86,6 +86,10 @@ type Request struct {
 	Feedback      []Feedback
 	RepairHistory []RepairAttempt
 	Profile       Profile
+	// Images are the statement's fetched figures; ImagesUnavailable lists the
+	// statement references whose figure could not be loaded for this request.
+	Images            []StatementImage `json:",omitempty"`
+	ImagesUnavailable []string         `json:",omitempty"`
 }
 
 type Usage struct {

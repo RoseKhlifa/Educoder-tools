@@ -184,20 +184,10 @@ func prepareObjectiveResources(snapshot ObjectiveSnapshot, resources []ImageReso
 				return nil, nil, &Error{Kind: "invalid_objective_resource"}
 			}
 		}
-		if len(content) == 0 || len(content) > maxImageBytes || http.DetectContentType(content) != mediaType {
+		hash, valid := validatedImage(mediaType, content, maxImageBytes)
+		if !valid {
 			return nil, nil, &Error{Kind: "invalid_objective_resource"}
 		}
-		// WebP is identified by its RIFF/WEBP signature by DetectContentType.
-		// The standard library decoders additionally validate PNG/JPEG/GIF
-		// dimensions without allocating the decompressed image.
-		if mediaType != "image/webp" {
-			cfg, _, err := image.DecodeConfig(bytes.NewReader(content))
-			if err != nil || cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > 100000000 {
-				return nil, nil, &Error{Kind: "invalid_objective_resource"}
-			}
-		}
-		digest := sha256.Sum256(content)
-		hash := hex.EncodeToString(digest[:])
 		if resource.SHA256 != "" && resource.SHA256 != hash {
 			return nil, nil, &Error{Kind: "invalid_objective_resource"}
 		}
@@ -216,4 +206,26 @@ func prepareObjectiveResources(snapshot ObjectiveSnapshot, resources []ImageReso
 		}
 	}
 	return images, refs, nil
+}
+
+// validatedImage applies the provider image contract to one decoded image and
+// returns its SHA-256. WebP is identified by its RIFF/WEBP signature; the
+// standard decoders validate PNG/JPEG/GIF dimensions without decompressing.
+func validatedImage(mediaType string, content []byte, maxBytes int) (string, bool) {
+	switch mediaType {
+	case "image/jpeg", "image/png", "image/gif", "image/webp":
+	default:
+		return "", false
+	}
+	if len(content) == 0 || len(content) > maxBytes || http.DetectContentType(content) != mediaType {
+		return "", false
+	}
+	if mediaType != "image/webp" {
+		cfg, _, err := image.DecodeConfig(bytes.NewReader(content))
+		if err != nil || cfg.Width <= 0 || cfg.Height <= 0 || int64(cfg.Width)*int64(cfg.Height) > 100000000 {
+			return "", false
+		}
+	}
+	digest := sha256.Sum256(content)
+	return hex.EncodeToString(digest[:]), true
 }

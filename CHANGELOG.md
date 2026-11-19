@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.131 - 2026-11-20
+
+- Attach statement figures to programming model requests, reading them only when generation is needed and reporting unavailable figures instead of guessing
+
 ## 0.1.130 - 2026-11-20
 
 - Retry truncated or malformed objective output with a compact answers-only contract, bound ranked alternatives, and record content-free output-shape diagnostics

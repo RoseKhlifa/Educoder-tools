@@ -698,6 +698,11 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 		previous = &seed
 	}
 	hadoopStartAttempted := false
+	// Statement figures are fetched once per run and only when the model is
+	// actually called; bank and external candidates never pay for them.
+	var statementImages []answer.StatementImage
+	var statementImagesUnavailable []string
+	statementImagesLoaded := false
 	for attempt := state.Attempts; attempt < req.MaxEvaluations; attempt++ {
 		if err := ctx.Err(); err != nil {
 			result.Status = "interrupted"
@@ -758,7 +763,14 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			finalRepair := (previous != nil || len(state.RepairHistory) > 0) &&
 				(result.ModelCalls+1 >= req.MaxModelCalls || attempt+1 >= req.MaxEvaluations)
 			profile := state.GenerationRecovery.profile(s.cfg, result.ModelCalls, finalRepair)
-			providerReq := answer.Request{Problem: snap, Previous: previous, Feedback: feedback, RepairHistory: boundedRepairHistory(state.RepairHistory), Profile: profile}
+			if !statementImagesLoaded {
+				statementImagesLoaded = true
+				statementImages, statementImagesUnavailable = loadStatementImages(ctx, adapter, target, snap)
+				if len(statementImagesUnavailable) > 0 {
+					result.Diagnostics = append(result.Diagnostics, fmt.Sprintf("题干图片有 %d 张未能读取，已按其余题面信息生成", len(statementImagesUnavailable)))
+				}
+			}
+			providerReq := answer.Request{Problem: snap, Previous: previous, Feedback: feedback, RepairHistory: boundedRepairHistory(state.RepairHistory), Profile: profile, Images: statementImages, ImagesUnavailable: statementImagesUnavailable}
 			freshPro := s.cfg.EnableProFreshSolve && profile.Model == s.cfg.ProProfile.Model && !state.GenerationRecovery.ProFreshSolveUsed
 			if freshPro {
 				providerReq.Previous, providerReq.Feedback, providerReq.RepairHistory = nil, nil, nil

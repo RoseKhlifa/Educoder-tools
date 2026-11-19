@@ -55,7 +55,7 @@ func (d *DeepSeek) Estimate(req Request) (Estimate, error) {
 	// The additional framing allowance covers role and message delimiters.
 	input := int64(256)
 	for _, m := range wire.Messages {
-		input += int64(len(m.Content.textOnly()) + len(m.Role) + 64)
+		input += int64(len(m.Content.textOnly())+len(m.Role)+64) + int64(m.Content.imageCount())*d.imageTokenReserve
 	}
 	peakInputPrice := p.InputMicroUSDPerMillion
 	if p.CacheHitMicroUSDPerMillion > peakInputPrice {
