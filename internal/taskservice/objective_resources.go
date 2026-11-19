@@ -5,6 +5,7 @@ import (
 	"html"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"educoder-cli/internal/answer"
@@ -30,6 +31,10 @@ func prepareObjectiveResources(ctx context.Context, client *educoder.Client, cho
 	defer cancel()
 	snapshot := objectiveSnapshot(choice)
 	resources := []answer.ImageResource{}
+	// Every call downloads the current bytes again (a formal submission must
+	// never inherit an earlier read of a changed figure); distinct figures are
+	// only fetched concurrently instead of one after another.
+	prefetched := prefetchObjectiveImages(ctx, client, objectiveImageLocators(snapshot))
 	cache := map[string]educoder.QuestionImage{}
 	resourceIndexes := map[string]int{}
 	locators := map[string]string{}
@@ -47,7 +52,11 @@ func prepareObjectiveResources(ctx context.Context, client *educoder.Client, cho
 		}
 		image, found := cache[locator]
 		if !found {
-			image, resourceErr = client.FetchQuestionImage(ctx, locator)
+			if fetched, ok := prefetched[locator]; ok {
+				image, resourceErr = fetched.image, fetched.err
+			} else {
+				image, resourceErr = client.FetchQuestionImage(ctx, locator)
+			}
 			if resourceErr != nil {
 				return ""
 			}
@@ -159,4 +168,102 @@ func prepareObjectiveResources(ctx context.Context, client *educoder.Client, cho
 		return answer.ObjectiveSnapshot{}, nil, &educoder.QuestionImageError{Kind: "objective_image_invalid"}
 	}
 	return snapshot, resources, nil
+}
+
+// objectiveImageLocators lists the distinct image references prepareText will
+// reach, in text order. It only schedules downloads: a reference it misses is
+// still fetched inline, and every validation stays in prepareObjectiveResources.
+func objectiveImageLocators(snapshot answer.ObjectiveSnapshot) []string {
+	texts := []string{snapshot.Title, snapshot.Statement}
+	for _, q := range snapshot.Questions {
+		texts = append(texts, q.Question)
+		for _, o := range q.Options {
+			texts = append(texts, o.Text)
+		}
+	}
+	seen := map[string]bool{}
+	var out []string
+	add := func(raw string) {
+		locator := html.UnescapeString(strings.TrimSpace(raw))
+		if locator == "" || strings.ContainsAny(locator, "\r\n\t") || seen[locator] {
+			return
+		}
+		seen[locator] = true
+		out = append(out, locator)
+	}
+	for _, text := range texts {
+		if objectiveUnsupportedMedia.MatchString(text) {
+			continue
+		}
+		for _, tag := range objectiveHTMLImage.FindAllString(text, -1) {
+			if m := objectiveHTMLSource.FindStringSubmatch(tag); m != nil && len(objectiveHTMLSource.FindAllStringSubmatch(tag, -1)) == 1 {
+				for _, value := range m[1:] {
+					if value != "" {
+						add(value)
+						break
+					}
+				}
+			}
+		}
+		for _, m := range objectiveMarkdownImage.FindAllStringSubmatch(text, -1) {
+			if m[1] != "" {
+				add(m[1])
+			} else {
+				add(m[2])
+			}
+		}
+	}
+	return out
+}
+
+type prefetchedObjectiveImage struct {
+	image educoder.QuestionImage
+	err   error
+}
+
+const objectiveImageFetchConcurrency = 4
+
+// prefetchObjectiveImages downloads distinct figures with bounded concurrency
+// through the same guarded attachment reader. It stops scheduling new reads
+// once the resource limits used by prepareObjectiveResources are reached.
+func prefetchObjectiveImages(ctx context.Context, client *educoder.Client, locators []string) map[string]prefetchedObjectiveImage {
+	out := make(map[string]prefetchedObjectiveImage, len(locators))
+	if client == nil || len(locators) < 2 {
+		return out
+	}
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	total, failed := 0, false
+	slots := make(chan struct{}, objectiveImageFetchConcurrency)
+schedule:
+	for i, locator := range locators {
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+			break schedule
+		}
+		mu.Lock()
+		stop := failed || i >= 128 || total > 40<<20
+		mu.Unlock()
+		if stop {
+			// A failed figure already fails this preparation; later figures are
+			// never needed. In-flight reads still finish with their real result,
+			// so the first failure in text order is reported exactly as before.
+			<-slots
+			break
+		}
+		wg.Add(1)
+		go func(locator string) {
+			defer wg.Done()
+			defer func() { <-slots }()
+			image, err := client.FetchQuestionImage(ctx, locator)
+			mu.Lock()
+			out[locator] = prefetchedObjectiveImage{image: image, err: err}
+			total += len(image.Content)
+			failed = failed || err != nil
+			mu.Unlock()
+		}(locator)
+	}
+	wg.Wait()
+	return out
 }

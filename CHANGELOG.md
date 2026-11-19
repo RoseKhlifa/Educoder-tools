@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.134 - 2026-11-20
+
+- Download distinct objective figures concurrently while still re-reading every figure before each formal submission
+
 ## 0.1.133 - 2026-11-20
 
 - Drop redundant per-level upstream reads in homework batches while keeping every concurrency and verification read, guarded by a request-budget test

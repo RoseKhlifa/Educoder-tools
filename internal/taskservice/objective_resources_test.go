@@ -258,7 +258,9 @@ func TestObjectiveServicePassesAllImageBytesToEstimateAndGenerateAndPersistsOnly
 			defer db.Close()
 			if unavailable {
 				var typed *educoder.QuestionImageError
-				if !errors.As(runErr, &typed) || result == nil || result.Status != "resource_unavailable" || len(provider.estimated) != 0 || len(provider.generated) != 0 || imageCalls.Load() != 1 {
+				// Figures download concurrently; once one fails no further read is
+				// scheduled, so a failure costs at most one concurrent batch.
+				if !errors.As(runErr, &typed) || result == nil || result.Status != "resource_unavailable" || len(provider.estimated) != 0 || len(provider.generated) != 0 || imageCalls.Load() < 1 || imageCalls.Load() > objectiveImageFetchConcurrency {
 					t.Fatalf("image failure did not stop before provider: status=%v err=%v", result, runErr)
 				}
 				var count int
