@@ -3,6 +3,7 @@ package answer
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 
@@ -62,29 +63,83 @@ func ValidateCandidate(snapshot problem.Snapshot, c Candidate) error {
 func parseCandidate(snapshot problem.Snapshot, content string) (Candidate, error) {
 	var c Candidate
 	if len(content) > maxCandidateBytes {
-		return c, &Error{Kind: "candidate_too_large"}
+		return c, &Error{Kind: "candidate_too_large", OutputShape: describeOutputShape(content, "", programmingOutputKeys...)}
 	}
-	content = strings.TrimSpace(content)
-	// Only a complete surrounding JSON fence may be removed. Never recover by
-	// extracting braces, altering quotes, or interpreting extra escape layers.
-	for _, prefix := range []string{"```json\n", "```\n", "```json\r\n", "```\r\n"} {
-		if strings.HasPrefix(content, prefix) && strings.HasSuffix(content, "\n```") {
-			content = strings.TrimSuffix(strings.TrimPrefix(content, prefix), "\n```")
-			break
-		}
-	}
+	content = stripJSONFence(strings.TrimSpace(content))
 	if err := uniqueJSONKeys(content); err != nil {
-		return c, &Error{Kind: "invalid_output_json"}
+		return c, &Error{Kind: "invalid_output_json", OutputShape: describeOutputShape(content, "", programmingOutputKeys...)}
 	}
 	dec := json.NewDecoder(strings.NewReader(content))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&c); err != nil {
-		return Candidate{}, &Error{Kind: "invalid_output_json"}
+		return Candidate{}, &Error{Kind: "invalid_output_json", OutputShape: describeOutputShape(content, "", programmingOutputKeys...)}
 	}
 	if err := ValidateCandidate(snapshot, c); err != nil {
 		return Candidate{}, err
 	}
 	return c, nil
+}
+
+var programmingOutputKeys = []string{"kind", "language", "files"}
+
+// stripJSONFence removes only one complete surrounding Markdown JSON fence.
+// It never recovers by extracting braces, altering quotes, or interpreting
+// extra escape layers.
+func stripJSONFence(content string) string {
+	for _, prefix := range []string{"```json\n", "```\n", "```json\r\n", "```\r\n"} {
+		if strings.HasPrefix(content, prefix) && strings.HasSuffix(content, "\n```") {
+			return strings.TrimSuffix(strings.TrimPrefix(content, prefix), "\n```")
+		}
+	}
+	return content
+}
+
+// OutputShape is content-free evidence about a rejected or truncated model
+// response. It records sizes, whether the text was valid JSON, and which of
+// the contract's own field names were present, never values or other keys.
+type OutputShape struct {
+	ContentBytes   int
+	ReasoningBytes int
+	Fenced         bool
+	ValidJSON      bool
+	KnownKeys      []string
+	UnknownKeys    int
+}
+
+func describeOutputShape(content, reasoning string, known ...string) *OutputShape {
+	trimmed := strings.TrimSpace(content)
+	shape := &OutputShape{ContentBytes: len(content), ReasoningBytes: len(reasoning), Fenced: strings.HasPrefix(trimmed, "```")}
+	body := stripJSONFence(trimmed)
+	var object map[string]json.RawMessage
+	if json.Unmarshal([]byte(body), &object) == nil {
+		shape.ValidJSON = true
+		allowed := make(map[string]bool, len(known))
+		for _, key := range known {
+			allowed[key] = true
+		}
+		for _, key := range known {
+			if _, ok := object[key]; ok {
+				shape.KnownKeys = append(shape.KnownKeys, key)
+			}
+		}
+		for key := range object {
+			if !allowed[key] {
+				shape.UnknownKeys++
+			}
+		}
+	}
+	return shape
+}
+
+func (s *OutputShape) String() string {
+	if s == nil {
+		return ""
+	}
+	keys := strings.Join(s.KnownKeys, ",")
+	if keys == "" {
+		keys = "-"
+	}
+	return fmt.Sprintf(" [output content_bytes=%d reasoning_bytes=%d fenced=%t valid_json=%t keys=%s unknown_keys=%d]", max(s.ContentBytes, 0), max(s.ReasoningBytes, 0), s.Fenced, s.ValidJSON, keys, max(s.UnknownKeys, 0))
 }
 
 // encoding/json accepts duplicate keys by default. Reject them before the

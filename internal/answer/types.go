@@ -194,6 +194,9 @@ type Error struct {
 	// ObjectiveOutput is optional, content-free evidence for correcting an
 	// objective response's shape without exposing earlier answers or scores.
 	ObjectiveOutput *ObjectiveOutputViolation
+	// OutputShape is optional, content-free evidence about a truncated or
+	// unparseable response (sizes and contract field names only).
+	OutputShape *OutputShape
 }
 
 func sanitizedObjectiveOutputViolation(e *Error) (ObjectiveOutputViolation, bool) {
@@ -328,5 +331,6 @@ func (e *Error) Error() string {
 		}
 		message += fmt.Sprintf(" [objective_output reason=%s expected_answers=%d received_answers=%d position=%d shape=%s option_count=%d]", v.Reason, v.ExpectedAnswers, v.ReceivedAnswers, v.QuestionPosition, shape, v.OptionCount)
 	}
+	message += e.OutputShape.String()
 	return message
 }

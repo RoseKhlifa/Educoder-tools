@@ -29,7 +29,8 @@ type generationRecovery struct {
 
 func (g *generationRecovery) restore(feedback []answer.Feedback) {
 	for _, entry := range feedback {
-		if entry.Kind == "model" && entry.Message == (&answer.Error{Kind: "truncated_output"}).Error() {
+		// Messages may carry a content-free output-shape suffix after the kind.
+		if entry.Kind == "model" && strings.HasPrefix(entry.Message, (&answer.Error{Kind: "truncated_output"}).Error()) {
 			g.CompactOutput = true
 		}
 	}

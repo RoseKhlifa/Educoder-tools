@@ -560,6 +560,10 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 	var feedback []answer.Feedback
 	attemptHistory := newObjectiveAttemptHistory(s.cfg.ObjectiveMaxSubmissions)
 	compactOutput := false
+	// answersOnly switches the remaining model calls of this run to the plain
+	// answers contract after a truncated or malformed response, so a failed
+	// ranked/structured reply cannot consume every remaining call.
+	answersOnly := false
 	var independent *objectiveIndependentReview
 	independentUsed := false
 	submissions := 0
@@ -726,7 +730,8 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 				profile.Thinking, profile.ReasoningEffort, profile.MaxTokens = "disabled", "", answer.MaxOutputTokens
 			}
 			pr := answer.ObjectiveRequest{Problem: snapshot, Previous: previous, Feedback: append(append([]answer.Feedback(nil), legacyFeedback...), attemptHistory.feedback(feedback)...), Profile: profile, Resources: resources}
-			pr.RequireRankedAnswers = req.Mode == solver.ModeSubmit && independent == nil
+			pr.RequireRankedAnswers = req.Mode == solver.ModeSubmit && independent == nil && !answersOnly
+			pr.AnswersOnly = answersOnly && independent == nil
 			if fixedReady {
 				pr.FixedAnswers = append([]string(nil), fixedAnswers...)
 			}
@@ -788,6 +793,7 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 					// subsequent pre-submit repairs compact; malformed output must
 					// not silently escalate back into the same truncating profile.
 					compactOutput = compactOutput || answer.IsTruncatedOutput(e)
+					answersOnly = answersOnly || objectiveOutputContractFailure(e)
 					r.Diagnostics = append(r.Diagnostics, e.Error())
 					feedback = []answer.Feedback{{Kind: "model", Message: e.Error()}}
 					if persistErr := s.persistObjective(ctx, req, r, created); persistErr != nil {
@@ -1049,6 +1055,21 @@ func (s *Service) persistScoreFeedbackLocks(ctx context.Context, snapshot answer
 		}
 	}
 	return nil
+}
+
+// objectiveOutputContractFailure reports responses that produced no usable
+// answer vector because of their own size or format, as opposed to a
+// provider outage or a locked-answer conflict.
+func objectiveOutputContractFailure(err error) bool {
+	var providerErr *answer.Error
+	if !errors.As(err, &providerErr) {
+		return false
+	}
+	switch providerErr.Kind {
+	case "truncated_output", "invalid_output_json", "objective_candidate_contract":
+		return true
+	}
+	return false
 }
 
 // retryableObjectiveModelError is limited to failures before the platform

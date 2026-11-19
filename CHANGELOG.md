@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.130 - 2026-11-20
+
+- Retry truncated or malformed objective output with a compact answers-only contract, bound ranked alternatives, and record content-free output-shape diagnostics
+
 ## 0.1.129 - 2026-11-20
 
 - Give reasoning repairs a 32K output window so reasoning no longer truncates the answer, and record the correctness speed and capacity plan

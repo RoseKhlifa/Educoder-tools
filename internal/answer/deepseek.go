@@ -49,6 +49,8 @@ type chatResponse struct {
 		FinishReason string `json:"finish_reason"`
 		Message      struct {
 			Content string `json:"content"`
+			// Only the length of provider reasoning is used, for diagnostics.
+			ReasoningContent string `json:"reasoning_content"`
 		} `json:"message"`
 	} `json:"choices"`
 	Usage *struct {
@@ -285,7 +287,7 @@ func (d *DeepSeek) Generate(ctx context.Context, req Request) (Result, error) {
 	if choice.FinishReason == "length" || choice.FinishReason == "max_tokens" {
 		// No platform mutation has happened yet.  The caller may safely ask the
 		// provider again within its bounded model/evaluation budget.
-		return result, &Error{Kind: "truncated_output", Retryable: true}
+		return result, &Error{Kind: "truncated_output", Retryable: true, OutputShape: describeOutputShape(choice.Message.Content, choice.Message.ReasoningContent, programmingOutputKeys...)}
 	}
 	candidate, parseErr := parseCandidate(req.Problem, choice.Message.Content)
 	if parseErr != nil {

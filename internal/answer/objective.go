@@ -68,6 +68,10 @@ type ObjectiveRequest struct {
 	// RequireRankedAnswers asks the provider for ordered alternatives so the
 	// bounded platform-score locator can probe one question at a time.
 	RequireRankedAnswers bool `json:"-"`
+	// AnswersOnly is the compact retry after a truncated, malformed or
+	// contract-violating response: a plain answers array, no alternatives.
+	// It overrides RequireRankedAnswers for this request.
+	AnswersOnly bool `json:"-"`
 }
 type ObjectiveResult struct {
 	Candidate         ObjectiveCandidate `json:"candidate"`
@@ -378,7 +382,8 @@ func buildObjectiveRequest(req ObjectiveRequest) (wireRequest, error) {
 		Previous: req.Previous, FixedAnswers: req.FixedAnswers, Feedback: req.Feedback, Resources: refs,
 		OutputContract: makeObjectiveOutputContract(req.Problem),
 	}
-	payload.OutputContract.RankedRequired = req.RequireRankedAnswers
+	payload.OutputContract.RankedRequired = req.RequireRankedAnswers && !req.AnswersOnly
+	payload.OutputContract.AnswersOnly = req.AnswersOnly
 	for _, f := range req.Feedback {
 		if err := problem.ValidatePublicText(f.Kind + f.Message + f.Stdin + f.ExpectedStdout + f.ActualStdout); err != nil {
 			return wireRequest{}, &Error{Kind: "invalid_feedback"}
@@ -389,8 +394,11 @@ func buildObjectiveRequest(req ObjectiveRequest) (wireRequest, error) {
 		return wireRequest{}, &Error{Kind: "prompt_build_failed"}
 	}
 	contractInstruction := ""
-	if req.RequireRankedAnswers {
-		contractInstruction = " This is a repair/search request: ranked_answers is required, with at least two valid ordered alternatives for every unresolved question; answers-only output is accepted only when the ranked structure cannot be produced without violating the question contract."
+	switch {
+	case req.AnswersOnly:
+		contractInstruction = fmt.Sprintf(" The previous response for this task was truncated or malformed. Return only {\"kind\":\"objective\",\"answers\":[...]} with exactly %d answer strings; do not include ranked_answers, confidence or any other field.", len(req.Problem.Questions))
+	case req.RequireRankedAnswers:
+		contractInstruction = " This is a repair/search request: ranked_answers is required, with at least two valid ordered alternatives for every unresolved question; answers-only output is accepted only when the ranked structure cannot be produced without violating the question contract. Keep every slot short: two or three alternatives at most, never every possible combination."
 	}
 	system := fmt.Sprintf("REQUEST-SPECIFIC OUTPUT: answers must contain exactly %d strings, one per entry in questions in that array's order, not indexed by original position. Only requested original question positions %v require answers. Each multiple-choice answer occupies ONE string of concatenated labels, never separate array entries. context_questions is background only. Follow output_contract.answer_slots for each slot's original position, shape and allowed labels.%s\n\n", len(req.Problem.Questions), payload.OutputContract.QuestionPositions, contractInstruction) + objectiveSystemPrompt
 	content := textContent(string(b))
@@ -418,6 +426,7 @@ type objectiveOutputContract struct {
 	QuestionPositions []int                 `json:"question_positions"`
 	AnswerSlots       []objectiveOutputSlot `json:"answer_slots"`
 	RankedRequired    bool                  `json:"ranked_answers_required,omitempty"`
+	AnswersOnly       bool                  `json:"answers_only,omitempty"`
 }
 
 func makeObjectiveOutputContract(snapshot ObjectiveSnapshot) objectiveOutputContract {
@@ -479,18 +488,26 @@ func validateObjectiveFixedAnswerMatch(s ObjectiveSnapshot, fixed []string, cand
 	return nil
 }
 
+var objectiveOutputKeys = []string{"kind", "answers", "ranked_answers"}
+
 func parseObjectiveCandidate(s ObjectiveSnapshot, content string) (ObjectiveCandidate, error) {
 	var c ObjectiveCandidate
-	if len(content) > maxCandidateBytes || uniqueJSONKeys(strings.TrimSpace(content)) != nil {
-		return c, &Error{Kind: "invalid_output_json"}
+	// The objective contract stays strict: a Markdown fence is reported in the
+	// output-shape diagnostic, never silently unwrapped.
+	body := strings.TrimSpace(content)
+	invalid := func() error {
+		return &Error{Kind: "invalid_output_json", OutputShape: describeOutputShape(content, "", objectiveOutputKeys...)}
 	}
-	dec := json.NewDecoder(strings.NewReader(strings.TrimSpace(content)))
+	if len(content) > maxCandidateBytes || uniqueJSONKeys(body) != nil {
+		return c, invalid()
+	}
+	dec := json.NewDecoder(strings.NewReader(body))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&c); err != nil {
-		return c, &Error{Kind: "invalid_output_json"}
+		return c, invalid()
 	}
 	if _, err := dec.Token(); err != io.EOF {
-		return c, &Error{Kind: "invalid_output_json"}
+		return c, invalid()
 	}
 	for i := range c.Answers {
 		c.Answers[i] = strings.ToUpper(strings.TrimSpace(c.Answers[i]))
@@ -585,7 +602,7 @@ func (d *DeepSeek) GenerateObjective(ctx context.Context, req ObjectiveRequest) 
 		// ObjectiveSubmit has not been called, so a bounded provider retry is
 		// safe.  Once submission begins, taskservice preserves uncertainty and
 		// never replays the mutation automatically.
-		return result, &Error{Kind: "truncated_output", Retryable: true}
+		return result, &Error{Kind: "truncated_output", Retryable: true, OutputShape: describeOutputShape(ch.Message.Content, ch.Message.ReasoningContent, objectiveOutputKeys...)}
 	}
 	candidate, err := parseObjectiveCandidate(req.Problem, ch.Message.Content)
 	if err != nil {
