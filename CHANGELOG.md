@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.126 - 2026-11-19
+
+- Clarify the README solving lifecycle, protocol evidence and maintainer troubleshooting
+
 ## 0.1.125 - 2026-11-19
 
 - Document end-to-end solving flows, protocol boundaries and maintainer troubleshooting
