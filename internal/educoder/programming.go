@@ -509,6 +509,12 @@ func (c *Client) buildCodeInEnvironment(ctx context.Context, t *Task, saved *Sav
 	body := map[string]any{"sec_key": saved.SecKey, "resubmit": saved.Resubmit, "first": 1, "content_modified": saved.ContentModified, "shixun_environment_id": environment.EnvironmentID, "tab_type": environment.TabType, "extras": extras}
 	var response BuildResult
 	if err := c.requestWithStatuses(ctx, http.MethodPost, "/api/tasks/"+t.Game.Identifier+"/game_build.json", nil, body, taskRef(t), &response, 1); err != nil {
+		var status *APIStatusError
+		if errors.As(err, &status) && status.Code == -2 {
+			// The official task page ends the evaluation on -2 without polling
+			// game_status: the platform did not start an evaluation.
+			return nil, &EvaluationRefusedError{Code: -2}
+		}
 		return nil, err
 	}
 	if response.Status != 1 {

@@ -148,6 +148,19 @@ running_code_status=1 → 304 未更新 → running_code_status=2
 
 该原始 HAR 未覆盖其他题型、完整目录树/`.h`/多文件、多环境、失败/编译错误/排队、实际非空 resubmit 的重新 build。本次线上另核验了 URL-safe 自测帧，并结合线上 `status=0` 错误迹象补充本地失败组合测试；这些合成响应、超时和异常测试不等于原始 HAR 或线上完整录到了相应失败分支。
 
+## 平台繁忙时的拒绝与排队（2026-11-20 线上观察）
+
+测试账号在平台资源紧张时段实测，并对照原站任务页编译代码（`p__tasks__index` 包）确认：
+
+| 信号 | 含义 | 当前处理 |
+| --- | --- | --- |
+| `log_output` 返回 `status:0`、无 `data.wss_url`，`data.error_msg` 为“当前平台资源紧张…” | 平台未启动自测运行，代码没有执行 | `SelfTestRefusedError`：15/45 秒退避重试同一候选，仍未恢复记 `resource_unavailable`，作业延后该关 |
+| `game_build` 返回 `status:-2` | 原站客户端遇到 -2 直接结束评测、不轮询 `game_status`，即评测未启动 | `EvaluationRefusedError`：正式验证记 `error`（非 `unknown`），运行记 `resource_unavailable`，作业延后该关 |
+| `game_build` 响应 `data.data_list` 非空 | 账号同时开启的实验环境已满（原站弹出关闭环境列表） | 尚未专门处理 |
+| `game_build` 响应 `res.data.queueCode === 1` | 评测已受理但需排队：原站轮询 `GET /api/game_queues/get_rank.json`（参数 `tpi_id`=运行实例数字 ID、`homework_common_id`、`exercise_id`），`data.status` 为 1 时每 1.3 秒继续轮询并显示 `data.rank`，为 2 时开始评测，其他值视为未进行；取消为 `POST /api/game_queues/queue_evaluate_cancel.json {tpi_id}` | **尚未实现**：当前客户端最多轮询 `game_status` 2 分钟，排队较久时会被记为结果未知 |
+
+`-2` 之后平台关卡显示 `evaluate_count` 加 1、`passed_status=1`，但没有任何测试结果（`game.status=0`，测试结果为空），与“评测未启动”一致。原站的“评测”按钮流程是 `update_file(evaluate=1)` → `game_build`，并不要求先自测；当晚的 `-2` 与同一时段所有自测请求返回的“资源紧张”一致。
+
 ## 选择题链路（独立题型）
 
 随后对同一课程中的 `客观题测试-第5章树和二叉树` 实测确认：选择题不属于代码题的文件编辑协议。任务详情响应使用 `st=1`、`challenge.st=1`，并提供非空 `chooses` 数组；本次一关含 10 道题。每项包含 1-based `position`、`subject`、`question_type`、`category` 和 `challenge_question` 选项数组；选项保存 0-based `position` 与 `option_name`。`category=1` 表示单选，前端提交一个字母；其他已观察 category 使用排序去重后的多字母字符串。

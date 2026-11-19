@@ -75,3 +75,40 @@ func TestPersistentResourcePressureIsUnavailableNotUncertain(t *testing.T) {
 		})
 	}
 }
+
+// refusedBuildAdapter passes self-tests and has every formal build refused
+// with status -2, as the platform does under resource pressure.
+type refusedBuildAdapter struct{ fakeAdapter }
+
+func (a *refusedBuildAdapter) Submit(context.Context, Target, problem.SolutionFile) (Evaluation, error) {
+	a.submits++
+	return Evaluation{Status: "build_refused", Feedback: "refused"}, &educoder.EvaluationRefusedError{Code: -2}
+}
+
+func TestRefusedFormalBuildIsUnavailableNotUncertain(t *testing.T) {
+	store := verifiedGoodStore()
+	adapter := &refusedBuildAdapter{fakeAdapter: fakeAdapter{snap: testSnapshot()}}
+	provider := &scriptedProvider{estimateCost: 10, generate: func(context.Context, answer.Request, int) (answer.Result, error) {
+		t.Fatal("a refused build is not code feedback and must not call the model")
+		return answer.Result{}, nil
+	}}
+	req := recoveryRequest()
+	req.Mode = ModeSubmit
+	r, err := New(store, provider, Config{}).Run(context.Background(), adapter, req)
+	var refused *educoder.EvaluationRefusedError
+	if !errors.As(err, &refused) || r.Status != "resource_unavailable" || adapter.submits != 1 || r.ModelCalls != 0 {
+		t.Fatalf("result=%+v err=%v submits=%d", r, err, adapter.submits)
+	}
+	formal := 0
+	for _, v := range store.validations {
+		if v.Kind == "formal" {
+			formal++
+			if v.Result != "error" {
+				t.Fatalf("refused build recorded as %q, want error (no evaluation started)", v.Result)
+			}
+		}
+	}
+	if formal != 1 {
+		t.Fatalf("formal validations=%d", formal)
+	}
+}

@@ -75,3 +75,24 @@ func selfTestTaskFixture() *Task {
 	task.Environments = []ProgrammingEnvironment{{EnvironmentID: 12, TabType: 1}}
 	return task
 }
+
+func TestBuildStatusMinus2IsARefusedEvaluation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/update_file.json"):
+			w.Write([]byte(`{"content":{"commitID":"c1","size":4},"resubmit":"","sec_key":"k","content_modified":0}`))
+		case strings.HasSuffix(r.URL.Path, "/game_build.json"):
+			w.Write([]byte(`{"status":-2,"message":"platform text that must not be kept"}`))
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	_, err := New(server.URL).SubmitCode(context.Background(), selfTestTaskFixture(), "main.cpp", "code", PollOptions{})
+	var refused *EvaluationRefusedError
+	if !errors.As(err, &refused) || refused.Code != -2 || strings.Contains(err.Error(), "platform text") {
+		t.Fatalf("err=%v", err)
+	}
+}

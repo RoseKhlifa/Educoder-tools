@@ -26,3 +26,14 @@ func TestSelfTestRefusalIsAContinuableResourceFailure(t *testing.T) {
 		t.Fatal("unknown writes must still stop the homework")
 	}
 }
+
+func TestRefusedBuildIsAContinuableResourceFailure(t *testing.T) {
+	refusal := &educoder.EvaluationRefusedError{Code: -2}
+	result := &Result{Status: "resource_unavailable", Kind: "programming"}
+	if got := batchFailureReason(result, refusal); got != "resource_unavailable" {
+		t.Fatalf("reason=%q", got)
+	}
+	if !runtimeFailureBeforeFormal(result, refusal) {
+		t.Fatal("a refused build started no evaluation and must be deferrable")
+	}
+}

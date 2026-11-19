@@ -27,3 +27,13 @@ func selfTestRefusal(message string) error {
 	}
 	return &SelfTestRefusedError{Kind: "refused"}
 }
+
+// EvaluationRefusedError means game_build answered with a refusal status the
+// official client treats as "evaluation not started" (it stops without
+// polling). The save before it happened; no formal evaluation did. Observed
+// together with platform resource pressure, so it is transient.
+type EvaluationRefusedError struct{ Code int }
+
+func (e *EvaluationRefusedError) Error() string {
+	return "正式评测未启动：平台拒绝了本次评测（通常为平台资源紧张）"
+}

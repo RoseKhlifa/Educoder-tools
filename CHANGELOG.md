@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.139 - 2026-11-20
+
+- Treat a game_build status -2 as a refused, never-started evaluation that is retried later instead of an unknown submission
+
 ## 0.1.138 - 2026-11-20
 
 - Classify platform resource-pressure refusals of the self-test as retryable resource_unavailable instead of an unknown stream failure

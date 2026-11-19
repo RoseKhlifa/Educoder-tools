@@ -1288,7 +1288,7 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			}
 			if ee != nil {
 				vr = "unknown"
-				if graphicBuildNotSent(snap, eval) {
+				if graphicBuildNotSent(snap, eval) || eval.Status == "build_refused" {
 					vr = "error"
 				}
 				result.Diagnostics = append(result.Diagnostics, ee.Error())
@@ -1354,6 +1354,17 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			return result, nil
 		}
 		if ee != nil {
+			if eval.Status == "build_refused" {
+				// The platform refused to start this evaluation; nothing formal
+				// is pending, so this is a transient resource condition rather
+				// than an unknown submission.
+				result.Status = "resource_unavailable"
+				state.Result = *result
+				if persistErr := s.persist(ctx, result.RunID, state, result.Status, created); persistErr != nil {
+					return result, persistErr
+				}
+				return result, ee
+			}
 			if graphicBuildNotSent(snap, eval) {
 				result.Status = eval.Status
 				state.Result = *result

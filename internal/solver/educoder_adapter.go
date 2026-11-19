@@ -351,6 +351,10 @@ func (a *EducoderAdapter) Submit(ctx context.Context, target Target, file proble
 		return Evaluation{Status: "save_unverified", Feedback: err.Error()}, err
 	}
 	if _, err := a.Client.BuildCode(ctx, t, saved); err != nil {
+		var refused *educoder.EvaluationRefusedError
+		if errors.As(err, &refused) {
+			return Evaluation{Status: "build_refused", Feedback: err.Error(), SavedFilesHash: hash}, err
+		}
 		return Evaluation{Status: "build_error", Feedback: err.Error(), SavedFilesHash: hash}, err
 	}
 	r, err := a.Client.WaitEvaluation(ctx, t, saved, educoder.PollOptions{})

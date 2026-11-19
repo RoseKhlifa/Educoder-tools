@@ -553,6 +553,10 @@ func batchFailureReason(r *Result, err error) string {
 	if errors.As(err, &refused) {
 		return "resource_unavailable"
 	}
+	var buildRefused *educoder.EvaluationRefusedError
+	if errors.As(err, &buildRefused) {
+		return "resource_unavailable"
+	}
 	var resourceErr *educoder.GraphicRuntimeResourceError
 	if errors.As(err, &resourceErr) {
 		return "resource_unavailable"

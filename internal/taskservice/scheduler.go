@@ -205,6 +205,10 @@ func runtimeFailureBeforeFormal(result *Result, err error) bool {
 	if errors.As(err, &refused) {
 		return true
 	}
+	var buildRefused *educoder.EvaluationRefusedError
+	if errors.As(err, &buildRefused) {
+		return true
+	}
 	var mutation *educoder.GraphicMutationError
 	if errors.As(err, &mutation) {
 		switch mutation.Stage {
