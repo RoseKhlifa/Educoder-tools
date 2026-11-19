@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.141 - 2026-11-20
+
+- Reuse settled assignment progress in the course list for 30 minutes so idle refreshes only re-read unfinished assignments from Educoder
+
 ## 0.1.140 - 2026-11-20
 
 - Keep sessions when the platform store cannot be read, answering 503 instead of logging users out on a transient database error

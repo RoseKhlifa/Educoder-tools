@@ -106,6 +106,7 @@ type Server struct {
 	loginLimits         *loginLimiter
 	questionBankSummary questionBankSummaryCache
 	todaySummary        todaySummaryCache
+	settledProgress     *settledProgressCache
 }
 
 func NewServer(config Config) *Server {
@@ -131,7 +132,7 @@ func NewServerWithFactory(config Config, factory ClientFactory) *Server {
 	if factory == nil {
 		factory = func(baseURL string) EducoderClient { return educoder.New(baseURL) }
 	}
-	s := &Server{config: config, store: NewSessionStore(config.SessionTTL), factory: factory, avatars: avatar.New(), loginLimits: newLoginLimiter()}
+	s := &Server{config: config, store: NewSessionStore(config.SessionTTL), factory: factory, avatars: avatar.New(), loginLimits: newLoginLimiter(), settledProgress: newSettledProgressCache()}
 	s.static = newStaticHandler(config.StaticDir)
 	return s
 }
@@ -467,7 +468,7 @@ func (s *Server) handleHomeworks(w http.ResponseWriter, r *http.Request, request
 	}
 	s.rememberHomeworkLabels(r.Context(), course, homeworks)
 	homeworks = educoder.OpenHomeworks(homeworks, time.Now())
-	result := serviceHomeworks(r.Context(), session.Client, course, homeworks)
+	result := serviceHomeworksSettled(r.Context(), session.Client, course, homeworks, s.settledProgress, sessionJobOwner(session))
 	s.writeJSON(w, requestID, http.StatusOK, result)
 }
 

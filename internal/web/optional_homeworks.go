@@ -17,6 +17,14 @@ type homeworkProgressReader interface {
 // and must remain visible without shixun progress requests or optional-level
 // filtering. Unknown or partial progress cannot claim required-work completion.
 func serviceHomeworks(ctx context.Context, client EducoderClient, course string, homeworks []educoder.Homework) []homeworkDTO {
+	return serviceHomeworksSettled(ctx, client, course, homeworks, nil, "")
+}
+
+// serviceHomeworksSettled is serviceHomeworks with a per-account memory of
+// assignments whose last complete progress read left nothing to do. Those skip
+// their upstream progress read until the entry expires; every other assignment
+// is read exactly as before. A nil cache or empty owner disables reuse.
+func serviceHomeworksSettled(ctx context.Context, client EducoderClient, course string, homeworks []educoder.Homework, settled *settledProgressCache, owner string) []homeworkDTO {
 	result := make([]homeworkDTO, len(homeworks))
 	for i, homework := range homeworks {
 		result[i] = toHomeworkDTO(homework)
@@ -29,11 +37,16 @@ func serviceHomeworks(ctx context.Context, client EducoderClient, course string,
 	defer cancel()
 	candidates := make([]int, 0, min(len(homeworks), 100))
 	for i := range result {
-		if result[i].AutomaticSupported {
-			candidates = append(candidates, i)
-			if len(candidates) == 100 {
-				break
-			}
+		if !result[i].AutomaticSupported {
+			continue
+		}
+		if required, ok := settled.lookup(settledKey(owner, course, homeworks[i])); ok {
+			applyRequiredCounts(&result[i], required, required)
+			continue
+		}
+		candidates = append(candidates, i)
+		if len(candidates) == 100 {
+			break
 		}
 	}
 	indexes := make(chan int)
@@ -53,6 +66,9 @@ func serviceHomeworks(ctx context.Context, client EducoderClient, course string,
 				// The assignment score list includes every question kind. Header
 				// metadata can omit objective levels and cannot shrink its scope.
 				applyRequiredProgress(&result[index], homeworks[index], progress)
+				if dto := result[index]; dto.RequiredKnown && dto.RequiredCount != nil && dto.FinishedRequired != nil {
+					settled.remember(settledKey(owner, course, homeworks[index]), *dto.RequiredCount, *dto.FinishedRequired)
+				}
 			}
 		}()
 	}
