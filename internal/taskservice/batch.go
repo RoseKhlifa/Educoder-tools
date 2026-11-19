@@ -327,7 +327,7 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 			return out, nil
 		}
 		current := BatchProgress{TotalLevels: out.TotalLevels, CompletedLevels: out.CompletedLevels, SkippedLevels: out.SkippedLevels, FailedLevels: out.FailedLevels, CurrentPosition: l.Position, CurrentTitle: l.Title}
-		single, runErr := s.Run(ctx, bound, Request{Owner: req.Owner, Course: req.Course, HomeworkID: req.HomeworkID, Game: l.Game, Mode: solver.ModeSubmit, BudgetMicroUSD: remaining, IdempotencyKey: fmt.Sprintf("%s:%d", req.IdempotencyKey, l.ChallengeID)}, func(p Progress) { emit(current, p.Phase, p.Message) })
+		single, runErr := s.Run(ctx, bound, Request{Owner: req.Owner, Course: req.Course, HomeworkID: req.HomeworkID, Homework: hw, Game: l.Game, Mode: solver.ModeSubmit, BudgetMicroUSD: remaining, IdempotencyKey: fmt.Sprintf("%s:%d", req.IdempotencyKey, l.ChallengeID)}, func(p Progress) { emit(current, p.Phase, p.Message) })
 		if single != nil {
 			out.ModelCalls += single.ModelCalls
 			out.CostMicroUSD += single.CostMicroUSD

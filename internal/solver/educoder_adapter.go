@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"educoder-cli/internal/educoder"
 	"educoder-cli/internal/problem"
@@ -23,9 +24,14 @@ type EducoderAdapter struct {
 	graphic          *educoder.GraphicProtocol
 	graphicDocuments map[string]*educoder.GraphicDocument
 	terminalTasks    map[string]*terminalBinding
-	terminalRun      func(context.Context, *educoder.Task, string, educoder.TerminalOptions) (*educoder.TerminalResult, error)
-	terminalSubmit   func(context.Context, *educoder.Task, *educoder.TerminalResult, educoder.PollOptions) (*educoder.EvaluationResult, error)
-	hadoopStart      func(context.Context, *educoder.Task) error
+	// tasks holds the last task read bound to the active run per game, with
+	// its read time. Self-tests may reuse a fresh one; formal writes reload.
+	tasks map[string]timedTask
+	// readAt records when each editor file was last read and hash-confirmed.
+	readAt         map[string]map[string]time.Time
+	terminalRun    func(context.Context, *educoder.Task, string, educoder.TerminalOptions) (*educoder.TerminalResult, error)
+	terminalSubmit func(context.Context, *educoder.Task, *educoder.TerminalResult, educoder.PollOptions) (*educoder.EvaluationResult, error)
+	hadoopStart    func(context.Context, *educoder.Task) error
 }
 
 func NewEducoderAdapter(client *educoder.Client) (*EducoderAdapter, error) {
@@ -106,7 +112,7 @@ func (a *EducoderAdapter) Load(ctx context.Context, target Target) (LoadedProble
 		}
 	}
 	snap := problem.Snapshot{SchemaVersion: problem.SchemaVersion, Kind: "programming", Title: t.Challenge.Subject, StatementMarkdown: pt.Markdown, Files: files, ReadOnlyFiles: readOnly, ReadOnlyContext: supportStatus, PublicTests: public, EditMode: "single_file", SnapshotCompleteness: "observed", EnvironmentContract: environment}
-	return LoadedProblem{Snapshot: snap, ExternalIdentity: questionbank.ExternalIdentity{Experiment: t.Shixun.Name, Title: t.Challenge.Subject, Position: t.Challenge.Position}, Key: strconv.FormatInt(t.MyShixun.ID, 10), target: target}, nil
+	return LoadedProblem{Snapshot: snap, ExternalIdentity: questionbank.ExternalIdentity{Experiment: t.Shixun.Name, Title: t.Challenge.Subject, Position: t.Challenge.Position}, Key: strconv.FormatInt(t.MyShixun.ID, 10), target: target, task: t}, nil
 }
 
 // Only the solver calls bindSnapshot, after acquiring the runtime lock. A
@@ -122,6 +128,15 @@ func (a *EducoderAdapter) bindSnapshot(loaded LoadedProblem) {
 		a.expected = map[string]map[string]string{}
 	}
 	a.expected[loaded.target.Game] = hashes
+	if loaded.task != nil {
+		if a.tasks == nil {
+			a.tasks = map[string]timedTask{}
+		}
+		a.tasks[loaded.target.Game] = timedTask{task: loaded.task, at: time.Now()}
+	}
+	// A new baseline is never "recently confirmed": the first write of the
+	// run must read the editor itself.
+	delete(a.readAt, loaded.target.Game)
 	if loaded.terminalIdentity != nil {
 		if a.terminalTasks == nil {
 			a.terminalTasks = map[string]*terminalBinding{}
@@ -142,9 +157,15 @@ func (a *EducoderAdapter) bindSnapshot(loaded LoadedProblem) {
 func (a *EducoderAdapter) guardEditor(ctx context.Context, t *educoder.Task, file problem.SolutionFile) error {
 	a.mu.Lock()
 	expected, bound := a.expected[t.Game.Identifier][file.Path]
+	readAt := a.readAt[t.Game.Identifier][file.Path]
 	a.mu.Unlock()
 	if !bound {
 		return errors.New("editor baseline is not bound to the active solver run")
+	}
+	if !readAt.IsZero() && time.Since(readAt) < editorGuardFreshness {
+		// This run's own read-back confirmed exactly these bytes moments ago
+		// and nothing was written since; the next write is still read back.
+		return nil
 	}
 	current, err := a.Client.ReadCodeFile(ctx, t, file.Path)
 	if err != nil {
@@ -154,6 +175,55 @@ func (a *EducoderAdapter) guardEditor(ctx context.Context, t *educoder.Task, fil
 		return errors.New("editor content changed concurrently; reload before writing")
 	}
 	return nil
+}
+
+// editorGuardFreshness bounds how old this run's own read-back may be before a
+// write must read the editor again. It covers only the back-to-back read-back
+// and next-write pair of the same candidate, never a model generation, a new
+// candidate or the first write after loading.
+const editorGuardFreshness = 2 * time.Second
+
+// selfTestTaskFreshness bounds how long a bound task read may be reused for a
+// self-test save. Formal submissions always read the task again.
+const selfTestTaskFreshness = 15 * time.Second
+
+type timedTask struct {
+	task *educoder.Task
+	at   time.Time
+}
+
+func (a *EducoderAdapter) markRead(game, path string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.readAt == nil {
+		a.readAt = map[string]map[string]time.Time{}
+	}
+	if a.readAt[game] == nil {
+		a.readAt[game] = map[string]time.Time{}
+	}
+	a.readAt[game][path] = time.Now()
+}
+
+// selfTestTask reuses this run's bound task read while it is fresh; formal
+// submissions call task() and always see the platform's current state.
+func (a *EducoderAdapter) selfTestTask(ctx context.Context, target Target) (*educoder.Task, error) {
+	a.mu.Lock()
+	cached, ok := a.tasks[target.Game]
+	a.mu.Unlock()
+	if ok && cached.task != nil && time.Since(cached.at) < selfTestTaskFreshness && cached.task.HomeworkID == target.HomeworkID {
+		return cached.task, nil
+	}
+	t, err := a.task(ctx, target)
+	if err != nil {
+		return nil, err
+	}
+	a.mu.Lock()
+	if a.tasks == nil {
+		a.tasks = map[string]timedTask{}
+	}
+	a.tasks[target.Game] = timedTask{task: t, at: time.Now()}
+	a.mu.Unlock()
+	return t, nil
 }
 
 func (a *EducoderAdapter) confirmEditor(ctx context.Context, t *educoder.Task, file problem.SolutionFile) (string, error) {
@@ -174,6 +244,7 @@ func (a *EducoderAdapter) confirmEditor(ctx context.Context, t *educoder.Task, f
 	}
 	a.expected[t.Game.Identifier][file.Path] = problem.HashContent(file.Content)
 	a.mu.Unlock()
+	a.markRead(t.Game.Identifier, file.Path)
 	return hash, nil
 }
 
@@ -206,11 +277,23 @@ func (a *EducoderAdapter) StartHadoop(ctx context.Context, target Target) error 
 }
 
 func (a *EducoderAdapter) SelfTest(ctx context.Context, target Target, file problem.SolutionFile, input, expected string) (SelfTest, error) {
-	t, err := a.task(ctx, target)
+	if a.hasTerminalBinding(target.Game) {
+		// Terminal scripts execute in a live workspace: always re-check the
+		// task identity before every execution.
+		t, err := a.task(ctx, target)
+		if err != nil {
+			return SelfTest{}, err
+		}
+		return a.selfTestTerminal(ctx, t, target, file, input, expected)
+	}
+	t, err := a.selfTestTask(ctx, target)
 	if err != nil {
 		return SelfTest{}, err
 	}
-	if t.IsTerminalTask() || t.IsHadoopWorkspaceTask() || a.hasTerminalBinding(target.Game) {
+	if t.IsTerminalTask() || t.IsHadoopWorkspaceTask() {
+		if t, err = a.task(ctx, target); err != nil {
+			return SelfTest{}, err
+		}
 		return a.selfTestTerminal(ctx, t, target, file, input, expected)
 	}
 	if err := a.guardEditor(ctx, t, file); err != nil {

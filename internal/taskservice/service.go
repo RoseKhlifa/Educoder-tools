@@ -231,7 +231,17 @@ func (s *Service) Run(ctx context.Context, client *educoder.Client, req Request,
 	if req.Mode == solver.ModeSubmit {
 		kind := task.Kind()
 		if kind == educoder.TaskKindMySQLArtifact || kind == educoder.TaskKindProgramming || kind == educoder.TaskKindGraphic {
-			if result, e := admitSubmitHomework(ctx, client, req.Course, req.HomeworkID, string(kind)); e != nil || result != nil {
+			if req.Homework != nil {
+				// A homework batch already resolved this assignment from the
+				// authenticated list; apply the same deadline rule to it instead
+				// of paging through the course's homework list for every level.
+				if req.Homework.ID != req.HomeworkID {
+					return nil, errors.New("homework admission context does not match the target")
+				}
+				if req.Homework.IsClosed(time.Now()) {
+					return &Result{Status: "deadline_passed", Kind: string(kind), Diagnostics: []string{"deadline_passed"}}, nil
+				}
+			} else if result, e := admitSubmitHomework(ctx, client, req.Course, req.HomeworkID, string(kind)); e != nil || result != nil {
 				return result, e
 			}
 		}
@@ -259,7 +269,10 @@ func (s *Service) Run(ctx context.Context, client *educoder.Client, req Request,
 		if adapterErr != nil {
 			return nil, adapterErr
 		}
-		solverReq := solver.Request{Owner: req.Owner, Course: req.Course, HomeworkID: req.HomeworkID, Game: req.Game, Mode: req.Mode, IdempotencyKey: req.IdempotencyKey, BudgetMicroUSD: req.BudgetMicroUSD, MaxModelCalls: s.cfg.MaxModelCalls, MaxEvaluations: s.cfg.MaxEvaluations, OnProgress: func(st solver.Stage) { emit(st.Phase, "programming", st.Message) }}
+		solverReq := solver.Request{Owner: req.Owner, Course: req.Course, HomeworkID: req.HomeworkID, Game: req.Game, Mode: req.Mode, IdempotencyKey: req.IdempotencyKey, BudgetMicroUSD: req.BudgetMicroUSD, MaxModelCalls: s.cfg.MaxModelCalls, MaxEvaluations: s.cfg.MaxEvaluations, OnProgress: func(st solver.Stage) { emit(st.Phase, "programming", st.Message) },
+			// A homework batch re-reads the authoritative progress right after
+			// each level, so the solver's own informational read is redundant.
+			SkipProgressRead: req.Homework != nil}
 		if solverReq.BudgetMicroUSD <= 0 {
 			solverReq.BudgetMicroUSD = s.cfg.BudgetMicroUSD
 		}

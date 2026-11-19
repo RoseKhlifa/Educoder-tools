@@ -45,6 +45,9 @@ type Request struct {
 	BudgetMicroUSD int64
 	Timeout        time.Duration
 	OnProgress     func(Stage) `json:"-"`
+	// SkipProgressRead omits the informational classroom-progress read after a
+	// pass when the caller immediately re-reads the authoritative progress.
+	SkipProgressRead bool `json:"-"`
 }
 
 // Stage reports a public lifecycle event to server and CLI callers.
@@ -108,6 +111,9 @@ type LoadedProblem struct {
 	ExternalIdentity questionbank.ExternalIdentity
 	graphicDocument  *educoder.GraphicDocument
 	terminalIdentity *terminalTaskIdentity
+	// task is the upstream read this problem was built from. The adapter may
+	// reuse it for a short time instead of reading the same task again.
+	task *educoder.Task
 	// Key is a per-runtime lock key such as myshixun ID. It is not persisted.
 	Key    string
 	target Target
@@ -503,7 +509,8 @@ func (s *Service) Run(ctx context.Context, adapter Adapter, req Request) (*Resul
 	}
 	defer unlock()
 	// The initial load discovers the runtime key. Reload after acquiring its
-	// lock so a waiting run never generates from a stale editor snapshot.
+	// lock so a run never generates from an editor snapshot that the student
+	// or another session changed in between.
 	locked, err := adapter.Load(ctx, state.Target)
 	if err == nil && locked.Key != loaded.Key {
 		err = errors.New("task runtime changed while acquiring execution lock")
@@ -1315,7 +1322,9 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			}
 			stage(req, "verifying", "正在复核课堂状态")
 			result.Status = "passed"
-			result.ProgressPtr(adapter, ctx, target)
+			if !req.SkipProgressRead {
+				result.ProgressPtr(adapter, ctx, target)
+			}
 			state.Feedback = nil
 			state.Result = *result
 			_ = s.persist(ctx, result.RunID, state, result.Status, created)

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.133 - 2026-11-20
+
+- Drop redundant per-level upstream reads in homework batches while keeping every concurrency and verification read, guarded by a request-budget test
+
 ## 0.1.132 - 2026-11-20
 
 - Submit candidates with complete formal proof for the same revision directly instead of repeating their public self-tests
