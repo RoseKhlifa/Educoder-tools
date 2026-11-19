@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.142 - 2026-11-20
+
+- Pass the upstream, parallel-homework and new collection-lane settings through compose so operator values reach the process, guarded by a test against the code defaults
+
 ## 0.1.141 - 2026-11-20
 
 - Reuse settled assignment progress in the course list for 30 minutes so idle refreshes only re-read unfinished assignments from Educoder

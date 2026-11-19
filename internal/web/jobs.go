@@ -43,6 +43,7 @@ func loadJobConfig(cfg *Config) error {
 		"MODEL_CONCURRENCY":            &cfg.ModelConcurrency,
 		"UPSTREAM_ACCOUNT_CONCURRENCY": &cfg.UpstreamAccountConcurrency, "UPSTREAM_GLOBAL_CONCURRENCY": &cfg.UpstreamGlobalConcurrency,
 		"HOMEWORK_PARALLELISM": &cfg.HomeworkParallelism,
+		"COLLECTION_WORKERS":   &cfg.CollectionWorkers,
 	} {
 		if raw := os.Getenv(name); raw != "" {
 			n, err := strconv.Atoi(raw)
@@ -60,6 +61,9 @@ func loadJobConfig(cfg *Config) error {
 	}
 	if cfg.HomeworkParallelism > 4 {
 		return errors.New("invalid HOMEWORK_PARALLELISM: at most 4")
+	}
+	if cfg.CollectionWorkers > 16 {
+		return errors.New("invalid COLLECTION_WORKERS: at most 16")
 	}
 	for name, value := range map[string]*time.Duration{"JOB_TIMEOUT": &cfg.JobTimeout, "MODEL_TIMEOUT": &cfg.ModelTimeout} {
 		if raw := os.Getenv(name); raw != "" {
@@ -147,7 +151,7 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 			return nil, errors.New("initialize model provider failed")
 		}
 	}
-	manager, err := jobs.Open(context.Background(), jobs.Config{Path: filepath.Join(cfg.DataDir, "jobs.sqlite"), Workers: cfg.JobWorkers, QueueSize: cfg.JobQueueSize, PerOwnerPending: cfg.JobPerOwner, PerOwnerRunning: cfg.JobPerOwnerRunning, Timeout: cfg.JobTimeout})
+	manager, err := jobs.Open(context.Background(), jobs.Config{Path: filepath.Join(cfg.DataDir, "jobs.sqlite"), Workers: cfg.JobWorkers, QueueSize: cfg.JobQueueSize, PerOwnerPending: cfg.JobPerOwner, PerOwnerRunning: cfg.JobPerOwnerRunning, Timeout: cfg.JobTimeout, CollectionWorkers: cfg.CollectionWorkers})
 	if err != nil {
 		bank.Close()
 		return nil, err
