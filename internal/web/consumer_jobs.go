@@ -440,6 +440,10 @@ func publicAutoRetry(value *consumerAutoRetry) *consumerAutoRetry {
 	if value.Max > 0 && value.Attempt > value.Max {
 		return nil
 	}
+	if autoRetryNow().Sub(value.NextAt) > autoRetryWindow {
+		// The launch window has passed; the page must not keep promising it.
+		return nil
+	}
 	out := *value
 	out.NextAt = out.NextAt.UTC()
 	return &out

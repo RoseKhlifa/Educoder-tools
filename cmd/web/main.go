@@ -75,6 +75,21 @@ func run() error {
 			}
 		}
 	}()
+	// Launch due automatic retries of jobs the platform refused to run.
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				tick, cancel := context.WithTimeout(ctx, 20*time.Second)
+				app.AutoRetryTick(tick)
+				cancel()
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 	shutdownDone := make(chan struct{})
 	go func() {
 		<-ctx.Done()

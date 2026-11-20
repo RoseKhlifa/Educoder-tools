@@ -109,6 +109,7 @@ type Server struct {
 	questionBankSummary questionBankSummaryCache
 	todaySummary        todaySummaryCache
 	settledProgress     *settledProgressCache
+	autoRetry           autoRetryScheduler
 }
 
 func NewServer(config Config) *Server {

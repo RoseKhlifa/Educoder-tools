@@ -219,6 +219,7 @@ func (s *Server) submitSessionJob(ctx context.Context, session Session, req jobs
 				}
 				report(event)
 			})
+			out = s.planAutoRetry(ctx, request, out, err)
 			s.rememberResultLabels(ctx, request, out.Result, false)
 			return out, err
 		})

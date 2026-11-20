@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.154 - 2026-11-20
+
+- Retry jobs that stopped only because Educoder refused to run them, after 10, 20 and 40 minutes through the owner live session, sharing the manual retry key so the two never both run
+
 ## 0.1.153 - 2026-11-20
 
 - Show users and operators live per-assignment progress with a consistent snapshot under parallel homeworks, throttled progress writes and plain next steps; join the access watcher before a job returns

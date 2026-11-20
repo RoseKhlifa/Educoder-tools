@@ -125,9 +125,16 @@ func TestConsumerReasonUsesAllowlistAndFriendlyResourceWording(t *testing.T) {
 // auto_retry is rendered as a promise to the user, so an implausible schedule
 // is dropped rather than displayed.
 func TestConsumerAutoRetryIsValidated(t *testing.T) {
+	old := autoRetryNow
+	autoRetryNow = func() time.Time { return time.Date(2026, 11, 20, 3, 0, 0, 0, time.UTC) }
+	t.Cleanup(func() { autoRetryNow = old })
 	good := toConsumerJob(jobs.Job{Status: jobs.Failed, Result: json.RawMessage(`{"status":"needs_service","reason_code":"resource_unavailable","auto_retry":{"next_at":"2026-11-20T03:04:05Z","attempt":2,"max":5}}`)})
 	if good.Result.AutoRetry == nil || good.Result.AutoRetry.Attempt != 2 || good.Result.AutoRetry.Max != 5 {
 		t.Fatalf("valid auto retry dropped: %+v", good.Result.AutoRetry)
+	}
+	stale := toConsumerJob(jobs.Job{Status: jobs.Failed, Result: json.RawMessage(`{"auto_retry":{"next_at":"2026-11-19T03:04:05Z","attempt":1,"max":3}}`)})
+	if stale.Result.AutoRetry != nil {
+		t.Fatalf("expired retry promise still shown: %+v", stale.Result.AutoRetry)
 	}
 	if !good.Result.AutoRetry.NextAt.Equal(time.Date(2026, 11, 20, 3, 4, 5, 0, time.UTC)) {
 		t.Fatalf("auto retry time changed: %v", good.Result.AutoRetry.NextAt)
