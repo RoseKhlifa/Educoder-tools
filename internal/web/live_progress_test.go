@@ -207,3 +207,19 @@ func TestAdminLiveProgressProjectionMirrorsConsumerShape(t *testing.T) {
 		t.Fatalf("settled job published live admin progress: %+v", got)
 	}
 }
+
+// One field with an unexpected JSON type must not blank the whole view, and an
+// unknown parent code must not hide a specific child cause.
+func TestConsumerViewToleratesOneMistypedFieldAndPrefersSpecificCauses(t *testing.T) {
+	job := toConsumerJob(jobs.Job{Status: jobs.Failed, Request: jobs.Request{Mode: "submit", Scope: "course"}, Result: json.RawMessage(
+		`{"status":"needs_service","score":12.5,"total_homeworks":2,"completed_homeworks":1,"homeworks":[{"title":"a","status":"passed"},{"title":"b","status":"needs_service","reason_code":"resource_unavailable"}]}`)})
+	if job.Result.TotalHomeworks != 2 || len(job.Result.Homeworks) != 2 {
+		t.Fatalf("a mistyped field blanked the view: %+v", job.Result)
+	}
+	if got := consumerReason("brand_new_internal_code", "resource_unavailable"); got != consumerReasonCodes["resource_unavailable"] {
+		t.Fatalf("unknown code masked a specific cause: %q", got)
+	}
+	if got := consumerReason("brand_new_internal_code"); got != "service_followup" {
+		t.Fatalf("unknown code alone = %q", got)
+	}
+}

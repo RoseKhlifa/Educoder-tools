@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.156 - 2026-11-20
+
+- Report each level real status in live progress, keep parallel phase flips under the one-second write throttle, and keep a result view whole when one field has an unexpected type
+
 ## 0.1.155 - 2026-11-20
 
 - Let a level whose first two model attempts failed make its last attempt a fresh Pro solve from the problem, on by default and configurable with MODEL_PRO_FRESH_SOLVE

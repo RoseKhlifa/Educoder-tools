@@ -105,6 +105,10 @@ func (t *HomeworkProgressTracker) Observe(phase string, batch *BatchProgress, no
 	if batch == nil {
 		return
 	}
+	if len(batch.Levels) > 0 {
+		t.observeRoster(batch)
+		return
+	}
 	previousCompleted, previousFailed := t.state.CompletedLevels, t.state.FailedLevels
 	if batch.TotalLevels > t.state.TotalLevels {
 		t.state.TotalLevels = min(batch.TotalLevels, progressMaxLevels)
@@ -332,4 +336,36 @@ func (c *courseProgress) snapshot(total, completed, skipped, needsService int) S
 		out.Stage = state.Stage
 	}
 	return out
+}
+
+// observeRoster applies an update that carries the homework's own level
+// roster: every level shows its real status, and the level being worked on
+// shows as running until its outcome is recorded. Counters stay monotonic.
+func (t *HomeworkProgressTracker) observeRoster(batch *BatchProgress) {
+	if batch.TotalLevels > t.state.TotalLevels {
+		t.state.TotalLevels = min(batch.TotalLevels, progressMaxLevels)
+	}
+	t.state.CompletedLevels = max(t.state.CompletedLevels, min(batch.CompletedLevels, t.state.TotalLevels))
+	t.state.SkippedLevels = max(t.state.SkippedLevels, min(batch.SkippedLevels, t.state.CompletedLevels))
+	t.state.FailedLevels = max(t.state.FailedLevels, min(batch.FailedLevels, t.state.TotalLevels))
+	levels := make([]ServiceLevelProgress, 0, min(len(batch.Levels), progressMaxLevels))
+	positions := make(map[int]int, len(batch.Levels))
+	for _, level := range batch.Levels {
+		if len(levels) >= progressMaxLevels {
+			break
+		}
+		status := levelStatus(level.Status)
+		if level.Position == batch.CurrentPosition && batch.CurrentPosition > 0 && status == ProgressWaiting {
+			status = ProgressRunning
+		}
+		positions[level.Position] = len(levels)
+		levels = append(levels, ServiceLevelProgress{Position: level.Position, Title: level.Title, Status: status})
+	}
+	t.state.Levels, t.positions = levels, positions
+	if batch.CurrentPosition > 0 {
+		t.state.CurrentPosition = batch.CurrentPosition
+		if batch.CurrentTitle != "" {
+			t.state.CurrentTitle = batch.CurrentTitle
+		}
+	}
 }

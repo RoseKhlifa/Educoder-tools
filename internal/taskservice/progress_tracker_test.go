@@ -235,3 +235,29 @@ func TestHomeworkProgressSnapshotIsIndependent(t *testing.T) {
 		t.Fatalf("snapshot timestamp was shared: %+v", first.UpdatedAt)
 	}
 }
+
+// An update that carries the homework's level roster is authoritative: each
+// level shows its real status and the current one shows as running.
+func TestTrackerUsesTheReportedLevelRoster(t *testing.T) {
+	tr := NewHomeworkProgressTracker("C", "course", 44, "hw")
+	now := time.Now()
+	tr.Observe("running", &BatchProgress{TotalLevels: 3, CompletedLevels: 1, SkippedLevels: 1, CurrentPosition: 2, CurrentTitle: "second",
+		Levels: []BatchProgressLevel{{1, "first", "skipped"}, {2, "second", "planned"}, {3, "third", "planned"}}}, now)
+	got := tr.Snapshot().Levels
+	if len(got) != 3 || got[0].Status != ProgressSkipped || got[1].Status != ProgressRunning || got[2].Status != ProgressWaiting {
+		t.Fatalf("live roster=%+v", got)
+	}
+	// Level 2 fails, level 3 starts: no status is guessed from counters.
+	tr.Observe("running", &BatchProgress{TotalLevels: 3, CompletedLevels: 1, SkippedLevels: 1, FailedLevels: 1, CurrentPosition: 3, CurrentTitle: "third",
+		Levels: []BatchProgressLevel{{1, "first", "skipped"}, {2, "second", "selftest_failed"}, {3, "third", "planned"}}}, now)
+	got = tr.Snapshot().Levels
+	if got[1].Status != ProgressFailed || got[2].Status != ProgressRunning {
+		t.Fatalf("after a failure roster=%+v", got)
+	}
+	// A stale counter-only update cannot move counters backwards.
+	tr.Observe("evaluating", &BatchProgress{TotalLevels: 3, Levels: []BatchProgressLevel{{1, "first", "skipped"}, {2, "second", "selftest_failed"}, {3, "third", "passed"}}}, now)
+	snap := tr.Snapshot()
+	if snap.CompletedLevels != 1 || snap.FailedLevels != 1 || snap.Levels[2].Status != ProgressPassed {
+		t.Fatalf("monotonic counters or final status lost: %+v", snap)
+	}
+}

@@ -312,3 +312,43 @@ func TestListingsDoNotHoldTheStoreCursorWhileLocking(t *testing.T) {
 	}
 	close(release)
 }
+
+// Parallel homeworks report in different phases on nearly every event. Those
+// phase flips must not bypass the write throttle; only the first entry into a
+// mutating phase (the crash classification) is written at once.
+func TestParallelPhaseFlipsStayThrottled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "jobs.sqlite")
+	m := testManager(t, Config{Path: path, Workers: 1})
+	release := make(chan struct{})
+	reported := make(chan struct{})
+	job := submit(t, m, "owner", Request{Scope: "all", Mode: "submit"}, func(ctx context.Context, r Request, report func(Event)) (Outcome, error) {
+		report(Event{Phase: "loading", Message: "start", Progress: livingProgress(1)})
+		for i := 1; i <= 30; i++ {
+			phase := "generating"
+			if i%2 == 0 {
+				phase = "selftesting"
+			}
+			p := livingProgress(1)
+			p.Homeworks[0].CurrentPosition = i
+			report(Event{Phase: phase, Message: "progress", Progress: p})
+		}
+		close(reported)
+		<-release
+		return Outcome{Status: Succeeded, Result: json.RawMessage(`{"status":"passed"}`)}, nil
+	})
+	<-reported
+	stored := storedJobJSON(t, m.db, job.ID)
+	if stored.Progress != nil && len(stored.Progress.Homeworks) > 0 && stored.Progress.Homeworks[0].CurrentPosition == 30 {
+		t.Fatal("alternating non-mutating phases bypassed the write throttle")
+	}
+	// The first entry into a mutating phase is still flushed at once.
+	m.mu.Lock()
+	running := m.active[job.ID]
+	m.mu.Unlock()
+	m.report(running, Event{Phase: "evaluating", Message: "submitting"})
+	var mutating bool
+	if err := m.db.QueryRow(`SELECT mutating FROM async_jobs WHERE id=?`, job.ID).Scan(&mutating); err != nil || !mutating {
+		t.Fatalf("mutating flag not persisted at once: %v err=%v", mutating, err)
+	}
+	close(release)
+}

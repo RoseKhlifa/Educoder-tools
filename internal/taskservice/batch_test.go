@@ -95,12 +95,31 @@ func TestRunHomeworkSkipsVerifiedAndProcessesRemaining(t *testing.T) {
 	defer server.Close()
 	p := &fakeProvider{}
 	s := New(bank(t), p, Config{BudgetMicroUSD: 1000})
-	r, err := s.RunHomework(context.Background(), educoder.New(server.URL), Request{Owner: "o", Course: "C", HomeworkID: 44, Mode: solver.ModeSubmit}, nil)
+	var updates []BatchProgress
+	r, err := s.RunHomework(context.Background(), educoder.New(server.URL), Request{Owner: "o", Course: "C", HomeworkID: 44, Mode: solver.ModeSubmit}, func(p Progress) {
+		if p.Batch != nil {
+			updates = append(updates, *p.Batch)
+		}
+	})
 	if err != nil || r.Status != "passed" || r.TotalLevels != 2 || r.CompletedLevels != 2 || r.SkippedLevels != 1 || r.FailedLevels != 0 || p.objectiveCalls.Load() < 1 {
 		t.Fatalf("batch=%+v err=%v calls=%d", r, err, p.objectiveCalls.Load())
 	}
 	if r.Levels[0].Status != "skipped" || r.Levels[1].Status != "passed" {
 		t.Fatalf("levels=%+v", r.Levels)
+	}
+	// Live updates carry the level roster: while level 2 runs, level 1 is
+	// already reported skipped; the last update reports level 2 passed.
+	sawRunning, last := false, BatchProgress{}
+	for _, u := range updates {
+		if u.CurrentPosition == 2 && len(u.Levels) == 2 && u.Levels[0].Status == "skipped" && u.Levels[1].Status == "planned" {
+			sawRunning = true
+		}
+		if len(u.Levels) > 0 {
+			last = u
+		}
+	}
+	if !sawRunning || len(last.Levels) != 2 || last.Levels[1].Status != "passed" {
+		t.Fatalf("live roster missing or wrong: running=%v last=%+v", sawRunning, last.Levels)
 	}
 }
 

@@ -17,10 +17,9 @@ type execution struct {
 	exec            Executor
 	cancel          context.CancelFunc
 	cancelRequested bool
-	// lastWrite and dirty throttle progress persistence. Live state is served
-	// from memory, so the stored copy only has to be good enough for a restart.
+	// lastWrite throttles progress persistence. Live state is served from
+	// memory, so the stored copy only has to be good enough for a restart.
 	lastWrite time.Time
-	dirty     bool
 }
 
 // progressWriteInterval bounds how often a running job's progress reaches
@@ -503,7 +502,6 @@ func (m *Manager) report(r *execution, e Event) {
 	e.Message = publicText(e.Message, "Job is working")
 	e.Progress = publicProgress(e.Progress)
 	e.At = time.Now().UTC()
-	phaseChanged := r.Phase != e.Phase
 	r.Phase = e.Phase
 	if e.Kind != "" {
 		r.Kind = e.Kind
@@ -513,8 +511,11 @@ func (m *Manager) report(r *execution, e Event) {
 	if e.Progress != nil {
 		r.Progress = cloneProgress(e.Progress)
 	}
-	// A transition into a mutating phase is always a phase change, so the
-	// sticky flag that classifies a crash as uncertain is never only in memory.
+	// The sticky flag that classifies a crash as uncertain must never be only
+	// in memory, so its first setting is written at once. Every other update,
+	// including a phase change, is throttled: parallel homeworks report in
+	// different phases, so "the phase changed" is true on nearly every event.
+	becameMutating := !r.mutating && mutatingPhase(e.Phase)
 	r.mutating = r.mutating || mutatingPhase(e.Phase)
 	event := e
 	event.Progress = eventProgress(e.Progress)
@@ -522,11 +523,10 @@ func (m *Manager) report(r *execution, e Event) {
 	if len(r.Events) > m.cfg.EventLimit {
 		r.Events = append([]Event(nil), r.Events[len(r.Events)-m.cfg.EventLimit:]...)
 	}
-	r.dirty = true
-	if !phaseChanged && e.At.Sub(r.lastWrite) < progressWriteInterval {
+	if !becameMutating && e.At.Sub(r.lastWrite) < progressWriteInterval {
 		return
 	}
-	r.lastWrite, r.dirty = e.At, false
+	r.lastWrite = e.At
 	if err := writeStore(m.db, &r.stored, false); err != nil {
 		r.cancelRequested = true
 		if r.cancel != nil {
@@ -554,7 +554,6 @@ func (m *Manager) terminalLocked(r *execution, status, code, message string, res
 	if len(r.Events) > m.cfg.EventLimit {
 		r.Events = append([]Event(nil), r.Events[len(r.Events)-m.cfg.EventLimit:]...)
 	}
-	r.dirty = false
 	r.lastWrite = now
 	_ = writeStore(m.db, &r.stored, false)
 	delete(m.active, r.ID)

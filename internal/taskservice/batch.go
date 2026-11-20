@@ -72,6 +72,18 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 	emit := func(p BatchProgress, phase, msg string) {
 		if report != nil {
 			p2 := p
+			// Every update carries a copy of the authoritative level roster.
+			// Levels run one at a time on this goroutine, so the copy is
+			// consistent with the counters next to it.
+			if len(p2.Levels) == 0 && len(out.Levels) > 0 {
+				p2.Levels = make([]BatchProgressLevel, 0, min(len(out.Levels), progressMaxLevels))
+				for _, l := range out.Levels {
+					if len(p2.Levels) >= progressMaxLevels {
+						break
+					}
+					p2.Levels = append(p2.Levels, BatchProgressLevel{Position: l.Position, Title: l.Title, Status: l.Status})
+				}
+			}
 			report(Progress{Phase: phase, Kind: "homework", Message: msg, Batch: &p2})
 		}
 	}

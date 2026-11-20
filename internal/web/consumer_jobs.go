@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -170,6 +171,7 @@ var consumerReasonVocabulary = func() map[string]bool {
 }()
 
 func consumerReason(values ...string) string {
+	unmapped := false
 	for _, value := range values {
 		code := strings.ToLower(strings.TrimSpace(value))
 		if code == "" {
@@ -181,6 +183,11 @@ func consumerReason(values ...string) string {
 		if mapped, ok := consumerReasonCodes[code]; ok {
 			return mapped
 		}
+		// Keep looking: a later, more specific cause is worth more to the user
+		// than the generic follow-up an unknown code degrades to.
+		unmapped = true
+	}
+	if unmapped {
 		return "service_followup"
 	}
 	return ""
@@ -364,7 +371,10 @@ func consumerView(j jobs.Job, detail bool) consumerJob {
 		Homeworks          []summaryItem      `json:"homeworks"`
 		Levels             []summaryItem      `json:"levels"`
 	}
-	if json.Unmarshal(j.Result, &summary) == nil {
+	// A field with an unexpected JSON type leaves only that field empty;
+	// encoding/json still fills every other field, so keep them.
+	var typeErr *json.UnmarshalTypeError
+	if err := json.Unmarshal(j.Result, &summary); err == nil || errors.As(err, &typeErr) {
 		out.Result.TotalHomeworks, out.Result.CompletedHomeworks = summary.TotalHomeworks, summary.CompletedHomeworks
 		out.Result.TotalLevels, out.Result.CompletedLevels = summary.TotalLevels, summary.CompletedLevels
 		out.Result.Homeworks, out.Result.Levels = consumerItems(summary.Homeworks, j.Status, detail), consumerItems(summary.Levels, j.Status, false)

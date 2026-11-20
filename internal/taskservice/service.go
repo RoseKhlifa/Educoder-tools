@@ -70,6 +70,17 @@ type BatchProgress struct {
 	FailedLevels    int    `json:"failed_levels"`
 	CurrentPosition int    `json:"current_position,omitempty"`
 	CurrentTitle    string `json:"current_title,omitempty"`
+	// Levels is the homework's own level roster at the time of the update,
+	// with the raw batch status of every level. Live views use it instead of
+	// deriving level outcomes from counter changes.
+	Levels []BatchProgressLevel `json:"levels,omitempty"`
+}
+
+// BatchProgressLevel is one level of a homework's live roster.
+type BatchProgressLevel struct {
+	Position int    `json:"position"`
+	Title    string `json:"title,omitempty"`
+	Status   string `json:"status"`
 }
 type Result struct {
 	Status           string                        `json:"status"`
