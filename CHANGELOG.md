@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.146 - 2026-11-20
+
+- Let only unknown objective submissions block later batches, stating that score-safe programming re-evaluations never stall an unattended homework
+
 ## 0.1.145 - 2026-11-20
 
 - Follow the evaluation queue like the official task page and recognize the lab-environment quota, so queued or quota-blocked builds are waited for, canceled or deferred instead of left unknown

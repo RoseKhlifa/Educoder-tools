@@ -85,9 +85,9 @@ func (s *Store) UnresolvedHomeworkRuns(ctx context.Context, owner, course string
 
 // UnresolvedHomeworkRun includes all historical uncertain records for audit
 // callers. FormalUnknown is deliberately narrower: it is true only when the
-// durable result proves that a platform write reached a formal evaluator but
-// the outcome was not confirmed. Pre-submit/self-test and resource failures
-// stay visible to operators without blocking unrelated levels.
+// durable result proves that an objective submission reached the platform but
+// its outcome was not confirmed. Programming evaluations, pre-submit/self-test
+// and resource failures stay visible to operators without blocking levels.
 type UnresolvedHomeworkRun struct {
 	RunID         string
 	Game          string
@@ -101,14 +101,9 @@ type UnresolvedHomeworkRun struct {
 func formalUnknownRun(runStatus string, raw []byte) bool {
 	var envelope struct {
 		Result struct {
-			Kind        string `json:"kind"`
-			Status      string `json:"status"`
-			ScoreCheck  string `json:"score_check"`
-			Programming *struct {
-				Evaluation *struct {
-					Status string `json:"status"`
-				} `json:"evaluation"`
-			} `json:"programming"`
+			Kind       string `json:"kind"`
+			Status     string `json:"status"`
+			ScoreCheck string `json:"score_check"`
 		} `json:"result"`
 	}
 	if json.Unmarshal(raw, &envelope) != nil {
@@ -123,19 +118,16 @@ func formalUnknownRun(runStatus string, raw []byte) bool {
 			return true
 		}
 		return runStatus == "verification_unconfirmed" && envelope.Result.ScoreCheck != ""
-	case "programming":
-		p := envelope.Result.Programming
-		if p == nil || p.Evaluation == nil {
-			return false
-		}
-		// Graphic pre-write/save/resource failures expose an Evaluation DTO
-		// only as an adapter diagnostic, but never reach the formal build.
-		switch p.Evaluation.Status {
-		case "prewrite_error", "resource_unavailable", "saved_not_submitted", "save_unverified", "save_error", "editor_changed":
-			return false
-		}
-		return runStatus == "uncertain" || runStatus == "verification_unconfirmed" || runStatus == "verification_persistence_failed"
 	default:
+		// Programming (including graphic and terminal) evaluations deliberately
+		// never block. Re-evaluating code is score-safe on Educoder: a level
+		// whose unknown evaluation actually passed stays passed, and the next
+		// batch reloads progress and skips it; one that did not pass needs a
+		// new attempt anyway. Blocking would stall an unattended homework on a
+		// question only a human could answer. (Programming runs persist their
+		// run state, not this envelope, so this was also the effective
+		// behavior before it was written down.) Objective submissions above
+		// still block, because a repeated wrong submission can cost score.
 		return false
 	}
 }

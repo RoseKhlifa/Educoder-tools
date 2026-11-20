@@ -30,10 +30,18 @@ func TestFormalUnknownRunRequiresFormalWriteEvidence(t *testing.T) {
 			want:   true,
 		},
 		{
+			// Re-evaluating code is score-safe, so programming never blocks.
 			name:   "programming formal evaluation uncertainty",
 			status: "uncertain",
 			raw:    `{"result":{"kind":"programming","status":"uncertain","programming":{"evaluation":{"status":"error"}}}}`,
-			want:   true,
+			want:   false,
+		},
+		{
+			// The shape programming runs actually persist (production records).
+			name:   "programming run state with an unknown formal build",
+			status: "uncertain",
+			raw:    `{"result":{"run_id":"run_1","status":"uncertain","self_test_status":"skipped","evaluation":{"Completed":false,"Passed":false,"Status":"build_error","Feedback":"x"}}}`,
+			want:   false,
 		},
 		{
 			name:   "graphic prewrite failure",
