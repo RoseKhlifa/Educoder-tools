@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.158 - 2026-11-20
+
+- Show the model provider balance on the admin overview, read at most every five minutes, with a top warning below about one heavy day of spend so an unattended service is topped up before generation fails
+
 ## 0.1.157 - 2026-11-20
 
 - Bound the deploy host disk use: after a verified deploy the installer keeps the 10 newest releases, the 20 newest pre-deploy backups and 5 application images, ordered by the version or timestamp in the name and never touching other names

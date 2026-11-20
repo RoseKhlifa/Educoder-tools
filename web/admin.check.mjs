@@ -368,3 +368,21 @@ await test('administrator sees people and work instead of storage identifiers', 
   });
 
 });
+
+await test('a low model balance is a top-of-overview warning with the amount, never a provider error', () => {
+  const screen = state([]);
+  screen.overview = { model_balance: { available: true, currency: 'CNY', total: '7.20', threshold: '10', low: true } };
+  const low = visible(renderAdmin('overview', screen));
+  assert.ok(low.includes('模型余额偏低：剩余 ¥7.20（提醒线 ¥10）'), low);
+  assert.ok(low.includes('需要充值'));
+  screen.overview = { model_balance: { available: true, currency: 'USD', total: '25.00', threshold: '1.5', low: false } };
+  const fine = visible(renderAdmin('overview', screen));
+  assert.ok(!fine.includes('需要充值') && fine.includes('$25.00'));
+  screen.overview = { model_balance: { available: false, currency: 'CNY', total: '0.00', low: true } };
+  assert.ok(visible(renderAdmin('overview', screen)).includes('模型账户当前不可用'));
+  screen.overview = { model_balance: { error: 'upstream_error:401', low: false } };
+  const failed = visible(renderAdmin('overview', screen));
+  assert.ok(failed.includes('暂时无法读取') && !failed.includes('upstream_error') && !failed.includes('需要充值'));
+  screen.overview = {};
+  assert.ok(!visible(renderAdmin('overview', screen)).includes('需要充值'));
+});

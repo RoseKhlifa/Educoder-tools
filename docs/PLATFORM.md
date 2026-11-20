@@ -106,7 +106,7 @@ PLATFORM_ADMIN_USER_IDS=VERIFIED_NUMERIC_USER_ID
 
 | 方法 | 路径 | 数据或操作 |
 | --- | --- | --- |
-| GET | `/api/admin/overview` | 用户、运行容量、模型配置与台账汇总 |
+| GET | `/api/admin/overview` | 用户、运行容量、模型配置、台账汇总与模型供应商余额 |
 | GET | `/api/admin/usage` | 同源使用台账汇总，非用户账单 |
 | GET | `/api/admin/users` | 近期用户列表，`data.items`，固定上限 100 |
 | POST | `/api/admin/users/:id/status` | `{ "status": "active" }` 或 `disabled`，`:id` 为平台用户 ID |
@@ -122,6 +122,8 @@ PLATFORM_ADMIN_USER_IDS=VERIFIED_NUMERIC_USER_ID
 禁用账号会删除该用户当前内存会话，并请求停止其排队和运行任务。重新启用不恢复旧会话或重放已停止任务，用户需重新登录。管理员不能通过账号状态接口禁用自己；没有独立的跨设备会话管理 HTTP 接口。
 
 管理用量来自 `questionbank.sqlite` 的实际 `usage_ledger` 全表汇总，不是把近期 100 条任务费用加起来。字段包括 `model_calls`、`input_tokens`、`cached_input_tokens`、`output_tokens`、`cost_micro_usd` 、`reserved_micro_usd`、`settled_cost_micro_usd` 和 `unknown_calls`。金额单位为百万分之一美元；`cost_micro_usd` 是台账记录值（含未知计费时的估算），`settled_cost_micro_usd` 只汇总已确认计费，`reserved_micro_usd` 只汇总非 settled 记录的预留，`unknown_calls` 是待核对次数。不要将预留与记录成本重复相加。它不是供应商实时余额、发票、用户应付账单或周期额度。
+
+概览中的 `model_balance` 是模型供应商账户余额（`currency / total / threshold / low / available / checked_at`，读取失败时只有 `error`，为错误类别，不含供应商响应、密钥或地址）。余额由服务端最多每 5 分钟读取一次，读取失败 1 分钟后重试，管理页刷新不会额外请求供应商。余额低于约一个高峰日的花费（人民币 10 元或 1.5 美元）或账户不可用时，管理概览顶部显示充值提醒：余额用完后需要调用模型的关卡会失败，题库命中的关卡不受影响。普通用户看不到余额。
 
 任务详细结果可能包含模型失败原因、自测状态、评测阶段和逐关进度；管理员也不获得用户密码、上游 Cookie、模型密钥或完整模型响应。诊断不提供通用上游请求代理能力。
 

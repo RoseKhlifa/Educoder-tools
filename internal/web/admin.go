@@ -57,6 +57,7 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, requestID s
 			}
 			usage := questionbank.UsageSummary{}
 			var capacity any
+			var balance *modelBalanceView
 			if s.jobs != nil {
 				capacity = map[string]any{"jobs": s.jobs.manager.Stats(), "model_concurrency": s.jobs.modelConcurrency, "model_configured": s.jobs.modelConfigured}
 				if s.jobs.bank != nil {
@@ -67,8 +68,9 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, requestID s
 						return
 					}
 				}
+				balance = s.jobs.balance.get(r.Context())
 			}
-			s.writeJSON(w, requestID, 200, map[string]any{"usage": usage, "capacity": capacity, "users": users})
+			s.writeJSON(w, requestID, 200, map[string]any{"usage": usage, "capacity": capacity, "users": users, "model_balance": balance})
 		default:
 			s.writeError(w, requestID, 404, "NOT_FOUND", "管理接口不存在")
 		}

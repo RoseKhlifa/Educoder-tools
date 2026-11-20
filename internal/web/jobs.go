@@ -30,6 +30,7 @@ type JobRuntime struct {
 	run              func(context.Context, EducoderClient, string, jobs.Request, func(jobs.Event)) (jobs.Outcome, error)
 	modelConfigured  bool
 	modelConcurrency int
+	balance          *modelBalance
 	collect          func(context.Context, EducoderClient, string, func(jobs.Event)) (jobs.Outcome, error)
 }
 
@@ -151,12 +152,14 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 		return nil, errors.New("open question bank failed")
 	}
 	var provider taskservice.Provider
+	var balance *modelBalance
 	if key != "" {
-		provider, err = answer.NewDeepSeek(answer.Config{APIKey: key, BaseURL: cfg.ModelBaseURL, Timeout: cfg.ModelTimeout})
+		deepseek, err := answer.NewDeepSeek(answer.Config{APIKey: key, BaseURL: cfg.ModelBaseURL, Timeout: cfg.ModelTimeout})
 		if err != nil {
 			bank.Close()
 			return nil, errors.New("initialize model provider failed")
 		}
+		provider, balance = deepseek, newModelBalance(deepseek.ReadBalance)
 	}
 	manager, err := jobs.Open(context.Background(), jobs.Config{Path: filepath.Join(cfg.DataDir, "jobs.sqlite"), Workers: cfg.JobWorkers, QueueSize: cfg.JobQueueSize, PerOwnerPending: cfg.JobPerOwner, PerOwnerRunning: cfg.JobPerOwnerRunning, Timeout: cfg.JobTimeout, CollectionWorkers: cfg.CollectionWorkers})
 	if err != nil {
@@ -164,7 +167,7 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 		return nil, err
 	}
 	service := taskservice.New(bank, provider, taskservice.Config{ModelConcurrency: cfg.ModelConcurrency, Timeout: cfg.JobTimeout, DisableLegacyIndependentReview: true, HomeworkParallelism: cfg.HomeworkParallelism, EnableProFreshSolve: cfg.ProFreshSolve})
-	runtime := &JobRuntime{manager: manager, bank: bank, modelConfigured: key != "", modelConcurrency: cfg.ModelConcurrency}
+	runtime := &JobRuntime{manager: manager, bank: bank, modelConfigured: key != "", modelConcurrency: cfg.ModelConcurrency, balance: balance}
 	collector := &taskservice.Collector{Bank: bank, Limits: taskservice.DefaultCollectionLimits()}
 	runtime.collect = func(ctx context.Context, client EducoderClient, owner string, report func(jobs.Event)) (jobs.Outcome, error) {
 		// The manager reserves a dedicated collection lane. Other accounts wait
