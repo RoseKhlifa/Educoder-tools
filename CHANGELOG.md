@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.150 - 2026-11-20
+
+- Bind terminal tasks to their environment identity, not the runtime is_start flag, so the submission after a passing terminal self-test is no longer refused as a changed task
+
 ## 0.1.149 - 2026-11-20
 
 - Read homework preflight task details with bounded concurrency while deciding strictly in roster order, and pin the bank-hit request sequence

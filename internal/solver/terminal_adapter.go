@@ -42,10 +42,18 @@ func terminalIdentity(t *educoder.Task) (terminalTaskIdentity, error) {
 		return terminalTaskIdentity{}, errors.New("terminal task identity or file contract is incomplete")
 	}
 	// Runtime identifiers remain private. Sorting avoids treating response order
-	// as an environment change while still binding every observed field.
+	// as an environment change. Only the environment's identity is bound:
+	// is_start is runtime state that the platform flips once this run's own
+	// self-test starts the terminal, so binding it refused every submission
+	// that followed a self-test.
 	envs := make([]string, 0, len(t.Environments))
 	for _, env := range t.Environments {
-		encoded, _ := json.Marshal(env)
+		encoded, _ := json.Marshal(struct {
+			EnvironmentID int64
+			TabType       int
+			Name          string
+			VNC           bool
+		}{env.EnvironmentID, env.TabType, env.Name, bool(env.VNCURL)})
 		envs = append(envs, string(encoded))
 	}
 	sort.Strings(envs)

@@ -417,3 +417,44 @@ func TestTerminalContractDoesNotImportEditorPlaceholderFromExternalBank(t *testi
 		t.Fatalf("ordinary external import regressed: binds=%d err=%v", store.binds, err)
 	}
 }
+
+// The platform reports is_start=true once the run's own self-test started the
+// terminal. That is runtime state, not a different task: the formal submission
+// that follows must proceed, while a different environment still stops it.
+func TestTerminalRuntimeStartDoesNotLookLikeAChangedTask(t *testing.T) {
+	for name, tc := range map[string]struct {
+		mutate     func(env map[string]any)
+		wantSubmit bool
+	}{
+		"started by own self-test": {func(env map[string]any) { env["is_start"] = true }, true},
+		"different environment":    {func(env map[string]any) { env["is_start"] = true; env["shixun_environment_id"] = 999 }, false},
+		"different tab type":       {func(env map[string]any) { env["tab_type"] = 3 }, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, fixture := terminalTestAdapter(t)
+			env := fixture["shixun_environments"].([]any)[0].(map[string]any)
+			env["is_start"] = false
+			bindTerminalTest(t, a)
+			file := terminalCandidate()
+			submits := 0
+			a.terminalRun = func(context.Context, *educoder.Task, string, educoder.TerminalOptions) (*educoder.TerminalResult, error) {
+				return terminalSuccess(file), nil
+			}
+			a.terminalSubmit = func(context.Context, *educoder.Task, *educoder.TerminalResult, educoder.PollOptions) (*educoder.EvaluationResult, error) {
+				submits++
+				return terminalPass(), nil
+			}
+			if _, err := a.SelfTest(context.Background(), Target{"c", 1, "g"}, file, "", ""); err != nil {
+				t.Fatal(err)
+			}
+			tc.mutate(env)
+			_, err := a.Submit(context.Background(), Target{"c", 1, "g"}, file)
+			if tc.wantSubmit && (err != nil || submits != 1) {
+				t.Fatalf("submission after own runtime start refused: err=%v submits=%d", err, submits)
+			}
+			if !tc.wantSubmit && (err == nil || submits != 0) {
+				t.Fatalf("changed environment allowed formal submission: err=%v submits=%d", err, submits)
+			}
+		})
+	}
+}
