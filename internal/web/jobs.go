@@ -74,6 +74,13 @@ func loadJobConfig(cfg *Config) error {
 			*value = duration
 		}
 	}
+	if raw := strings.TrimSpace(os.Getenv("MODEL_PRO_FRESH_SOLVE")); raw != "" {
+		enabled, err := strconv.ParseBool(raw)
+		if err != nil {
+			return errors.New("invalid MODEL_PRO_FRESH_SOLVE")
+		}
+		cfg.ProFreshSolve = enabled
+	}
 	cfg.ModelAPIKeyFile = strings.TrimSpace(os.Getenv("DEEPSEEK_API_KEY_FILE"))
 	cfg.ModelBaseURL = strings.TrimSpace(os.Getenv("DEEPSEEK_BASE_URL"))
 	return nil
@@ -156,7 +163,7 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 		bank.Close()
 		return nil, err
 	}
-	service := taskservice.New(bank, provider, taskservice.Config{ModelConcurrency: cfg.ModelConcurrency, Timeout: cfg.JobTimeout, DisableLegacyIndependentReview: true, HomeworkParallelism: cfg.HomeworkParallelism})
+	service := taskservice.New(bank, provider, taskservice.Config{ModelConcurrency: cfg.ModelConcurrency, Timeout: cfg.JobTimeout, DisableLegacyIndependentReview: true, HomeworkParallelism: cfg.HomeworkParallelism, EnableProFreshSolve: cfg.ProFreshSolve})
 	runtime := &JobRuntime{manager: manager, bank: bank, modelConfigured: key != "", modelConcurrency: cfg.ModelConcurrency}
 	collector := &taskservice.Collector{Bank: bank, Limits: taskservice.DefaultCollectionLimits()}
 	runtime.collect = func(ctx context.Context, client EducoderClient, owner string, report func(jobs.Event)) (jobs.Outcome, error) {

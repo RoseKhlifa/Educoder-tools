@@ -45,3 +45,26 @@ func TestComposePassesEveryJobSettingWithCodeDefaults(t *testing.T) {
 		}
 	}
 }
+
+func TestProFreshSolveDefaultsOnAndIsConfigurable(t *testing.T) {
+	t.Setenv("MODEL_PRO_FRESH_SOLVE", "")
+	cfg, err := LoadConfig()
+	if err != nil || !cfg.ProFreshSolve {
+		t.Fatalf("default ProFreshSolve=%v err=%v", cfg.ProFreshSolve, err)
+	}
+	t.Setenv("MODEL_PRO_FRESH_SOLVE", "false")
+	if cfg, err = LoadConfig(); err != nil || cfg.ProFreshSolve {
+		t.Fatalf("disabled ProFreshSolve=%v err=%v", cfg.ProFreshSolve, err)
+	}
+	t.Setenv("MODEL_PRO_FRESH_SOLVE", "sometimes")
+	if _, err = LoadConfig(); err == nil {
+		t.Fatal("accepted an invalid MODEL_PRO_FRESH_SOLVE")
+	}
+	b, err := os.ReadFile("../../compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `MODEL_PRO_FRESH_SOLVE: "${MODEL_PRO_FRESH_SOLVE:-true}"`) {
+		t.Fatal("compose.yaml must pass MODEL_PRO_FRESH_SOLVE with the code default")
+	}
+}

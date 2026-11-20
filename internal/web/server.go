@@ -45,14 +45,17 @@ type Config struct {
 	// HomeworkParallelism bounds concurrent homeworks inside one course job.
 	HomeworkParallelism int
 	// CollectionWorkers sizes the separate read-only collection lane.
-	CollectionWorkers    int
+	CollectionWorkers int
+	// ProFreshSolve lets a level's last model call solve afresh from the
+	// problem with the Pro model after two unsuccessful attempts.
+	ProFreshSolve        bool
 	ModelAPIKeyFile      string
 	ModelBaseURL         string
 	PlatformAdminUserIDs []int64
 }
 
 func DefaultConfig() Config {
-	return Config{HTTPAddr: "0.0.0.0:11454", APIBaseURL: educoder.DefaultBaseURL, SessionTTL: 8 * time.Hour, StaticDir: filepath.FromSlash("web"), DataDir: "data", JobWorkers: 16, JobQueueSize: 256, JobPerOwner: 16, JobPerOwnerRunning: 4, JobTimeout: 2 * time.Hour, ModelConcurrency: 16, ModelTimeout: 4 * time.Minute, UpstreamAccountConcurrency: educoder.DefaultAccountUpstreamConcurrency, UpstreamGlobalConcurrency: educoder.DefaultGlobalUpstreamConcurrency, HomeworkParallelism: 3, CollectionWorkers: 2}
+	return Config{HTTPAddr: "0.0.0.0:11454", APIBaseURL: educoder.DefaultBaseURL, SessionTTL: 8 * time.Hour, StaticDir: filepath.FromSlash("web"), DataDir: "data", JobWorkers: 16, JobQueueSize: 256, JobPerOwner: 16, JobPerOwnerRunning: 4, JobTimeout: 2 * time.Hour, ModelConcurrency: 16, ModelTimeout: 4 * time.Minute, UpstreamAccountConcurrency: educoder.DefaultAccountUpstreamConcurrency, UpstreamGlobalConcurrency: educoder.DefaultGlobalUpstreamConcurrency, HomeworkParallelism: 3, CollectionWorkers: 2, ProFreshSolve: true}
 }
 
 func LoadConfig() (Config, error) {

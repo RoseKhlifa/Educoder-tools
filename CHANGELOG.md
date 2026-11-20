@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.155 - 2026-11-20
+
+- Let a level whose first two model attempts failed make its last attempt a fresh Pro solve from the problem, on by default and configurable with MODEL_PRO_FRESH_SOLVE
+
 ## 0.1.154 - 2026-11-20
 
 - Retry jobs that stopped only because Educoder refused to run them, after 10, 20 and 40 minutes through the owner live session, sharing the manual retry key so the two never both run

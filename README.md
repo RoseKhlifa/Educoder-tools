@@ -165,6 +165,7 @@ go run ./cmd/web
 | `MODEL_CONCURRENCY` / `MODEL_TIMEOUT` | `16` / `4m`；实际供应商 RPM 由供应商账号决定。模型调用不经过头歌，不增加出口地址的头歌请求量 |
 | `HOMEWORK_PARALLELISM` | `3`（最大 4）；同一课程或全部课堂任务中同时处理的作业数，每份作业内关卡仍按顺序执行 |
 | `COLLECTION_WORKERS` | `2`（最大 16）；登录后只读采集的独立通道数，不占答题 worker；调高会增加同一出口地址的头歌读取量 |
+| `MODEL_PRO_FRESH_SOLVE` | `true`；一关前两次模型尝试都未通过时，第三次改用 Pro 模型、仅凭题面重新求解（不带失败代码和修复历史），仍受每关费用上限约束 |
 | `UPSTREAM_ACCOUNT_CONCURRENCY` / `UPSTREAM_GLOBAL_CONCURRENCY` | `6` / `64`；同一头歌账号（任务、采集、页面读取共享）与全站同时进行中的上游请求上限，所有请求共用同一出口地址 |
 | `DEEPSEEK_API_KEY_FILE` | 推荐用 Docker secret 的文件路径 |
 
