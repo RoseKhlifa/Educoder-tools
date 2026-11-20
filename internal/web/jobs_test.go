@@ -234,7 +234,7 @@ func TestJobRuntimeCredentialAndConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.modelConfigured || runtime.manager.Stats().Workers != 16 || runtime.manager.Stats().PerOwnerRunning != 4 || runtime.modelConcurrency != 8 {
+	if runtime.modelConfigured || runtime.manager.Stats().Workers != 16 || runtime.manager.Stats().PerOwnerRunning != 4 || runtime.modelConcurrency != 16 {
 		t.Fatal("unexpected runtime defaults")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

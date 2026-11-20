@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.148 - 2026-11-20
+
+- Raise default model concurrency to 16 and the read-only collection lane to 2, keeping Educoder-facing job workers at 16
+
 ## 0.1.147 - 2026-11-20
 
 - Share one upstream slot pool per Educoder account across all of its login sessions instead of one pool per session

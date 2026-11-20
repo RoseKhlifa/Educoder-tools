@@ -162,9 +162,9 @@ go run ./cmd/web
 | `JOB_WORKERS` / `JOB_QUEUE_SIZE` | `16` / `256` |
 | `JOB_PER_ACCOUNT_PENDING` / `JOB_PER_ACCOUNT_RUNNING` | `16` / `4` |
 | `JOB_TIMEOUT` | `2h` |
-| `MODEL_CONCURRENCY` / `MODEL_TIMEOUT` | `8` / `4m`；实际供应商 RPM 由供应商账号决定 |
+| `MODEL_CONCURRENCY` / `MODEL_TIMEOUT` | `16` / `4m`；实际供应商 RPM 由供应商账号决定。模型调用不经过头歌，不增加出口地址的头歌请求量 |
 | `HOMEWORK_PARALLELISM` | `3`（最大 4）；同一课程或全部课堂任务中同时处理的作业数，每份作业内关卡仍按顺序执行 |
-| `COLLECTION_WORKERS` | `1`（最大 16）；登录后只读采集的独立通道数，不占答题 worker；调高会增加同一出口地址的头歌读取量 |
+| `COLLECTION_WORKERS` | `2`（最大 16）；登录后只读采集的独立通道数，不占答题 worker；调高会增加同一出口地址的头歌读取量 |
 | `UPSTREAM_ACCOUNT_CONCURRENCY` / `UPSTREAM_GLOBAL_CONCURRENCY` | `6` / `64`；同一头歌账号（任务、采集、页面读取共享）与全站同时进行中的上游请求上限，所有请求共用同一出口地址 |
 | `DEEPSEEK_API_KEY_FILE` | 推荐用 Docker secret 的文件路径 |
 

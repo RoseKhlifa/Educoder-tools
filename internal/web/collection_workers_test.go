@@ -11,8 +11,8 @@ func TestCollectionLaneSizeIsConfigurable(t *testing.T) {
 		t.Setenv(name, "")
 	}
 	cfg, err := LoadConfig()
-	if err != nil || cfg.CollectionWorkers != 1 {
-		t.Fatalf("default collection lane = %d err=%v, want 1", cfg.CollectionWorkers, err)
+	if err != nil || cfg.CollectionWorkers != 2 {
+		t.Fatalf("default collection lane = %d err=%v, want 2", cfg.CollectionWorkers, err)
 	}
 	t.Setenv("COLLECTION_WORKERS", "3")
 	if cfg, err = LoadConfig(); err != nil || cfg.CollectionWorkers != 3 {
