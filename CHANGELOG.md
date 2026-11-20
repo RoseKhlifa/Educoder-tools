@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.157 - 2026-11-20
+
+- Bound the deploy host disk use: after a verified deploy the installer keeps the 10 newest releases, the 20 newest pre-deploy backups and 5 application images, ordered by the version or timestamp in the name and never touching other names
+
 ## 0.1.156 - 2026-11-20
 
 - Report each level real status in live progress, keep parallel phase flips under the one-second write throttle, and keep a result view whole when one field has an unexpected type
