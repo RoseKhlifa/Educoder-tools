@@ -42,7 +42,19 @@ type userDTO struct {
 }
 
 func toUserDTO(user educoder.User) userDTO {
-	return userDTO{UserID: user.UserID, Login: user.Login, Name: user.Name, RealName: user.RealName, Identity: user.Identity, AvatarURL: "/api/avatar"}
+	return userDTO{UserID: user.UserID, Login: user.Login, Name: userDisplayName(user), RealName: strings.TrimSpace(user.RealName), Identity: user.Identity, AvatarURL: "/api/avatar"}
+}
+
+// A profile can return real_name without name, unlike password login's user
+// response. Resolve the same display name for every authentication method and
+// platform record; identity and ownership still use the verified numeric ID.
+func userDisplayName(user educoder.User) string {
+	for _, value := range []string{user.RealName, user.Name, user.Login} {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 type courseDTO struct {

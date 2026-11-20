@@ -230,6 +230,37 @@ await test('browser API uses the Go workbench contract', async t => {
     assert.equal(user.avatarUrl, '/api/avatar');
     assert.equal(user.name, '测试同学');
   });
+  await t.test('all authentication methods and restored sessions prefer nonblank real names over nicknames and login names', async () => {
+    const methods = [
+      api => api.login('synthetic-account', 'fixture-only'),
+      api => api.loginWithPhone('13000000000', 'fixture-only'),
+      async api => (await api.pollWechatLogin()).user,
+      api => api.me(),
+    ];
+    const cases = [
+      [{ login: 'synthetic-account', name: '', realName: '示例同学' }, '示例同学'],
+      [{ login: 'synthetic-account', name: '显示昵称', realName: '  示例实名  ', real_name: '旧版实名' }, '示例实名'],
+      [{ login: 'synthetic-account', name: '显示昵称', real_name: '  旧版实名  ' }, '旧版实名'],
+      [{ login: 'synthetic-account', name: '  显示昵称  ', realName: '  ', real_name: '\t' }, '显示昵称'],
+      [{ login: 'synthetic-account', name: '显示昵称', realName: { text: '错误对象' }, real_name: 123 }, '显示昵称'],
+      [{ login: 'synthetic-account', name: false, username: '  示例用户名  ', realName: [], real_name: null }, '示例用户名'],
+      [{ login: 'synthetic-account', name: {}, username: '  ', realName: 42, real_name: false }, 'synthetic-account'],
+    ];
+    for (const authenticate of methods) {
+      for (const [user, expected] of cases) {
+        globalThis.fetch = async () => envelope({ status: 'succeeded', user, platform: { role: 'user', status: 'active' } });
+        const normalized = await authenticate(new BrowserApi());
+        assert.equal(normalized.name, expected);
+        assert.equal(normalized.login, 'synthetic-account');
+      }
+    }
+  });
+  await t.test('user names fall back to the generic greeting only when no valid name or login string exists', async () => {
+    for (const user of [{}, { realName: '  ', real_name: null, name: {}, username: 123, login: false }]) {
+      globalThis.fetch = async () => envelope({ user });
+      assert.equal((await new BrowserApi().me()).name, '同学');
+    }
+  });
   await t.test('classroom identifiers take priority over numeric IDs and URL fallback remains usable', async () => {
     globalThis.fetch = async () => envelope([
       { id: 123, identifier: 'CLASSROOM_A', name: '第一课堂', ended: false, homeworkCount: 0 },

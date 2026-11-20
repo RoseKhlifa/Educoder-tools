@@ -81,6 +81,13 @@ async function app(overrides={}, options={}) {
   return {requests,timers,document,windowListeners,html:()=>document.html,reloads:()=>reloadCount,get(selector){const element=document.querySelector(selector);assert.ok(element,`Missing ${selector}`);return element;},async tick(){const tasks=[...timers.entries()];for(const[id,timer]of tasks){timers.delete(id);timer.handler();}await settle();}};
 }
 await test('consumer course service and administrator boundary',async t=>{
+  await t.test('the greeting account label and fallback avatar use the escaped real name from the session DTO', async () => {
+    const page = await app({ '/api/auth/me': () => ok({ user: { login: 'synthetic-account', name: '', realName: '<示例&同学>' }, platform: { role: 'user', status: 'active' } }) });
+    assert.match(page.html(), /<h1>[^<]*，&lt;示例&amp;同学&gt;<\/h1>/);
+    assert.match(page.html(), /<span class="nm">&lt;示例&amp;同学&gt;<\/span>/);
+    assert.match(page.html(), /<span class="avatar" aria-hidden="true">&lt;<\/span>/);
+    assert.doesNotMatch(page.html(), /<示例&同学>|，synthetic-account|class="nm">synthetic-account/);
+  });
   await t.test('the greeting says the courses are syncing while the first course list is still loading', async () => {
     const pending=deferred();
     const page=await app({'/api/courses':()=>pending.promise});

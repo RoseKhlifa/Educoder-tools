@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.167 - 2026-11-21
+
+- Preserve real names across password, phone-code and WeChat login by resolving realName and real_name before nicknames or login, and store the same verified display name for platform users
+
 ## 0.1.166 - 2026-11-21
 
 - Add phone-code and server-mediated WeChat login with verified upstream identities, bounded browser-bound QR transactions, cancellation and replay protection; validate live SMS login and document WeChat binding requirements

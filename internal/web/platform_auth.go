@@ -238,7 +238,7 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, requestID
 	var principal platform.User
 	var err error
 	if s.platform != nil {
-		principal, err = s.platform.UpsertLogin(ctx, platform.Identity{UpstreamID: user.UserID, Login: user.Login, Name: user.Name})
+		principal, err = s.platform.UpsertLogin(ctx, platform.Identity{UpstreamID: user.UserID, Login: user.Login, Name: userDisplayName(*user)})
 		if err != nil {
 			s.platformLoginError(w, requestID, err)
 			return ""

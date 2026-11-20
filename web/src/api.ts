@@ -113,10 +113,12 @@ function normalizeUser(value: unknown): User {
   const platform = asRecord(item.platform);
   const source = Object.keys(nested).length ? nested : item;
   const login = text(source.login || source.username || source.user_login);
+  const name = [source.realName, source.real_name, source.name, source.username, source.login]
+    .find((value): value is string => typeof value === 'string' && value.trim().length > 0)?.trim() || '同学';
   const avatarUrl = text(source.avatarUrl);
   return {
     login,
-    name: text(source.name || source.real_name || source.username, login || '同学'),
+    name,
     id: number(source.id || source.user_id),
     role: (platform.role ?? source.role) === 'admin' ? 'admin' : 'user',
     permissions: Array.isArray(source.permissions) ? source.permissions.filter((value): value is string => typeof value === 'string') : [],
