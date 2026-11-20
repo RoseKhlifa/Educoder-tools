@@ -25,6 +25,7 @@ COPY --from=build /out/educoder-tools /usr/local/bin/educoder-tools
 COPY --from=build /out/educoder-bankimport /usr/local/bin/educoder-bankimport
 COPY web/index.html web/styles.css ./web/
 COPY web/assets/brand-logo.png ./web/assets/brand-logo.png
+COPY web/fonts ./web/fonts
 COPY --from=frontend /src/web/dist ./web/dist
 USER 10001:10001
 ENV HTTP_ADDR=0.0.0.0:11454 \

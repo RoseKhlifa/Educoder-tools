@@ -30,9 +30,37 @@ assert.doesNotMatch(types, /AccessCard/, 'retired access-card DTO must not remai
 
 assert.equal(/localStorage|sessionStorage|console\.(log|debug|info)\s*\(/.test(`${source}\n${api}`), false, 'sensitive browser persistence/logging found');
 assert.equal(/error_code|job\.message|model_calls|cost_micro_usd|diagnostics|attempts|budget/.test(jobs), false, 'consumer task renderer contains technical details');
-assert.match(css, /@media \(max-width: 620px\)/);
+assert.match(css, /@media \(max-width: 680px\)/);
 assert.match(css, /\.topbar/);
-assert.equal(/https?:\/\/|@import|url\(/.test(`${html}\n${css}`), false, 'shell should not download external fonts or media');
+// The shell must not fetch anything from a third party: users are in mainland
+// China and the fonts are vendored. Inline data: URIs and same-origin paths are
+// the only permitted sources, and the stylesheet must not serialize an extra
+// round trip with @import. Inline SVG namespaces are declarations, not fetches,
+// so data: URIs are removed before looking for an external origin.
+const shell = `${html}\n${css}`.replace(/url\(\s*"data:[^"]*"\s*\)|url\(\s*'data:[^']*'\s*\)/g, 'url(data:)');
+assert.equal(/https?:\/\//.test(shell), false, 'shell should not reference external origins');
+assert.equal(/@import/.test(css), false, 'stylesheet should not @import; link stylesheets from index.html');
+for (const [, quoted, single, bare] of css.matchAll(/url\(\s*(?:"([^"]*)"|'([^']*)'|([^)\s]*))\s*\)/g)) {
+  const source = quoted ?? single ?? bare ?? '';
+  assert.match(source, /^data:/, `stylesheet url() must be an inline data URI, found ${source}`);
+}
+// 霞鹜文楷 is self-hosted and sliced by unicode-range, so a browser downloads
+// only the subsets a page actually needs.
+assert.match(html, /<link rel="stylesheet" href="\/fonts\/lxgw-wenkai\/lxgwwenkai-regular\.css"/);
+assert.match(html, /<link rel="stylesheet" href="\/fonts\/lxgw-wenkai\/lxgwwenkai-bold\.css"/);
+assert.match(css, /--font:\s*"LXGW WenKai",\s*"霞鹜文楷",\s*"KaiTi",\s*"STKaiti",\s*"PingFang SC",\s*"Microsoft YaHei",\s*serif/);
+for (const weight of ['regular', 'bold']) {
+  const face = await readFile(new URL(`./fonts/lxgw-wenkai/lxgwwenkai-${weight}.css`, import.meta.url), 'utf8');
+  assert.match(face, /font-family:\s*'LXGW WenKai'/);
+  assert.match(face, /unicode-range:/, 'vendored font CSS must keep its unicode-range slicing');
+  assert.equal(/https?:\/\/|@import/.test(face), false, 'vendored font CSS must not reach a CDN');
+  const slices = [...face.matchAll(/url\('\.\/(files\/[^']+\.woff2)'\)/g)];
+  assert.ok(slices.length > 20, `expected many ${weight} subsets, found ${slices.length}`);
+  const first = await readFile(new URL(`./fonts/lxgw-wenkai/${slices[0][1]}`, import.meta.url));
+  assert.equal(first.subarray(0, 4).toString('latin1'), 'wOF2', 'vendored subset must be a real woff2');
+}
+const ofl = await readFile(new URL('./fonts/lxgw-wenkai/OFL.txt', import.meta.url), 'utf8');
+assert.match(ofl, /SIL OPEN FONT LICENSE/i, 'the vendored font must ship its licence');
 console.log('web service static checks: PASS');
 await import('./api.check.mjs');
 await import('./app.check.mjs');

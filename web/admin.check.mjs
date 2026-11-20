@@ -21,7 +21,7 @@ const job = (extra = {}) => ({
 });
 
 const state = jobs => ({ overview: {}, users: [], jobs, audit: [], loading: false, error: false, jobsKind: 'all' });
-const visible = html => html.replace(/<details\b[\s\S]*?<\/details>/g, '').replace(/<[^>]*>/g, ' ');
+const visible = html => html.replace(/<details class="(?:operator-technical|raw)"[\s\S]*?<\/details>/g, '').replace(/<[^>]*>/g, ' ');
 
 await test('public sample conflicts and unavailable callers have actionable non-secret labels', () => {
   for (const [code, label] of [
@@ -39,7 +39,9 @@ await test('collection capacity and exhaustive completion stay distinct from ans
   const screen = state([]);
   screen.overview = { capacity: { jobs: { workers: 16, collection_workers: 1, answer_running: 2, collection_running: 1, collection_queued: 3 } } };
   const capacity = visible(renderAdmin('overview', screen));
-  for (const label of ['答题执行并发', '采集执行并发', '答题正在运行', '采集正在运行', '采集等待中']) assert.match(capacity, new RegExp(label));
+  for (const label of ['答题执行', '题库采集', '采集排队']) assert.match(capacity, new RegExp(label));
+  assert.match(capacity, /2 \/ 16/, 'answer execution is counted against its own worker limit');
+  assert.match(capacity, /1 \/ 1/, 'collection is counted against its own worker limit');
   const collected = job({ status: 'succeeded', request: { mode: 'collect_verified' }, result: { scan_exhausted: true, scan_complete: true, collected: 0, duplicates: 12, skipped: 1, unconfirmed: 1, failed: 0, limit_reached: false, reasons: { programming_submitted_source_unproven: 1 } } });
   const detail = visible(renderAdminJobDetail(collected));
   assert.match(detail, /完整扫描完成/);
@@ -79,7 +81,7 @@ await test('current operations keep live service targets clear and retain previo
     const value = job({ status: 'uncertain', request: { scope: 'exercise', course: 'SAMPLE_COURSE', exercise_id: 12, mode: 'submit' }, result: { title: '示例考试', submitted: true, score_known: false, total_questions: 50, completed_questions: 0 } });
     const shown = renderAdmin('overview', state([value]));
     assert.doesNotMatch(shown, /data-admin-job-detail=/);
-    assert.match(shown, /当前需跟进<\/span><strong>0/);
+    assert.match(shown, /需要跟进<\/div><div class="v num">0</);
     assert.match(visible(renderAdmin('operations', state([value]))), /已交卷/);
   });
   const attempt = (id, day, extra = {}) => job({ id, created_at: `2026-01-${String(day).padStart(2, '0')}T00:00:00Z`, ...extra });
@@ -157,7 +159,7 @@ await test('current operations keep live service targets clear and retain previo
     const old = attempt('old-failure', 1), latest = attempt('latest-failure', 2);
     latest.context.user.name = '仍需处理同学';
     const overview = renderAdmin('overview', { ...state([old, latest]), overview: { support_jobs: 999 } });
-    assert.match(overview, /当前需跟进<\/span><strong>1/); assert.match(visible(overview), /仍需处理同学/);
+    assert.match(overview, /需要跟进<\/div><div class="v num">1</); assert.match(visible(overview), /仍需处理同学/);
     assert.doesNotMatch(overview, /data-admin-job-detail="old-failure"|999/);
   });
   await t.test('default current service view separates read-only collection and exposes clear reversible filters', () => {
@@ -188,7 +190,7 @@ await test('administrator sees people and work instead of storage identifiers', 
       assert.doesNotMatch(renderAdmin(page, input), /卡密|data-action="create-card"|data-revoke-card/);
     }
     const overview = visible(renderAdmin('overview', input));
-    assert.match(overview, /模型用量与费用仅供管理员核对服务成本/);
+    assert.match(overview, /这些数字用于核对服务成本，不代表用户余额或可用额度/);
     assert.match(overview, /不代表用户余额或可用额度/);
     assert.match(overview, /17/);
   });
@@ -211,7 +213,8 @@ await test('administrator sees people and work instead of storage identifiers', 
     const html = renderAdminJobDetail(value), shown = visible(html);
     for (const expected of ['测试同学甲', '数据结构', '示例作业一', '第 6 关', '执行结束']) assert.ok(shown.includes(expected), expected);
     assert.doesNotMatch(shown, /platform:|bbbbbbbbbbbb|verification_unconfirmed|API status|completed|needs_service|uncertain/);
-    assert.match(html, /<details class="operator-technical">/); assert.doesNotMatch(html, /<details[^>]*\bopen\b/);
+    assert.match(html, /<details class="operator-technical">/);
+    assert.doesNotMatch(html, /<details class="operator-technical"[^>]*\bopen\b/, 'raw diagnostics must stay collapsed');
     assert.match(html, /platform:aaaaaaaa/); assert.match(html, /verification_unconfirmed/); assert.match(html, /API status 0 &lt;upstream-trace&gt;/);
   });
   await t.test('all-course request names each blocked course and assignment', () => {
@@ -226,7 +229,7 @@ await test('administrator sees people and work instead of storage identifiers', 
     const value = job({ request: { mode: 'collect_verified' }, context: { user: { name: '采集同学' } }, message: 'Read-only collection stopped; inspect its summary', error_code: 'COLLECTION_FAILED', result: { collected: 3, duplicates: 2, skipped: 68, reasons: { request_byte_or_time_limit: 1 } } });
     const html = renderAdmin('operations', state([value])), shown = visible(html);
     assert.match(shown, /采集同学/); assert.match(shown, /题库采集 · 只读/); assert.match(shown, /新增 3 条答案 · 已有 2 条 · 跳过 68 项/); assert.doesNotMatch(shown, /Read-only|作业名称待补充|进度尚未获取/);
-    assert.match(renderAdminJobDetail(value), /题库采集详情/);
+    assert.match(renderAdminJobDetail(value), /题库采集/);
   });
   await t.test('missing historical labels stay explicit and do not invent a person or assignment', () => {
     const value = job({ request: { scope: 'homework', course: 'SAMPLE_COURSE', homework_id: 101, mode: 'submit' }, context: undefined, result: {} });
@@ -271,7 +274,7 @@ await test('administrator sees people and work instead of storage identifiers', 
     const list = visible(renderAdmin('operations', { ...state([value]), jobsView: 'history' })), detail = visible(renderAdminJobDetail(value));
     assert.match(list, /达到采集上限/); assert.match(list, /约 3 分钟/); assert.match(list, /尚未扫描完全部内容/); assert.doesNotMatch(list, /需要处理|采集完成/);
     const overview = renderAdmin('overview', state([value]));
-    assert.doesNotMatch(overview, /data-admin-job-detail=/); assert.match(overview, /当前需跟进<\/span><strong>0/);
+    assert.doesNotMatch(overview, /data-admin-job-detail=/); assert.match(overview, /需要跟进<\/div><div class="v num">0</);
     for (const expected of ['新增入库答案', '题库已有答案', '12 条', '跳过', '4 项', '其中证据未确认', '3 项', '子集', '1 份作业', '2 个关卡', '不是图片张数', '1 次终止事件', '不计入跳过数量', '已有答案仍可复用']) assert.ok(detail.includes(expected), expected);
     assert.doesNotMatch(detail, /no_confirmed_full_score|programming_submitted_source_unproven|objective_media_content_unproven|request_byte_or_time_limit/);
     assert.match(renderAdminJobDetail(value), /programming_submitted_source_unproven/);
@@ -281,10 +284,10 @@ await test('administrator sees people and work instead of storage identifiers', 
   });
   await t.test('collection failures and unexpected exceptions remain attention items even when a limit was reached', () => {
     const value = job({ request: { mode: 'collect_verified' }, context: { user: { name: '示例采集用户' } }, result: { collected: 2, failed: 1, limit_reached: true, reasons: { progress_read_failed: 1, request_byte_or_time_limit: 1 } } });
-    assert.match(visible(renderAdmin('overview', state([value]))), /1 项只读采集需核对/); assert.match(visible(renderAdmin('operations', state([value]))), /需要处理/);
+    assert.match(visible(renderAdmin('overview', state([value]))), /1 项采集待核对/); assert.match(visible(renderAdmin('operations', state([value]))), /需要处理/);
     assert.match(visible(renderAdminJobDetail(value)), /作业分数读取失败/);
     value.result.failed = 0; value.error_code = 'DATABASE_WRITE_PANIC';
-    assert.match(visible(renderAdmin('overview', state([value]))), /1 项只读采集需核对/);
+    assert.match(visible(renderAdmin('overview', state([value]))), /1 项采集待核对/);
     assert.doesNotMatch(visible(renderAdmin('operations', state([value]))), /达到采集上限/);
   });
   await t.test('new collection stop metadata distinguishes scan caps, read budget and collection busy', () => {
@@ -304,16 +307,16 @@ await test('administrator sees people and work instead of storage identifiers', 
       const list = visible(renderAdmin('operations', state([value]))), detail = visible(renderAdminJobDetail(value));
       assert.match(list, /需要处理/); assert.doesNotMatch(list, /达到采集上限|采集完成/);
       assert.match(detail, /需要核对停止原因/);
-      assert.match(visible(renderAdmin('overview', state([value]))), /1 项只读采集需核对/);
+      assert.match(visible(renderAdmin('overview', state([value]))), /1 项采集待核对/);
     }
     value.result.stop_reason = 'future_unknown_stop';
-    assert.match(visible(renderAdmin('overview', state([value]))), /1 项只读采集需核对/);
+    assert.match(visible(renderAdmin('overview', state([value]))), /1 项采集待核对/);
   });
   await t.test('explicit incomplete collection is never displayed as a completed scan', () => {
     const value = job({ status: 'succeeded', request: { mode: 'collect_verified' }, context: { user: { name: '示例采集用户' } }, message: '扫描任务结束', result: { collected: 0, duplicates: 3, skipped: 0, failed: 0, limit_reached: false, scan_complete: false, reasons: {} } });
     const shown = visible(renderAdminJobDetail(value));
     assert.match(shown, /需要处理/); assert.match(shown, /本次扫描尚未完成/); assert.doesNotMatch(shown, /采集完成|已完成本次只读采集/);
-    assert.match(visible(renderAdmin('overview', state([value]))), /1 项只读采集需核对/);
+    assert.match(visible(renderAdmin('overview', state([value]))), /1 项采集待核对/);
     value.result.scan_complete = true;
     assert.match(visible(renderAdminJobDetail(value)), /采集完成（无新增）/);
   });
@@ -373,16 +376,16 @@ await test('a low model balance is a top-of-overview warning with the amount, ne
   const screen = state([]);
   screen.overview = { model_balance: { available: true, currency: 'CNY', total: '7.20', threshold: '10', low: true } };
   const low = visible(renderAdmin('overview', screen));
-  assert.ok(low.includes('模型余额偏低：剩余 ¥7.20（提醒线 ¥10）'), low);
-  assert.ok(low.includes('需要充值'));
+  assert.ok(low.includes('模型余额 ¥7.20，低于提醒线 ¥10。'), low);
+  assert.ok(low.includes('到供应商平台充值'), low);
   screen.overview = { model_balance: { available: true, currency: 'USD', total: '25.00', threshold: '1.5', low: false } };
   const fine = visible(renderAdmin('overview', screen));
-  assert.ok(!fine.includes('需要充值') && fine.includes('$25.00'));
+  assert.ok(!fine.includes('到供应商平台充值') && fine.includes('$25.00'));
   screen.overview = { model_balance: { available: false, currency: 'CNY', total: '0.00', low: true } };
-  assert.ok(visible(renderAdmin('overview', screen)).includes('模型账户当前不可用'));
+  assert.ok(visible(renderAdmin('overview', screen)).includes('模型账户现在读不到'));
   screen.overview = { model_balance: { error: 'upstream_error:401', low: false } };
   const failed = visible(renderAdmin('overview', screen));
-  assert.ok(failed.includes('暂时无法读取') && !failed.includes('upstream_error') && !failed.includes('需要充值'));
+  assert.ok(failed.includes('暂时无法读取') && !failed.includes('upstream_error') && !failed.includes('到供应商平台充值'));
   screen.overview = {};
   assert.ok(!visible(renderAdmin('overview', screen)).includes('需要充值'));
 });
@@ -395,8 +398,8 @@ await test('a history record states what happened per assignment without repeati
   ];
   const record = { id: 'cccccccccccccccccccccccccccccccc', status: 'failed', request: { scope: 'all', mode: 'submit' }, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:10:00Z', result: { service_status: 'support', total_homeworks: 3, completed_homeworks: 0, homeworks: rows } };
   const history = visible(renderServiceDetail(record, [], true));
-  assert.ok(history.includes('当时提交结果尚未确认') && history.includes('当时头歌平台资源紧张') && history.includes('当时需要人工跟进'), history);
-  assert.doesNotMatch(history, /请使用|可稍后重新执行|brand_new_code/);
+  assert.ok(history.includes('当时提交结果尚未确认') && history.includes('当时头歌评测资源紧张') && history.includes('当时要人工核对'), history);
+  assert.doesNotMatch(history, /请使用|可稍后重新执行|需要先复核|可以直接重试|brand_new_code/);
   const live = visible(renderServiceDetail(record, [], false));
-  assert.ok(live.includes('上次提交结果尚未确认，请使用“复核并继续”') && live.includes('头歌平台资源紧张，可稍后重新执行'));
+  assert.ok(live.includes('上次提交结果没确认，需要先复核') && live.includes('头歌评测资源紧张，评测没能开始'), live);
 });

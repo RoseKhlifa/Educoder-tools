@@ -1,4 +1,4 @@
-import { escapeHtml as e } from './ui.js';
+import { escapeHtml as e, icon } from './ui.js';
 import type { AutoRetry, ProgressItem } from './types.js';
 
 // Shared progress vocabulary and renderer. The consumer and operator pages use
@@ -27,38 +27,37 @@ export const stageLabels: Record<string, string> = {
 
 // progressReasons explain a non-pass in plain language. Keys are the consumer
 // vocabulary the server publishes: a small closed set of categories, never an
-// internal execution code.
+// internal execution code. Each line says what happened, not what we feel.
 export const progressReasons: Record<string, string> = {
-  service_followup: '这部分需要人工跟进，我们会继续核对',
-  already_passed: '已是满分，自动跳过',
-  no_required_levels: '没有需要完成的必做关卡',
-  deadline_passed: '作业已截止，不再安排处理',
-  platform_busy: '头歌平台资源紧张，可稍后重新执行',
-  platform_unavailable: '头歌平台暂时读取不到内容，可稍后重新执行',
-  needs_review: '上次提交结果尚未确认，请使用“复核并继续”',
-  retry_later: '提交尚未发出，可安全重新执行',
-  answer_unavailable: '这次没能生成通过的答案，我们会继续跟进',
-  question_conflict: '题目要求与公开样例存在矛盾，待课程方核对后继续',
-  unsupported: '这部分内容暂不支持自动完成',
-  quota_reached: '已达到本次处理上限，剩余内容可稍后重新执行',
-  paused_cooldown: '上次失败后没有新进展，已暂停重复尝试',
-  stopped: '已按请求停止，已完成进度保留',
-  interrupted: '处理被中断，需要先核对已完成结果',
+  service_followup: '这部分要人工核对，我们在跟进',
+  already_passed: '之前已满分',
+  no_required_levels: '没有必做关卡',
+  deadline_passed: '已截止，不再处理',
+  platform_busy: '头歌评测资源紧张，评测没能开始',
+  platform_unavailable: '头歌暂时读不到内容',
+  needs_review: '上次提交结果没确认，需要先复核',
+  retry_later: '提交还没发出，可以直接重试',
+  answer_unavailable: '没能生成通过的答案',
+  question_conflict: '题目要求和公开样例矛盾，等课程方核对',
+  unsupported: '这部分暂不支持自动完成',
+  quota_reached: '到了本次处理上限，剩下的可以再执行',
+  paused_cooldown: '上次失败后没有新进展，已暂停重试',
+  stopped: '已按请求停止，做好的保留',
+  interrupted: '处理被中断，要先核对已完成的部分',
 };
 
 // historyReasons describe a settled earlier run. The live wording ends with an
-// instruction ("请使用复核并继续", "可稍后重新执行") that applies only to the
-// current record; a history view has no such action, so it states what
-// happened instead.
+// instruction ("可以直接重试"), which applies only to the current record; a
+// history view has no such action, so it states what happened instead.
 const historyReasons: Record<string, string> = {
-  service_followup: '当时需要人工跟进',
-  platform_busy: '当时头歌平台资源紧张',
-  platform_unavailable: '当时头歌平台暂时读取不到内容',
+  service_followup: '当时要人工核对',
+  platform_busy: '当时头歌评测资源紧张',
+  platform_unavailable: '当时头歌读不到内容',
   needs_review: '当时提交结果尚未确认',
-  retry_later: '当时提交尚未发出',
+  retry_later: '当时提交还没发出',
   answer_unavailable: '当时没能生成通过的答案',
-  quota_reached: '当时已达到本次处理上限',
-  paused_cooldown: '当时没有新进展，已暂停重复尝试',
+  quota_reached: '当时到了处理上限',
+  paused_cooldown: '当时没有新进展，已暂停重试',
   stopped: '当时已按请求停止',
   interrupted: '当时处理被中断',
 };
@@ -98,7 +97,8 @@ const statusTone: Record<string, ProgressStatus> = {
 export const progressTone = (status?: string): ProgressStatus => statusTone[String(status ?? '')] ?? 'support';
 
 const levelLabels: Record<ProgressStatus, string> = { completed: '已完成', processing: '正在处理', waiting: '待处理', support: '待跟进' };
-const historyLabels: Record<ProgressStatus, string> = { completed: '当次已完成', processing: '当次未完成', waiting: '当次未开始', support: '当次未完成' };
+// A settled record states the outcome without the "当次" bookkeeping prefix.
+const historyLabels: Record<ProgressStatus, string> = { completed: '已完成', processing: '未完成', waiting: '未开始', support: '未完成' };
 
 export function toneLabel(tone: ProgressStatus, historical = false): string {
   return historical ? historyLabels[tone] : levelLabels[tone];
@@ -144,7 +144,7 @@ export function autoRetryText(value?: AutoRetry | null): string {
   const at = clockTime(value.next_at);
   if (!at) return '';
   const attempt = Number(value.attempt), max = Number(value.max);
-  const round = Number.isSafeInteger(attempt) && attempt > 0 && Number.isSafeInteger(max) && max > 0 ? `（第 ${attempt}/${max} 次）` : '';
+  const round = Number.isSafeInteger(attempt) && attempt > 0 && Number.isSafeInteger(max) && max > 0 ? `（第 ${attempt} 次，共 ${max} 次）` : '';
   return `将于 ${at} 自动重试${round}`;
 }
 
@@ -167,7 +167,7 @@ function levelCountText(item: ProgressItem): string {
   if (!total) return '';
   const done = Math.min(total, Number(item.completed_levels) || 0);
   const skipped = Number(item.skipped_levels) || 0;
-  return `${done} / ${total} 个关卡${skipped > 0 ? ` · 其中 ${skipped} 个已是满分` : ''}`;
+  return `${done} / ${total} 关${skipped > 0 ? ` · ${skipped} 关之前已满分` : ''}`;
 }
 
 function currentLevelText(item: ProgressItem): string {
@@ -179,49 +179,75 @@ function currentLevelText(item: ProgressItem): string {
   return stage ? `${name} · ${stage}` : name;
 }
 
-function renderLevels(items: ProgressItem[], historical: boolean, active: boolean): string {
-  if (!items.length) return '';
-  return `<ol class="level-track">${items.map(level => {
-    const tone = settledTone(level.status, active);
-    const position = Number(level.position) || 0;
-    return `<li class="level-chip tone-${tone}" title="${e(`${position ? `第 ${position} 关 · ` : ''}${level.title ?? ''} · ${toneLabel(tone, historical)}`)}"><span class="level-mark" aria-hidden="true">${tone === 'completed' ? '✓' : tone === 'processing' ? '•' : tone === 'support' ? '!' : ''}</span><span class="level-index">${position || '·'}</span><span class="level-name">${e(String(level.title ?? '').trim() || '关卡')}</span><span class="level-state">${toneLabel(tone, historical)}</span></li>`;
-  }).join('')}</ol>`;
+/** marginMark is the teacher's pen in the sheet's red margin. */
+export function marginMark(tone: ProgressStatus): string {
+  if (tone === 'completed') return `<span class="mark done" aria-hidden="true">${icon('tick')}</span>`;
+  if (tone === 'support') return `<span class="mark warn" aria-hidden="true">${icon('bang')}</span>`;
+  if (tone === 'processing') return '<span class="mark" aria-hidden="true"><span class="pulse"></span></span>';
+  return `<span class="mark todo" aria-hidden="true">${icon('ring')}</span>`;
 }
 
 /**
- * renderProgressTree lists every assignment of a job with its own state, level
- * counters, current level and reason. It is the single component behind the
- * consumer detail view, the consumer card and the operator job detail.
+ * renderLevelGrid draws one 田字格 cell per level. The cell carries its state
+ * as a shape — a red tick, an orange ring, an orange "!" — and its number in
+ * the corner; the title lives in the label, so no status word is repeated on
+ * every level. Only the levels that need attention are listed underneath.
+ */
+function renderLevelGrid(levels: ProgressItem[], historical: boolean, active: boolean, admin: boolean): string {
+  if (!levels.length) return '';
+  const cells = levels.map((level, index) => {
+    const tone = settledTone(level.status, active);
+    const position = Number(level.position) || index + 1;
+    const title = String(level.title ?? '').trim();
+    const cls = tone === 'completed' ? 'done' : tone === 'processing' ? 'run' : tone === 'support' ? 'warn' : '';
+    const label = `第 ${position} 关${title ? ` · ${title}` : ''} · ${toneLabel(tone, historical)}`;
+    return `<li class="${cls}" title="${e(label)}" aria-label="${e(label)}"><span class="n num">${position}</span></li>`;
+  }).join('');
+  const notes = levels.map((level, index) => ({ level, tone: settledTone(level.status, active), position: Number(level.position) || index + 1 }))
+    .filter(row => row.tone === 'support')
+    .map(row => {
+      const title = String(row.level.title ?? '').trim();
+      const reason = historical && !admin ? historyReasonText(row.level.reason) : reasonText(row.level.reason, admin);
+      return `<li><b>第 ${row.position} 关</b>${e([title, reason].filter(Boolean).join('：'))}</li>`;
+    }).join('');
+  return `<ol class="tzg">${cells}</ol>${notes ? `<ul class="level-notes">${notes}</ul>` : ''}`;
+}
+
+/**
+ * renderProgressTree is the exercise-book sheet: one ruled row per assignment
+ * with its mark in the red margin, and its levels as 田字格 cells. It is the
+ * single component behind the consumer task sheet and the operator job sheet.
+ *
+ * A row is open when it is the interesting one — running, or needing
+ * attention. That is derived from the data, so a live sheet repainting every
+ * second always reopens the same rows instead of collapsing under the reader.
  */
 export function renderProgressTree(items: ProgressItem[], options: ProgressTreeOptions = {}): string {
   const { historical = false, admin = false, levels = false, parentActive = true } = options;
   if (!Array.isArray(items) || !items.length) {
-    return options.emptyText ? `<p class="muted progress-tree-empty">${e(options.emptyText)}</p>` : '';
+    return options.emptyText ? `<p class="muted">${e(options.emptyText)}</p>` : '';
   }
-  return `<ol class="progress-tree">${items.slice(0, 100).map((item, index) => {
+  const rows = items.slice(0, 100);
+  const interesting = rows.filter(item => ['processing', 'support'].includes(settledTone(item.status, parentActive))).length;
+  return `<ul class="hw-list">${rows.map((item, index) => {
     const tone = settledTone(item.status, parentActive);
     const reason = tone === 'completed' && item.reason !== 'already_passed' && item.reason !== 'no_required_levels' ? '' : historical && !admin ? historyReasonText(item.reason) : reasonText(item.reason, admin);
     const counts = levelCountText(item);
     const current = tone === 'processing' ? currentLevelText(item) : '';
-    const started = clockTime(item.started_at);
-    const updated = clockTime(item.updated_at);
-    const times = [started ? `开始 ${started}` : '', updated && updated !== started ? `更新 ${updated}` : ''].filter(Boolean).join(' · ');
-    return `<li class="progress-node tone-${tone}">
-      <span class="node-mark" aria-hidden="true">${tone === 'completed' ? '✓' : tone === 'processing' ? '◌' : tone === 'support' ? '!' : index + 1}</span>
-      <div class="node-body">
-        <div class="node-head"><strong>${e(String(item.title ?? '').trim() || `作业 ${index + 1}`)}</strong><span class="badge ${tone}">${toneLabel(tone, historical)}</span></div>
-        ${item.course_name ? `<p class="node-course">${e(item.course_name)}</p>` : ''}
-        ${counts ? `<p class="node-counts">${e(counts)}</p>` : ''}
-        ${current ? `<p class="node-current">${e(current)}</p>` : ''}
-        ${reason ? `<p class="node-reason">${e(reason)}</p>` : ''}
-        ${times ? `<p class="node-time">${e(times)}</p>` : ''}
-        ${levels && Array.isArray(item.levels) ? renderLevels(item.levels.slice(0, 100), historical, parentActive && tone === 'processing') : ''}
-      </div>
-    </li>`;
-  }).join('')}</ol>`;
+    const title = String(item.title ?? '').trim() || `作业 ${index + 1}`;
+    const meta = [item.course_name ? String(item.course_name) : '', current].filter(Boolean).join(' · ');
+    const children = levels && Array.isArray(item.levels) ? item.levels.slice(0, 100) : [];
+    const grid = renderLevelGrid(children, historical, parentActive && tone === 'processing', admin);
+    // Open what the reader came for: the live or stalled rows, or everything
+    // when nothing stands out.
+    const open = grid && (['processing', 'support'].includes(tone) || !interesting);
+    const head = `${marginMark(tone)}<span><span class="hw-name">${e(title)}</span>${meta ? `<span class="hw-meta">${e(meta)}</span>` : ''}${reason ? `<span class="hw-reason">${e(reason)}</span>` : ''}</span><span class="hw-count num">${e(counts || toneLabel(tone, historical))}</span>`;
+    if (!grid) return `<li class="hw"><div class="hw-row as-row">${head}<span></span></div></li>`;
+    return `<li class="hw"><details ${open ? 'open' : ''}><summary class="hw-row">${head}${icon('down')}</summary><div class="levels">${grid}</div></details></li>`;
+  }).join('')}</ul>`;
 }
 
-/** progressCounts groups a list by display state for the summary strips. */
+/** progressCounts groups a list by display state for the summary lines. */
 export function progressCounts(items: ProgressItem[]): Record<ProgressStatus, number> {
   const out: Record<ProgressStatus, number> = { waiting: 0, processing: 0, completed: 0, support: 0 };
   for (const item of Array.isArray(items) ? items : []) out[progressTone(item.status)]++;

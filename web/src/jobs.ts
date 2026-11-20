@@ -1,6 +1,6 @@
 import type { AnswerJob, Course, ProgressItem } from './types.js';
-import { count, dateTime, escapeHtml as e, record } from './ui.js';
-import { autoRetryText, progressCounts, progressTone, reasonText, renderProgressTree, stageLabel } from './progress.js';
+import { count, dayTime, duration, escapeHtml as e, icon, record } from './ui.js';
+import { autoRetryText, marginMark, progressCounts, progressTone, reasonText, renderProgressTree, settledTone, stageLabel } from './progress.js';
 export const pendingJob = (job: AnswerJob): boolean => ['queued', 'running', 'waiting', 'processing'].includes(job.status);
 export const serviceJob = (job: AnswerJob): boolean => job.request.mode !== 'collect_verified';
 // Capability flags come from the session-bound API. Missing flags fail closed.
@@ -19,13 +19,13 @@ function recoveryMessage(job: AnswerJob): string {
 export function recoveryNotice(job: AnswerJob): string {
   if (!job.recovery) return '';
   switch (recoveryState(job)) {
-    case 'queued': return '已提交复核，正在等待开始。';
-    case 'reconciling': return '正在复核上次结果，尚未开始新的提交。';
-    case 'continuing': return '复核已通过，正在继续剩余内容。';
-    case 'blocked': return '本次复核未通过，尚未启动重试；已完成进度保留。';
-    case 'completed': return '本次复核与后续处理已完成。';
-    case 'stopped': return '本次复核已停止，已完成进度保留。';
-    case 'failed': return '复核后的处理仍未完成，已保留进度。';
+    case 'queued': return '已提交复核，等待开始。';
+    case 'reconciling': return '正在复核上次结果，还没有新的提交。';
+    case 'continuing': return '复核通过，正在继续剩下的内容。';
+    case 'blocked': return '复核没通过，没有重试；做好的保留。';
+    case 'completed': return '复核和后续处理都完成了。';
+    case 'stopped': return '复核已停止，做好的保留。';
+    case 'failed': return '复核后仍未完成，做好的保留。';
     default: return '';
   }
 }
@@ -44,12 +44,12 @@ function recoveryLabel(job: AnswerJob): string {
 export function serviceLabel(job: AnswerJob): string { return recoveryLabel(job) || serviceLabels[serviceStatus(job)]; }
 export function renderJobActions(job: AnswerJob, historical = false, pending?: JobActionState): string {
   if (historical) return '';
-  if (pending === 'retry') return '<div class="job-actions"><button class="button primary compact" disabled>正在重新执行…</button></div>';
-  if (pending === 'recover') return '<div class="job-actions"><button class="button primary compact" disabled>正在复核…</button></div>';
-  if (pending === 'cancel' || pending === 'stopping') return '<div class="job-actions"><button class="text-button" disabled>正在停止…</button></div>';
-  if (canRetryJob(job)) return `<div class="job-actions"><button class="button primary compact" data-job-retry="${e(job.id)}">重新执行</button></div>`;
-  if (canRecoverJob(job)) return `<div class="job-actions"><button class="button primary compact" data-job-recover="${e(job.id)}">${recoveryState(job) === 'blocked' ? '再次复核并继续' : '复核并继续'}</button></div>`;
-  if (canCancelJob(job)) return `<div class="job-actions"><button class="text-button" data-job-cancel="${e(job.id)}">停止任务</button></div>`;
+  if (pending === 'retry') return '<button class="btn sm" disabled>正在重试…</button>';
+  if (pending === 'recover') return '<button class="btn sm" disabled>正在复核…</button>';
+  if (pending === 'cancel' || pending === 'stopping') return '<button class="btn sm stop" disabled>正在停止…</button>';
+  if (canRetryJob(job)) return `<button class="btn sm" data-job-retry="${e(job.id)}">现在重试</button>`;
+  if (canRecoverJob(job)) return `<button class="btn sm" data-job-recover="${e(job.id)}">${recoveryState(job) === 'blocked' ? '再次复核并继续' : '复核并继续'}</button>`;
+  if (canCancelJob(job)) return `<button class="btn sm stop" data-job-cancel="${e(job.id)}">停止</button>`;
   return '';
 }
 function serviceTarget(job: AnswerJob, index: number): string {
@@ -109,10 +109,10 @@ export function serviceStatus(job: AnswerJob): ServiceStatus {
   if (publicStatus === 'support' || publicStatus === 'completed' || publicStatus === 'submitted' || publicStatus === 'awaiting_review' || publicStatus === 'graded') return publicStatus;
   return 'support';
 }
-export const serviceLabels: Record<ServiceStatus, string> = { waiting: '等待处理', processing: '正在处理', support: '待跟进', completed: '已完成', stopped: '已停止', submitted: '已交卷', awaiting_review: '待公布成绩', graded: '成绩已公布' };
+export const serviceLabels: Record<ServiceStatus, string> = { waiting: '排队中', processing: '正在处理', support: '需要跟进', completed: '已完成', stopped: '已停止', submitted: '已交卷', awaiting_review: '待公布成绩', graded: '成绩已公布' };
 export function jobTitle(job: AnswerJob, courses: Course[] = []): string {
   const result = record(job.result);
-  if (job.request.scope === 'all') return '全部课程的未完成作业';
+  if (job.request.scope === 'all') return '全部课程';
   const course = courses.find(item => item.identifier === job.request.course);
   const resultTitle = typeof result.title === 'string' ? result.title : '';
   if (job.request.scope === 'exercise') return resultTitle || '在线考试';
@@ -127,12 +127,6 @@ export function jobProgress(job: AnswerJob): { completed: number; total: number;
   const total = exercise ? questions : homeworks || count(data.total_levels);
   const completed = Math.min(total, exercise ? count(data.completed_questions) : homeworks ? count(data.completed_homeworks) : count(data.completed_levels));
   return { completed, total, unit: exercise ? '道题' : homeworks ? '份作业' : '关', percent: total ? Math.round(completed / total * 100) : ['completed', 'graded', 'submitted', 'awaiting_review'].includes(serviceStatus(job)) ? 100 : 0 };
-}
-function displayLabel(status: ServiceStatus, historical: boolean): string {
-  if (!historical) return serviceLabels[status];
-  if (status === 'submitted' || status === 'awaiting_review') return '当次已交卷';
-  if (status === 'graded') return '当次已评分';
-  return status === 'completed' ? '当次已完成' : status === 'stopped' ? '当次已停止' : '当次未完成';
 }
 function progressText(job: AnswerJob): string {
   const progress = jobProgress(job);
@@ -175,85 +169,184 @@ export function serviceReason(job: AnswerJob): string {
 }
 function serviceAttention(job: AnswerJob): string {
   return serviceStatus(job) === 'support' && record(job.result).attention === 'upstream_question_conflict'
-    ? '题目要求与评测样例存在矛盾，已保留进度，待课程方核对后继续。' : '';
+    ? '题目要求和评测样例矛盾，做好的保留，等课程方核对后继续。' : '';
 }
-/** renderJobLive is the one-line "what is happening right now" summary. */
-function renderJobLive(job: AnswerJob, historical: boolean): string {
-  if (historical) return '';
-  const items = jobHomeworks(job);
-  const counts = progressCounts(items);
-  const stage = currentStage(job);
-  const title = typeof record(job.result).current_title === 'string' ? String(record(job.result).current_title).trim() : '';
+/** sentence closes a clause so two reasons do not run together. */
+const sentence = (value: string): string => !value ? '' : /[。！？，、]$/.test(value) ? value : `${value}。`;
+/** jobElapsed is real wall time between two recorded timestamps, or nothing. */
+function jobElapsed(job: AnswerJob): string {
+  const started = job.started_at || job.created_at;
   if (pendingJob(job)) {
-    // The stage belongs to the assignment the server focused on, so name that
-    // one and only count the others: listing three titles plus a level reads
-    // as if the level belonged to all of them.
-    const running = items.filter(item => progressTone(item.status) === 'processing');
-    const focus = title || running.map(item => String(item.title ?? '').trim()).filter(Boolean)[0] || '';
-    const also = running.length > 1 ? `（同时处理 ${running.length} 份）` : '';
-    const parts = [focus ? `正在处理 ${focus}${also}` : '正在安排处理', stage].filter(Boolean);
-    const tally = items.length ? `${counts.completed} / ${items.length} 份作业已完成${counts.support ? ` · ${counts.support} 份待跟进` : ''}` : '';
-    return `<p class="job-live" role="status"><span class="live-dot" aria-hidden="true"></span><span>${e(parts.join(' · '))}</span>${tally ? `<small>${e(tally)}</small>` : ''}</p>`;
+    const span = duration(started, new Date().toISOString());
+    return span ? `已用时 ${span}` : '';
   }
-  const reason = serviceReason(job), retry = autoRetryNotice(job);
-  if (!reason && !retry) return '';
-  return `<p class="job-live job-live-attention" role="status"><span>${e(reason)}</span>${retry ? `<small>${e(retry)}</small>` : ''}</p>`;
+  const span = duration(started, job.finished_at || job.updated_at);
+  return span ? `用时 ${span}` : '';
 }
-export function renderServiceJob(job: AnswerJob, courses: Course[] = [], historical = false, action?: JobActionState): string {
+/** homeworkSquares draws one square per assignment of a job. */
+export function homeworkSquares(items: ProgressItem[], active: boolean, large = false): string {
+  if (!items.length) return '';
+  const counts = progressCounts(items);
+  const cells = items.slice(0, 60).map(item => {
+    const tone = settledTone(item.status, active);
+    return `<i class="${tone === 'completed' ? 'done' : tone === 'processing' ? 'run' : tone === 'support' ? 'warn' : ''}"></i>`;
+  }).join('');
+  return `<div class="squares${large ? ' lg' : ''}" role="img" aria-label="${e(`${items.length} 份作业，完成 ${counts.completed} 份`)}">${cells}</div>`;
+}
+/**
+ * assignmentTally is how many assignments a job finished out of how many. The
+ * published counters are authoritative: the assignment list is a projection
+ * that can be truncated, so it is only a fallback when no counter exists.
+ */
+function assignmentTally(job: AnswerJob): { completed: number; total: number } {
+  const progress = jobProgress(job);
+  if (job.request.scope !== 'exercise' && progress.unit === '份作业' && progress.total) return { completed: progress.completed, total: progress.total };
+  const items = jobHomeworks(job);
+  if (items.length) return { completed: progressCounts(items).completed, total: items.length };
+  return { completed: progress.completed, total: progress.total };
+}
+/**
+ * jobVerdict is the one line that answers "where does this task stand?" — what
+ * happened, and what happens next. It never echoes the assignment a stopped
+ * job was last working on as if the work were still going.
+ */
+export function jobVerdict(job: AnswerJob, historical: boolean): string {
+  const items = jobHomeworks(job);
   const status = serviceStatus(job);
   const progress = jobProgress(job);
-  const submitted = job.request.scope === 'exercise' && ['submitted', 'awaiting_review', 'graded'].includes(status);
-  return `<article class="service-job service-job-compact hw-card status-${status}${historical ? ' service-job-history' : ''}" data-service-record="${historical ? 'history' : 'current'}"><div class="hw-top job-heading"><div class="hw-title"><span class="job-symbol" aria-hidden="true">${status === 'completed' || submitted ? '✓' : status === 'support' ? '·' : '◌'}</span><div><h3>${e(jobTitle(job, courses))}</h3><p class="meta">${e(dateTime(job.created_at))} · ${historical ? '本次任务' : '开始时间'}</p></div></div><div class="hw-badges"><span class="badge ${historical ? 'stopped' : status}">${historical ? displayLabel(status, true) : serviceLabel(job)}</span></div></div><div class="hw-progress job-footer"><div class="job-progress">${submitted ? '' : `<div class="progress-track bar-wrap" aria-hidden="true"><span class="progress-fill" style="width:${progress.percent}%"></span></div>`}<span>${historical ? '本次进度 · ' : ''}${progressText(job)}</span></div>${renderJobLive(job, historical)}${!historical && recoveryMessage(job) ? `<p class="job-recovery-message" role="status">${e(recoveryNotice(job))}</p>` : ''}${!historical && serviceAttention(job) ? `<p class="job-recovery-message" role="status">${e(serviceAttention(job))}</p>` : ''}<button class="text-button" data-job-detail="${e(job.id)}"${historical ? ' data-job-history="true"' : ''}>${historical ? '查看记录' : '查看详情'}</button>${renderJobActions(job, historical, action)}</div></article>`;
+  const tally = assignmentTally(job);
+  const elapsed = jobElapsed(job);
+  const data = { ...record(job.progress), ...record(job.result) };
+  const currentTitle = typeof data.current_title === 'string' ? data.current_title.trim() : '';
+  const stage = currentStage(job);
+  if (job.request.scope === 'exercise') {
+    if (['submitted', 'awaiting_review'].includes(status)) return '已交卷，成绩以头歌公布为准。';
+    if (status === 'graded') {
+      const score = data.score_known === true && (typeof data.score === 'number' || typeof data.score === 'string') ? String(data.score) : '';
+      const max = typeof data.max_score === 'number' || typeof data.max_score === 'string' ? String(data.max_score) : '';
+      return score ? `成绩 ${e(score)}${max ? ` / ${e(max)}` : ''}` : '成绩已公布，以头歌为准。';
+    }
+    if (pendingJob(job)) return `正在做这场考试${elapsed ? ` · ${elapsed}` : ''}`;
+  }
+  const allDone = tally.total > 0 && tally.completed === tally.total;
+  if (status === 'completed' || allDone && !pendingJob(job)) {
+    return `<b>${tally.total && progress.unit === '份作业' ? `${tally.total} 份全部完成` : '全部完成'}</b>${elapsed ? ` · ${elapsed}` : ''}`;
+  }
+  if (pendingJob(job)) {
+    const focus = currentTitle || items.filter(item => progressTone(item.status) === 'processing').map(item => String(item.title ?? '').trim()).filter(Boolean)[0] || '';
+    const where = focus ? `正在做「${e(focus)}」${stage ? ` ${e(stage)}` : ''}` : '正在安排处理';
+    const nth = progress.unit === '份作业' && tally.total ? `第 ${Math.min(tally.total, tally.completed + 1)} 份 · ` : '';
+    return `${nth}<mark>${where}</mark>${elapsed ? ` · ${elapsed}` : ''}`;
+  }
+  const done = tally.total ? `<b>完成 ${tally.completed} / ${tally.total} ${progress.unit === '份作业' ? '份' : progress.unit}</b>` : '<b>没有完成</b>';
+  const reason = historical ? '' : serviceReason(job);
+  const tail = reason ? `，${e(reason)}` : status === 'stopped' ? '，已按请求停止' : '';
+  return `${done}${tail}${elapsed ? ` · ${elapsed}` : ''}`;
+}
+/** historyResult is the ruled record's result column: a mark plus a tally. */
+function historyResult(job: AnswerJob): string {
+  const status = serviceStatus(job);
+  const tally = assignmentTally(job);
+  if (job.request.scope === 'exercise') {
+    const label = status === 'graded' ? '成绩已公布' : ['submitted', 'awaiting_review'].includes(status) ? '已交卷' : status === 'stopped' ? '已停止' : '未完成';
+    const done = ['graded', 'submitted', 'awaiting_review'].includes(status);
+    return `<span class="state ${done ? 'done' : ''} res">${done ? `<span class="tick">${icon('tick')}</span>` : icon('bang')}${e(label)}</span>`;
+  }
+  if (status === 'completed' || tally.total > 0 && tally.completed === tally.total) {
+    return `<span class="state done res"><span class="tick">${icon('tick')}</span>${tally.total ? `${tally.total} 份全部完成` : '全部完成'}</span>`;
+  }
+  if (status === 'stopped' && !tally.completed) return `<span class="state res">${icon('bang')}已停止</span>`;
+  return `<span class="state run res">${icon('bang')}${tally.total ? `完成 ${tally.completed} / ${tally.total} 份` : '未完成'}</span>`;
+}
+/**
+ * renderServiceJob is one live task slip: what is happening, how far it got,
+ * and the single action available right now.
+ */
+export function renderServiceJob(job: AnswerJob, courses: Course[] = [], historical = false, action?: JobActionState): string {
+  const status = serviceStatus(job);
+  const items = jobHomeworks(job);
+  const counts = progressCounts(items);
+  const progress = jobProgress(job);
+  const active = pendingJob(job);
+  const retry = autoRetryNotice(job);
+  const reason = historical ? '' : serviceReason(job) || serviceAttention(job) || (recoveryMessage(job) ? recoveryNotice(job) : '');
+  const stage = currentStage(job);
+  const focus = (typeof record(job.result).current_title === 'string' ? String(record(job.result).current_title).trim() : '')
+    || items.filter(item => progressTone(item.status) === 'processing').map(item => String(item.title ?? '').trim()).filter(Boolean)[0] || '';
+  const mark = active ? '<span class="pulse"></span>'
+    : status === 'completed' ? `<span class="tick">${icon('tick')}</span>`
+      : `<span class="mark warn" style="height:auto">${icon('bang')}</span>`;
+  const scope = items.length ? `${items.length} 份作业` : progress.total ? `${progress.total} ${progress.unit}` : '';
+  const started = dayTime(job.started_at || job.created_at);
+  const elapsed = jobElapsed(job);
+  const tally = items.length ? `${counts.completed} / ${items.length} 份作业` : progressText(job);
+  const line = active
+    ? `<p class="slip-stage">${focus ? `正在做「${e(focus)}」` : '正在安排处理'}${stage ? ` · <mark>${e(stage)}</mark>` : ''}</p>`
+    : reason || retry ? `<p class="memo">${e(sentence(reason))}${retry ? `${e(retry)}，做好的关卡不会重做。` : ''}</p>` : '';
+  return `<section class="card slip${historical ? ' slip-history' : ''}" data-service-record="${historical ? 'history' : 'current'}" aria-label="${e(jobTitle(job, courses))}">
+    <div class="slip-top">${mark}<span class="slip-title">${e(jobTitle(job, courses))}</span>${scope ? `<span class="slip-scope">${e(scope)}</span>` : ''}${active ? '' : `<span class="slip-scope">${e(historical ? progressText(job) : serviceLabel(job))}</span>`}
+      <div class="slip-actions">${renderJobActions(job, historical, action)}<button class="btn sm" data-job-detail="${e(job.id)}"${historical ? ' data-job-history="true"' : ''}>详情</button></div></div>
+    ${line}${homeworkSquares(items, active, true)}
+    <div class="slip-meta num"><span>${e(tally)}</span><span>${e([started ? `${started} 开始` : '', elapsed].filter(Boolean).join(' · '))}</span></div>
+  </section>`;
 }
 export function renderJobs(jobs: AnswerJob[], courses: Course[] = [], historyOpen = false, actions: ReadonlyMap<string, JobActionState> = new Map(), historicalIds?: ReadonlySet<string>): string {
   const { current, history } = partitionServiceJobs(jobs, historicalIds);
-  if (!current.length && !history.length) return '<div class="empty"><span class="empty-circle">✓</span><h3>每一项任务，都会在这里记录</h3><p>先选择课程，接下来的事情交给我们。</p></div>';
-  const submitted = current.filter(job => ['submitted', 'awaiting_review', 'graded'].includes(serviceStatus(job))).length;
-  const retryable = current.filter(canRetryJob).length;
-  const processing = current.filter(pendingJob).length;
-  const followUp = current.filter(job => serviceStatus(job) === 'support').length;
-  const reconciling = current.filter(job => ['queued', 'reconciling', 'continuing'].includes(recoveryState(job))).length;
-  const blocked = current.filter(job => recoveryState(job) === 'blocked').length;
-  return `<section class="service-progress-list panel-box" aria-label="完成进度"><div class="service-progress-summary panel-toolbar"><div><h2>当前任务 <span class="count">${current.length}</span></h2><p>${processing ? `<span>处理中 <b>${processing}</b></span>` : ''}${reconciling ? `<span>复核中 <b>${reconciling}</b></span>` : ''}${blocked ? `<span>复核未通过 <b>${blocked}</b></span>` : ''}${followUp ? `<span>待跟进 <b>${followUp}</b></span>` : ''}${submitted ? `<span>已交卷 <b>${submitted}</b></span>` : ''}${retryable ? `<span>可重新执行 <b>${retryable}</b></span>` : ''}</p></div></div>${current.length ? `<div class="service-jobs hw-list" data-service-current>${current.map(job => renderServiceJob(job, courses, false, actions.get(job.id))).join('')}</div>` : '<div class="progress-empty"><strong>当前没有需要处理的任务</strong><span>已结束的执行记录已收进历史记录。</span></div>'}${history.length ? `<details class="service-history" data-service-history${historyOpen ? ' open' : ''}><summary><span>历史记录 <span class="count">${history.length}</span></span><span class="service-history-hint">查看已完成和之前的任务</span></summary><p class="service-history-note">这里保留每次任务的结果，当前需要处理的内容会显示在上方。</p><div class="service-jobs hw-list" data-service-history-list>${history.map(job => renderServiceJob(job, courses, true)).join('')}</div></details>` : ''}</section>`;
+  if (!current.length && !history.length) {
+    return `<div class="card empty"><div class="ring">${icon('tick')}</div><h3>还没有任务</h3><p>在「我的课程」里选课程，交给我们就行。</p></div>`;
+  }
+  const records = history.map(job => {
+    const when = dayTime(job.created_at);
+    const span = duration(job.started_at || job.created_at, job.finished_at || job.updated_at);
+    return `<li><button class="row" data-job-detail="${e(job.id)}" data-job-history="true"><span class="when num">${e(when)}</span><span class="what">${e(jobTitle(job, courses))}</span>${historyResult(job)}<span class="took num">${e(span)}</span>${icon('right')}</button></li>`;
+  }).join('');
+  return `${current.length ? `<div class="slips" data-service-current>${current.map(job => renderServiceJob(job, courses, false, actions.get(job.id))).join('')}</div>`
+    : '<div class="card empty"><h3>现在没有要处理的任务</h3><p>结束的任务都收在下面的记录里。</p></div>'}
+    ${history.length ? `<section class="card"><details class="hist" data-service-history${historyOpen ? ' open' : ''}><summary class="panel-head"><h2>历史记录<span>${history.length} 次</span></h2>${icon('down')}</summary><ul class="records" data-service-history-list>${records}</ul></details></section>` : ''}`;
 }
 /**
- * statusHeadline is the one line that answers "where does this job stand?".
- * Only a job that is still running has a next step to name; a stopped one
- * must describe the stop and what happens next instead, and never echo the
- * assignment it was last working on as if it still were.
+ * renderServiceDetail is the exercise-book sheet for one task: a verdict line,
+ * the assignments down the red margin with their marks, and a square seal only
+ * when every assignment passed.
  */
-function statusHeadline(job: AnswerJob, status: ServiceStatus, currentTitle: string): string {
-  switch (status) {
-    case 'processing':
-      return currentTitle || '正在准备下一步';
-    case 'waiting':
-      return currentTitle ? `已排队，即将处理${currentTitle}` : '已排队，等待开始';
-    case 'completed':
-      return '已全部完成';
-    case 'stopped':
-      return '已停止，已完成进度保留';
-    default:
-      if (autoRetryNotice(job)) return '已暂停，将自动重试';
-      if (canRetryJob(job)) return '已暂停，可重新执行';
-      if (canRecoverJob(job)) return '已暂停，可复核后继续';
-      return '已暂停，服务人员会继续跟进';
-  }
+/** examNote states what an exam record means for the user, if anything. */
+function examNote(job: AnswerJob, status: ServiceStatus): string {
+  if (job.request.scope !== 'exercise') return '';
+  if (status === 'support') return '考试事项需要服务人员跟进，请勿重复提交。';
+  if (pendingJob(job)) return '我们会处理整场考试，完成后显示交卷状态。';
+  return '';
 }
 export function renderServiceDetail(job: AnswerJob, courses: Course[] = [], historical = false, action?: JobActionState): string {
-  const data = { ...record(job.progress), ...record(job.result) };
-  const rows = jobHomeworks(job);
+  const items = jobHomeworks(job);
+  const counts = progressCounts(items);
   const status = serviceStatus(job);
-  const currentTitle = typeof data.current_title === 'string' ? data.current_title.trim() : '';
-  const stage = currentStage(job);
-  const counts = progressCounts(rows);
+  const active = pendingJob(job);
   const retry = autoRetryNotice(job);
-  // A stale "current" title belongs to the run that stopped, so only a
-  // running job may show it; every other state describes its own standing.
-  const headline = statusHeadline(job, status, pendingJob(job) ? currentTitle : '');
-  const tally = rows.length ? `已完成 ${counts.completed} · 进行中 ${counts.processing} · 待处理 ${counts.waiting} · 待跟进 ${counts.support}` : '';
-  const liveProgress = !historical && job.request.scope !== 'exercise' && ['waiting', 'processing', 'support', 'stopped', 'completed'].includes(status) ? `<div class="detail-progress-card"><div><span>当前状态</span><b>${e(serviceLabel(job))}</b></div><strong>${e(headline)}</strong>${stage && pendingJob(job) ? `<p class="detail-stage">${e(stage)}</p>` : ''}<p>${e(progressText(job))}</p>${tally ? `<p class="detail-tally">${e(tally)}</p>` : ''}${recoveryMessage(job) ? `<small>${e(recoveryMessage(job))}</small>` : ''}${retry ? `<small class="detail-retry">${e(retry)}</small>` : ''}</div>` : '';
-  const exerciseNote = job.request.scope === 'exercise' ? historical ? '历史记录：以下为本次考试的交卷状态，当前任务请查看上方列表。' : status === 'submitted' || status === 'awaiting_review' ? '已交卷，成绩以头歌公布为准。' : status === 'graded' ? `考试成绩已公布。${data.score_known === true && (typeof data.score === 'number' || typeof data.score === 'string') ? `成绩 ${e(data.score)}${typeof data.max_score === 'number' || typeof data.max_score === 'string' ? ` / ${e(data.max_score)}` : ''}` : ''}` : status === 'support' ? '考试事项需要服务人员跟进，请勿重复提交。' : '服务人员会处理整场考试，完成后显示交卷状态。' : '';
-  const recoveryNote = recoveryMessage(job);
-  const reason = !historical ? serviceReason(job) : '';
-  return `<h2>${e(jobTitle(job, courses))}</h2><p class="subtext">${e(dateTime(job.created_at))} · ${historical ? '本次任务' : '开始时间'}</p><span class="badge ${historical ? 'stopped' : status}">${historical ? displayLabel(status, true) : serviceLabel(job)}</span>${renderJobActions(job, historical, action)}<div class="detail-note">${exerciseNote || (!historical && serviceAttention(job)) || (historical ? '历史记录：以下为本次任务的进度，不代表当前仍在处理。' : reason ? reason : recoveryNote ? recoveryNote : canRetryJob(job) ? '本次任务已暂停。可以重新执行原来的任务；已核验通过的必做关卡会自动跳过，只继续未完成的内容。' : canRecoverJob(job) ? '可以先复核上次任务的完成结果，再继续剩余的必做内容；结果仍未明确时不会重复提交。' : status === 'support' ? '本次处理已暂停，已完成进度保留，剩余内容待跟进。' : status === 'completed' ? '本次服务已经完成，结果已核验。' : status === 'stopped' ? '本次服务已停止，已完成的结果会保留。' : '我们会继续完成剩下的内容，可能同时处理多份作业。')}</div>${liveProgress}${rows.length ? `<div class="detail-section"><h3>每份作业的进度</h3>${renderProgressTree(rows, { historical, levels: true, parentActive: pendingJob(job) })}</div>` : `<p class="muted">${historical ? '本次未记录详细进度。' : status === 'support' || status === 'stopped' ? '本次未记录详细进度，已完成结果保留。' : '处理详情会随任务推进更新。'}</p>`}`;
+  const started = dayTime(job.started_at || job.created_at);
+  const complete = status === 'completed' && items.length > 0 && counts.completed === items.length;
+  const eyebrow = historical
+    ? `<span class="tag">历史</span>${e(started)} 开始`
+    : `${active ? '<span class="pulse"></span>' : ''}${e(serviceLabel(job))}${started ? ` · ${e(started)} 开始` : ''}`;
+  // The server's own recovery sentence is more specific than our summary, so
+  // it wins when present.
+  const note = !historical && (examNote(job, status) || serviceAttention(job) || recoveryMessage(job) || (retry ? `${retry}，做好的关卡不会重做。` : '')
+    || (canRetryJob(job) ? '重试会接着处理原来的范围，已核验通过的必做关卡会自动跳过。' : ''));
+  // The verdict already names the assignment tally, so the meta line only adds
+  // a count it does not carry — levels or exam questions — plus the time spent.
+  const tally = assignmentTally(job);
+  const unit = jobProgress(job).unit;
+  const meta = [unit !== '份作业' || !tally.total ? progressText(job) : '', jobElapsed(job)].filter(Boolean).join(' · ');
+  const actions = renderJobActions(job, historical, action);
+  return `<header class="sheet-head"><div class="eyebrow">${eyebrow}</div>
+    <h2 id="modal-title">${e(jobTitle(job, courses))}</h2>
+    <p class="verdict">${jobVerdict(job, historical)}</p>
+    ${meta ? `<p class="sheet-meta num">${e(meta)}</p>` : ''}
+    ${complete ? '<span class="seal square" role="img" aria-label="全部完成"><span>全</span><span>部</span><span>完</span><span>成</span></span>' : ''}</header>
+    <div class="sheet-body">${note ? `<p class="memo sheet-note">${e(note)}</p>` : ''}
+    ${items.length ? renderProgressTree(items, { historical, levels: true, parentActive: active })
+      : `<p class="muted sheet-note">${historical ? '这次没有留下逐份进度。' : status === 'support' || status === 'stopped' ? '这次没有留下逐份进度，做好的结果保留。' : '进度会随任务推进更新。'}</p>`}
+    ${items.length ? `<div class="legend sheet-note"><span><span class="tick">${icon('tick')}</span>已完成</span><span><span class="pulse"></span>正在做</span><span class="warn-key"><i class="bang-key"></i>需要注意</span><span><i class="blank-key"></i>待完成</span></div>` : ''}</div>
+    <footer class="sheet-foot">${actions}<button class="btn" data-action="close-modal">关闭</button></footer>`;
 }
+/** marginMark is re-exported so the operator sheet draws the same pen. */
+export { marginMark };

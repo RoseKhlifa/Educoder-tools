@@ -16,7 +16,7 @@ test('current course evidence archives an old attempt without changing its recor
   const parts = partitionServiceJobs([source], ids);
   assert.equal(parts.current.length, 0); assert.equal(parts.history[0], source);
   const html = renderJobs([source], [], true, new Map(), ids);
-  assert.match(html, /6 \/ 10 份作业/); assert.match(html, /当次未完成/);
+  assert.match(html, /完成 6 \/ 10 份/); assert.doesNotMatch(html, /当次/);
   assert.doesNotMatch(html, /data-job-recover=|data-job-retry=/);
   assert.equal(JSON.stringify(source), original);
 });

@@ -12,7 +12,7 @@ assert.doesNotMatch(protocolSection[2], /<strong>|协议请求实现，请合理
 assert.match(protocolSection[2], /独立服务/);
 assert.match(protocolSection[2], /自行评估相关风险/);
 assert.match(guidelines, /<section class="guidelines-highlight" aria-labelledby="guidelines-data">/);
-assert.match(guidelines, /平台会收集用户做题数据/);
+assert.match(guidelines, /平台会收集做题数据/);
 const dataSection = guidelines.match(/<section class="guidelines-highlight" aria-labelledby="guidelines-data">([\s\S]*?)<\/section>/);
 assert.ok(dataSection?.[1].includes('<p><strong>具有用户个人独特特征的图文作业及 ZIP 压缩包，本站不会收集，也不会纳入题库或用于答案复用。</strong></p>'), 'the highlighted data notice must clearly exclude personalized homework and ZIP materials');
 assert.ok(dataSection[1].indexOf('本站不会收集') < dataSection[1].indexOf('请在了解并同意上述用途后登录使用'), 'the collection boundary must appear before consent copy');
@@ -24,19 +24,27 @@ function lastRule(selector) {
   assert.ok(rules.length, `missing rule ${selector}`);
   return rules.at(-1)[2];
 }
-// Parent clips the dialog while its child scrolls: the close button is not a descendant of the scroll area.
+// The panel clips and only its content scrolls, so the close control and the
+// action footer cannot be scrolled out of reach on a long record.
 const modalRules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
   .filter(([, selector]) => selector.trim() === '.modal').map(([, , body]) => body).join(';');
-for (const declaration of ['display:flex', 'flex-direction:column', 'overflow:hidden', 'padding-top:56px']) {
+for (const declaration of ['display:flex', 'flex-direction:column', 'overflow:hidden']) {
   assert.ok(modalRules.replace(/\s/g, '').includes(declaration), `missing fixed dialog chrome ${declaration}`);
 }
-assert.match(lastRule('.modal'), /100dvh/);
+assert.match(modalRules, /100dvh/, 'a phone sheet must be bounded by the visual viewport');
 const content = lastRule('.modal > .modal-content');
-assert.match(content, /padding:0 18px 24px/, 'mobile content must not overlap the reserved close strip');
-assert.match(css, /\.modal > \.modal-content\s*\{[^}]*min-height:0;[^}]*overflow-y:auto;[^}]*overscroll-behavior:contain;/);
-assert.match(lastRule('.modal > .modal-close'), /min-height:44px/, 'close control keeps a touch-friendly target');
+assert.match(content, /min-height:\s*0/);
+assert.match(content, /overflow-y:\s*auto/);
+assert.match(content, /overscroll-behavior:\s*contain/);
+// The close control is a sibling of the scroll area, not a descendant of it.
+const close = lastRule('.modal > .modal-close');
+assert.match(close, /position:\s*absolute/);
+assert.match(close, /min-height:\s*44px/, 'close control keeps a touch-friendly target');
+const footRules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+  .filter(([, selector]) => selector.trim() === '.sheet-foot').map(([, , body]) => body).join(';');
+assert.match(footRules, /position:\s*sticky/, 'sheet actions stay reachable while the record scrolls');
 const app = await readFile(new URL('./src/app.ts', import.meta.url), 'utf8');
-assert.match(app, /class="icon-button modal-close"[^>]*aria-label="关闭"[\s\S]*?<\/button><div class="modal-content">/);
+assert.match(app, /class="btn ghost square modal-close"[^>]*aria-label="关闭"[\s\S]*?<\/button><div class="modal-content">/);
 assert.match(app, /event\.key === 'Escape' && state\.modal\) closeModal\(\)/);
 console.log('modal layout and guidelines checks: PASS');
 

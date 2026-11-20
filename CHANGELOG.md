@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.162 - 2026-11-20
+
+- Redesign the workbench as a checked exercise book: warm paper and self-hosted LXGW WenKai in the logo red and yellow, course cards with one square per assignment, task records on a red-margin sheet with grid cells per level, plain copy, and the same paper language for the operator pages
+
 ## 0.1.161 - 2026-11-20
 
 - Let a history record say what happened to each assignment instead of repeating the live record instructions, and keep question bank counts on one line in the desktop sidebar

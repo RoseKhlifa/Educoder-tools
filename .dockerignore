@@ -24,6 +24,8 @@
 !web/styles.css
 !web/assets/
 !web/assets/brand-logo.png
+!web/fonts/
+!web/fonts/**
 !web/src/
 !web/src/**
 **/*_test.go

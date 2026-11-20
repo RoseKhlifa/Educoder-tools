@@ -4,7 +4,7 @@ import { canRetryJob, canCancelJob, currentServiceJobs, jobProgress, partitionSe
 
 await test('only an explicit fixed upstream conflict attention shows the consumer explanation', () => {
   const value = { id:'conflict',status:'support',phase:'support',request:{scope:'homework',mode:'submit'},result:{attention:'upstream_question_conflict',total_levels:5,completed_levels:4} };
-  const notice = '题目要求与评测样例存在矛盾，已保留进度，待课程方核对后继续。';
+  const notice = '题目要求和评测样例矛盾，做好的保留，等课程方核对后继续。';
   assert.ok(renderServiceJob(value).includes(notice));
   assert.ok(renderServiceDetail(value).includes(notice));
   assert.ok(!renderServiceJob(value, [], true).includes(notice));
@@ -26,10 +26,10 @@ await test('consumer completion progress shows one current arrangement per origi
     }
     const paused = job('paused', 1, { result: { service_status: 'processing', total_homeworks: 19, completed_homeworks: 13 } });
     const html = renderJobs([paused]);
-    assert.match(html, /待跟进 <b>1<\/b>/); assert.match(html, /13 \/ 19 份作业/);
-    assert.doesNotMatch(html, /处理中 <b>|服务处理中/);
+    assert.match(html, /需要跟进/); assert.match(html, /13 \/ 19 份作业/);
+    assert.doesNotMatch(html, /服务处理中|class="pulse"/);
     const active = job('active', 1, { status: 'running', request: { scope: 'course', course: 'COURSE_B', mode: 'submit' } });
-    assert.match(renderJobs([active, paused]), /处理中 <b>1<\/b>/);
+    assert.match(renderJobs([active, paused]), /class="pulse"/);
   });
   await t.test('terminal parent stops stale running and waiting child labels while preserving completed children', () => {
     const result = { levels: [{ title: '已过关', status: 'passed' }, { title: '运行旧快照', status: 'processing' }, { title: '排队旧快照', status: 'waiting' }] };
@@ -71,8 +71,8 @@ await test('consumer completion progress shows one current arrangement per origi
       const item = job('progress-sample', 1, { status: completed >= total ? 'succeeded' : 'running', result: { total_homeworks: total, completed_homeworks: completed } });
       assert.deepEqual(jobProgress(item), { completed: Math.min(completed, total), total, unit: '份作业', percent });
       const html = renderServiceJob(item);
-      assert.match(html, new RegExp(`class="progress-fill" style="width:${percent}%"`));
-      assert.doesNotMatch(html, /class="bar"/);
+      assert.match(html, new RegExp(`${Math.min(completed, total)} \\/ ${total} 份作业`));
+      assert.doesNotMatch(html, /class="bar"|progress-fill|progress-track/);
     }
     const unknown = job('unknown-progress', 1, { status: 'running' });
     assert.deepEqual(jobProgress(unknown), { completed: 0, total: 0, unit: '关', percent: 0 });
@@ -82,7 +82,7 @@ await test('consumer completion progress shows one current arrangement per origi
   await t.test('running details expose public progress even before result rows are available', () => {
     const running = job('progress-only', 1, { status: 'running', progress: { current_title: '正在处理第 4 关', total_levels: 8, completed_levels: 3 } });
     const html = renderServiceDetail(running);
-    assert.match(html, /detail-progress-card/);
+    assert.match(html, /class="verdict"/);
     assert.match(html, /正在处理第 4 关/);
     assert.match(html, /3 \/ 8 关/);
   });
@@ -108,7 +108,7 @@ await test('consumer completion progress shows one current arrangement per origi
     const html = renderServiceDetail(exam) + renderServiceJob(exam);
     assert.match(html, /期中在线考试|待公布成绩|共 50 道题/);
     assert.match(html, /已交卷，成绩以头歌公布为准。/); assert.doesNotMatch(html, /成绩公布后会在这里更新/);
-    assert.doesNotMatch(html, /49 \/ 50|progress-track/);
+    assert.doesNotMatch(html, /49 \/ 50|progress-track|progress-fill/);
     assert.doesNotMatch(html, /满分|结果已核验|PRIVATE_|已完成，结果/);
     const graded = { ...exam, result: { ...exam.result, score_known: true, score: '81.50', max_score: '100.00' } };
     assert.equal(serviceStatus(graded), 'graded'); assert.match(renderServiceDetail(graded), /成绩 81.50 \/ 100.00/);
@@ -121,7 +121,7 @@ await test('consumer completion progress shows one current arrangement per origi
     const html = renderServiceJob(submitted);
     assert.match(html, /已交卷 · 共 50 道题/); assert.doesNotMatch(html, /0 \/ 50|50 \/ 50|progress-track|已保存/);
     const saving = { ...submitted, status: 'processing', result: { submitted: false, total_questions: 50, completed_questions: 12 } };
-    assert.match(renderServiceJob(saving), /12 \/ 50 道题/); assert.match(renderServiceJob(saving), /width:24%/);
+    assert.match(renderServiceJob(saving), /12 \/ 50 道题/); assert.doesNotMatch(renderServiceJob(saving), /progress-fill|progress-track/);
   });
   await t.test('new completion supersedes old failed and successful attempts by creation time without mutating state', () => {
     const old = job('older-error', 1, { updated_at: '2026-03-01T00:00:00Z' });
@@ -132,8 +132,8 @@ await test('consumer completion progress shows one current arrangement per origi
     assert.equal(JSON.stringify(rows), before); assert.deepEqual(currentServiceJobs(rows), parts.current);
     const html = renderJobs(rows, courses), shown = visible(html);
     assert.doesNotMatch(shown, /data-job-detail="latest-completed"/); assert.doesNotMatch(shown, /服务人员/);
-    assert.match(html, /<div class="progress-empty">/); assert.match(html, /4 \/ 4 份作业/);
-    assert.match(html, /<details class="service-history" data-service-history>/); assert.match(html, /历史记录 <span class="count">3/);
+    assert.match(html, /现在没有要处理的任务/); assert.match(html, /4 份全部完成/);
+    assert.match(html, /<details class="hist" data-service-history>/); assert.match(html, /历史记录<span>3 次<\/span>/);
   });
   await t.test('every genuinely queued or running request remains visible even if a newer terminal request exists', () => {
     const rows = [job('failed-before', 1), job('running', 2, { status: 'running', result: { service_status: 'completed' } }), job('waiting', 3, { status: 'waiting' }), job('queued', 4, { status: 'queued' }), job('processing', 5, { status: 'processing' }), job('newer-ended', 6, { status: 'succeeded' })];
@@ -174,15 +174,16 @@ await test('consumer completion progress shows one current arrangement per origi
   await t.test('history uses past-tense status and details without claiming failed work is still active', () => {
     const old = job('old', 1, { status: 'support', result: { homeworks: [{ title: '作业一', status: 'support' }, { title: '作业二', status: 'completed' }] } });
     const html = renderServiceJob(old, courses, true) + renderServiceDetail(old, courses, true);
-    assert.match(html, /当次未完成/); assert.match(html, /当次已完成/); assert.match(html, /本次进度/); assert.match(html, /data-job-history="true"/);
+    assert.match(html, />未完成</); assert.match(html, />已完成</); assert.match(html, /class="tag">历史<\/span>/); assert.match(html, /data-job-history="true"/);
     assert.doesNotMatch(html, /服务人员正在处理|服务处理中|正在逐项完成|会在处理后更新|关闭页面也会继续/);
-    assert.match(renderServiceDetail(old, courses), /本次处理已暂停/);
+    assert.doesNotMatch(html, /当次/, 'a consumer record must not carry the 当次 bookkeeping prefix');
+    assert.match(renderServiceDetail(old, courses), /需要跟进/);
   });
   await t.test('history expansion is a controllable native disclosure and current cards stay compact', () => {
     const rows = [job('old', 1), job('latest', 2, { status: 'succeeded' })];
     assert.match(renderJobs(rows, courses, true), /data-service-history open>/);
     assert.doesNotMatch(renderJobs(rows, courses), /data-service-history open>/);
-    assert.match(renderServiceJob(rows[1], courses), /service-job-compact/);
+    assert.match(renderServiceJob(rows[1], courses), /class="card slip/);
     assert.doesNotMatch(renderServiceJob(rows[1], courses), /job-note|放心|结果已核验/);
   });
   await t.test('titles and identifiers are escaped and private execution fields never enter consumer cards or details', () => {
@@ -190,5 +191,43 @@ await test('consumer completion progress shows one current arrangement per origi
     const html = renderJobs([sample], courses) + renderServiceDetail(sample, courses, true);
     assert.match(html, /&lt;script&gt;BAD&lt;\/script&gt;/); assert.match(html, /&lt;img/);
     assert.doesNotMatch(html, /<script|<img|PRIVATE_CODE|PRIVATE_TRACE|PRIVATE_REASON|999|42 次/);
+  });
+  await t.test('a task sheet draws one 田字格 cell per level and never repeats a status word on them', () => {
+    const levels = [
+      { position: 1, title: '栈的基本操作', status: 'completed' },
+      { position: 2, title: '队列的基本操作', status: 'completed' },
+      { position: 3, title: '进制转换', status: 'processing' },
+      { position: 4, title: '括号匹配', status: 'waiting' },
+      { position: 5, title: '表达式求值', status: 'needs_service', reason: 'platform_busy' },
+    ];
+    const running = job('level-grid', 1, { status: 'running', result: { total_homeworks: 1, completed_homeworks: 0, homeworks: [{ title: '栈与队列应用', status: 'processing', total_levels: 5, completed_levels: 2, levels }] } });
+    const sheet = renderServiceDetail(running, courses);
+    const cells = [...sheet.matchAll(/<li class="[^"]*" title="[^"]*" aria-label="[^"]*"><span class="n num">(\d+)<\/span><\/li>/g)];
+    assert.equal(cells.length, levels.length, 'one cell per level');
+    assert.deepEqual(cells.map(cell => cell[1]), ['1', '2', '3', '4', '5']);
+    // The state is the cell's shape, named only in its label.
+    assert.match(sheet, /<li class="done" title="第 1 关 · 栈的基本操作 · 已完成"/);
+    assert.match(sheet, /<li class="run" title="第 3 关 · 进制转换 · 正在处理"/);
+    assert.match(sheet, /<li class="warn" title="第 5 关 · 表达式求值 · 待跟进"/);
+    const grid = sheet.slice(sheet.indexOf('<ol class="tzg">'), sheet.indexOf('</ol>'));
+    const gridText = grid.replace(/<[^>]*>/g, ' ');
+    assert.doesNotMatch(gridText, /已完成|正在处理|待处理|待跟进/, 'a level cell must not print its status as text');
+    assert.match(grid, /aria-label="第 1 关 · 栈的基本操作 · 已完成"/, 'the state is carried by the accessible label');
+    // Only the levels needing attention are listed underneath, with a reason.
+    const notes = sheet.slice(sheet.indexOf('<ul class="level-notes">'), sheet.indexOf('</ul>', sheet.indexOf('<ul class="level-notes">')));
+    assert.match(notes, /第 5 关/); assert.match(notes, /表达式求值/); assert.match(notes, /头歌评测资源紧张/);
+    assert.doesNotMatch(notes, /栈的基本操作|进制转换|括号匹配/);
+    assert.doesNotMatch(sheet, /当次/, 'consumer output must not carry the 当次 bookkeeping prefix');
+  });
+  await t.test('the 全部完成 seal appears only when every assignment of a task passed', () => {
+    const rows = count => Array.from({ length: count }, (_, index) => ({ title: `作业 ${index + 1}`, status: 'completed' }));
+    const done = job('all-done', 1, { status: 'succeeded', result: { service_status: 'completed', total_homeworks: 3, completed_homeworks: 3, homeworks: rows(3) } });
+    assert.match(renderServiceDetail(done, courses), /class="seal square"[^>]*aria-label="全部完成"/);
+    const partial = { ...done, result: { ...done.result, completed_homeworks: 2, homeworks: [...rows(2), { title: '作业 3', status: 'needs_service' }] } };
+    assert.doesNotMatch(renderServiceDetail(partial, courses), /seal/);
+    const running = { ...done, status: 'running', result: { ...done.result, homeworks: [...rows(2), { title: '作业 3', status: 'processing' }] } };
+    assert.doesNotMatch(renderServiceDetail(running, courses), /seal/);
+    const empty = job('no-rows', 1, { status: 'succeeded', result: { service_status: 'completed' } });
+    assert.doesNotMatch(renderServiceDetail(empty, courses), /seal/, 'a record with no assignment rows cannot be sealed');
   });
 });

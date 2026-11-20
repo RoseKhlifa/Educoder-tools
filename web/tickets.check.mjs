@@ -24,7 +24,7 @@ await test('support ticket renderers maintain user ownership and admin managemen
     assert.doesNotMatch(html, /ticket-create-form/);
     assert.match(html, /data-ticket-more="opaque\+\/="/);
     for (const [value, label] of Object.entries(ticketStatusLabels)) assert.match(html, new RegExp(`data-ticket-filter="${value}"[\\s\\S]*?${label}`));
-    assert.match(html, /data-ticket-filter="processing" class="active" aria-pressed="true"/);
+    assert.match(html, /data-ticket-filter="processing" class="on" aria-pressed="true"/);
     assert.doesNotMatch(html, /private-owner|platform:/);
   });
   await t.test('feedback and user data remain plain escaped multiline text in attributes and message content', () => {
@@ -45,27 +45,30 @@ await test('support ticket renderers maintain user ownership and admin managemen
     const closed = renderTicketDetail({ ...detail, ticket: { ...ticket, status: 'closed' } }, false);
     assert.match(closed, /data-ticket-status="open"/);
     assert.doesNotMatch(closed, /ticket-reply-form/);
-    assert.match(closed, /这条反馈已关闭/);
+    assert.match(closed, /这条已关闭/);
   });
   await t.test('admin can reply and explicitly transition processing resolved and closed states', () => {
     const html = renderTicketDetail({ ...detail, messages: [...detail.messages, { ...detail.messages[0], id: 'm2', author_role: 'admin', body: '已收到' }] }, true);
-    assert.match(html, /示例同学/); assert.match(html, /服务人员/); assert.match(html, /回复用户/);
+    assert.match(html, /示例同学/); assert.match(html, /客服/); assert.match(html, /回复用户/);
     for (const status of ['processing', 'resolved', 'closed']) assert.match(html, new RegExp(`data-ticket-status="${status}"`));
     assert.match(html, /发送回复/);
   });
   await t.test('detail heading labels the modal and sending disables reply status and refresh controls', () => {
     const html = renderTicketDetail(detail, true, true);
-    assert.match(html, /<h3 id="modal-title">任务进度需要核对<\/h3>/);
+    assert.match(html, /<h2 id="modal-title">任务进度需要核对<\/h2>/);
     assert.match(html, /aria-busy="true"/);
-    for (const tag of html.matchAll(/<(button|textarea)\b([^>]+)>/g)) assert.match(tag[2], /\bdisabled\b/, tag[0]);
+    for (const tag of html.matchAll(/<(button|textarea)\b([^>]+)>/g)) {
+      if (/data-action="close-modal"/.test(tag[2])) continue;
+      assert.match(tag[2], /\bdisabled\b/, tag[0]);
+    }
     assert.match(html, /正在发送/);
   });
   await t.test('empty errors loading and unknown status do not become successful completion', () => {
-    assert.match(renderTickets({ items: [], loading: false }, false), /还没有反馈记录/);
+    assert.match(renderTickets({ items: [], loading: false }, false), /还没写过反馈/);
     assert.match(renderTickets({ items: [], loading: true }, true), /正在读取反馈记录/);
     assert.match(renderTickets({ items: [], loading: false, error: '<private>' }, true), /role="alert">&lt;private&gt;/);
     const unknown = renderTicketDetail({ ticket: { ...ticket, status: 'future' }, messages: [] }, false);
-    assert.match(unknown, /状态待确认/); assert.match(unknown, /暂时没有可显示的对话记录/);
+    assert.match(unknown, /状态待确认/); assert.match(unknown, /没有可显示的对话/);
     assert.doesNotMatch(unknown, /已完成|data-ticket-status|ticket-reply-form/);
   });
 });

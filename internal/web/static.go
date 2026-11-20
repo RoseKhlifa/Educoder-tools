@@ -67,6 +67,25 @@ func newStaticHandler(dir string) http.Handler {
 		}
 		return nil
 	})
+	// Vendored webfont package: the @font-face stylesheets plus the subset
+	// slices they point at. Same walk discipline as dist, so directories,
+	// symlinks and anything that is not a stylesheet or a slice stay private.
+	// Font bytes are deliberately absent from the revision graph below: the
+	// package is pinned per release, and hashing ~9 MB at every boot would buy
+	// no cache correctness.
+	_ = filepath.WalkDir(filepath.Join(dir, "fonts"), func(filename string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+		relative, err := filepath.Rel(dir, filename)
+		if err != nil {
+			return nil
+		}
+		if name := filepath.ToSlash(relative); publicFont(name) {
+			load(name, fontContentType(name))
+		}
+		return nil
+	})
 	// Version the complete module graph, not only index.html's entry point.
 	// A dependency change must change its URL even when an intermediary cache
 	// retains an older unversioned jobs.js/api.js. One hash for the original
@@ -103,11 +122,18 @@ func newStaticHandler(dir string) http.Handler {
 			// representation ETag instead of If-Modified-Since.
 			asset.modified = time.Time{}
 		}
-		var compressed bytes.Buffer
-		zw := gzip.NewWriter(&compressed)
-		_, _ = zw.Write(asset.body)
-		_ = zw.Close()
-		asset.gzip = compressed.Bytes()
+		// woff2 payloads are already Brotli-compressed internally. A gzip copy of
+		// the whole subset set would cost another ~9 MB of resident memory plus
+		// the boot CPU to produce it, for no transfer win, so these assets keep
+		// only their identity body; ServeHTTP treats a missing gzip copy as
+		// "serve identity".
+		if fontContentType(strings.TrimPrefix(name, "/")) != "font/woff2" {
+			var compressed bytes.Buffer
+			zw := gzip.NewWriter(&compressed)
+			_, _ = zw.Write(asset.body)
+			_ = zw.Close()
+			asset.gzip = compressed.Bytes()
+		}
 		asset.etag = fmt.Sprintf("%x", sha256.Sum256(asset.body))
 		assets[name] = asset
 	}
@@ -335,6 +361,34 @@ func publicJS(name string) bool {
 	return true
 }
 
+// Only the vendored webfont package is public under fonts/: its @font-face
+// stylesheets and woff2 slices. Licence texts, hidden files and any other
+// extension stay private, exactly as publicJS restricts the build tree.
+func publicFont(name string) bool {
+	if !strings.HasPrefix(name, "fonts/") || strings.ContainsAny(name, `\:`) || fontContentType(name) == "" {
+		return false
+	}
+	for _, segment := range strings.Split(name, "/") {
+		if segment == "" || strings.HasPrefix(segment, ".") {
+			return false
+		}
+	}
+	return true
+}
+
+func fontContentType(name string) string {
+	if !strings.HasPrefix(name, "fonts/") {
+		return ""
+	}
+	switch path.Ext(name) {
+	case ".css":
+		return "text/css; charset=utf-8"
+	case ".woff2":
+		return "font/woff2"
+	}
+	return ""
+}
+
 func (s staticHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
@@ -363,10 +417,19 @@ func (s staticHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", asset.kind)
 	// Filenames are not content hashed. Revalidate on every navigation while
 	// allowing a 304 for unchanged files after a release or browser refresh.
-	w.Header().Set("Cache-Control", "no-cache")
+	cache := "no-cache"
+	if strings.HasPrefix(name, "/fonts/") {
+		// The webfont package is vendored per release and its subset slices never
+		// change in place, so clients may keep them for a year instead of
+		// revalidating ~200 files. An upgrade must therefore be published under a
+		// new /fonts/<package>/ directory, since these URLs carry no revision.
+		cache = "public, max-age=31536000, immutable"
+	}
+	w.Header().Set("Cache-Control", cache)
 	w.Header().Add("Vary", "Accept-Encoding")
 	body, variant := asset.body, "identity"
-	if r.Header.Get("Range") == "" && acceptsGzip(r.Header.Get("Accept-Encoding")) {
+	// A missing gzip copy means the payload is already compressed (woff2).
+	if len(asset.gzip) > 0 && r.Header.Get("Range") == "" && acceptsGzip(r.Header.Get("Accept-Encoding")) {
 		body, variant = asset.gzip, "gzip"
 		w.Header().Set("Content-Encoding", "gzip")
 	}
