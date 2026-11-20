@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.149 - 2026-11-20
+
+- Read homework preflight task details with bounded concurrency while deciding strictly in roster order, and pin the bank-hit request sequence
+
 ## 0.1.148 - 2026-11-20
 
 - Raise default model concurrency to 16 and the read-only collection lane to 2, keeping Educoder-facing job workers at 16

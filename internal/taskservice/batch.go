@@ -7,8 +7,11 @@ import (
 	"educoder-cli/internal/solver"
 	"errors"
 	"fmt"
+	"os"
+	"runtime/debug"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -148,19 +151,29 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 	levels := make([]educoder.HomeworkLevel, 0, len(roster.Levels))
 	tasks := map[int64]*educoder.Task{}
 	out.Levels = []BatchLevel{}
-	// A read-only precheck failure excludes only this exact target. It never
-	// binds a solver client or chooses an ambiguous runtime identity.
+	planned := make([]educoder.HomeworkLevel, 0, len(roster.Levels))
 	for _, l := range roster.Levels {
 		if l.Optional {
 			continue
 		}
+		planned = append(planned, l)
+	}
+	// Read the per-level task details concurrently, then decide in roster order.
+	// The reads are read-only and independent; every admission rule below sees
+	// exactly the same results in the same order as reading them one by one.
+	reads := preflightTaskReads(ctx, func(ctx context.Context, game string) (*educoder.Task, error) {
+		return client.CollectionLoadTask(ctx, req.Course, req.HomeworkID, game)
+	}, planned)
+	// A read-only precheck failure excludes only this exact target. It never
+	// binds a solver client or chooses an ambiguous runtime identity.
+	for n, l := range planned {
 		entry := BatchLevel{Position: l.Position, ChallengeID: l.ChallengeID, Title: l.Title, Status: "planned", MaxModelCalls: s.cfg.MaxModelCalls}
 		precheckErr := error(nil)
 		if l.RosterIssue != "" {
 			entry.Status, entry.ReasonCode = "precheck_failed", "runtime_roster_ambiguous"
 			precheckErr = errors.New(l.RosterIssue)
 		} else if !l.RuntimePending {
-			t, readErr := client.CollectionLoadTask(ctx, req.Course, req.HomeworkID, l.Game)
+			t, readErr := reads[n].task, reads[n].err
 			precheckErr = readErr
 			if precheckErr == nil {
 				precheckErr = roster.ValidateTask(t, l)
@@ -499,6 +512,94 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 		out.Status, out.ReasonCode = "needs_service", "service_required"
 	}
 	return out, nil
+}
+
+// preflightTaskConcurrency bounds the homework preflight's concurrent task
+// detail reads. The reads are read-only and independent; their results are
+// still evaluated strictly in roster order.
+const preflightTaskConcurrency = 4
+
+// preflightTaskRead is one level's task detail read. `read` distinguishes a
+// level that was never scheduled from one whose read returned nothing.
+type preflightTaskRead struct {
+	task *educoder.Task
+	err  error
+	read bool
+}
+
+// preflightTaskReads reads each planned level's task details with bounded
+// concurrency, indexed by the caller's slice position so completion order
+// cannot change any decision. Levels that need no read (an ambiguous roster
+// row, or a runtime the platform has not created yet) are never scheduled and
+// keep a zero value. A canceled context stops scheduling and the levels left
+// unread report the context error without issuing a request, so the caller
+// still stops at the first of them in roster order, exactly as the serial
+// reads did once the context was canceled.
+func preflightTaskReads(ctx context.Context, read func(context.Context, string) (*educoder.Task, error), levels []educoder.HomeworkLevel) []preflightTaskRead {
+	out := make([]preflightTaskRead, len(levels))
+	needsRead := func(l educoder.HomeworkLevel) bool { return l.RosterIssue == "" && !l.RuntimePending }
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	// readPanic holds the first panic of a read goroutine. It is re-raised on
+	// the calling goroutine once the in-flight reads finish, as it propagated
+	// when the preflight read every level itself.
+	var readPanic any
+	slots := make(chan struct{}, preflightTaskConcurrency)
+schedule:
+	for i, l := range levels {
+		if !needsRead(l) {
+			continue
+		}
+		select {
+		case slots <- struct{}{}:
+		case <-ctx.Done():
+			break schedule
+		}
+		mu.Lock()
+		panicked := readPanic != nil
+		mu.Unlock()
+		if panicked || ctx.Err() != nil {
+			// A panicked read already fails this homework, and a canceled
+			// context fails every remaining read: neither needs a request. The
+			// in-flight reads still finish with their real result.
+			<-slots
+			break
+		}
+		wg.Add(1)
+		go func(i int, game string) {
+			defer wg.Done()
+			defer func() { <-slots }()
+			defer func() {
+				// Upstream task details are untrusted input. A panic while
+				// reading one must fail this job, not end the service.
+				if r := recover(); r != nil {
+					// Type and stack only: a panic value may carry upstream text.
+					fmt.Fprintf(os.Stderr, "homework preflight read panic (%T)\n%s", r, debug.Stack())
+					mu.Lock()
+					if readPanic == nil {
+						readPanic = r
+					}
+					mu.Unlock()
+				}
+			}()
+			t, err := read(ctx, game)
+			mu.Lock()
+			out[i] = preflightTaskRead{task: t, err: err, read: true}
+			mu.Unlock()
+		}(i, l.Game)
+	}
+	wg.Wait()
+	if readPanic != nil {
+		panic(readPanic)
+	}
+	if err := ctx.Err(); err != nil {
+		for i, l := range levels {
+			if needsRead(l) && !out[i].read {
+				out[i].err = err
+			}
+		}
+	}
+	return out
 }
 
 func findFull(p *educoder.HomeworkProgress, id int64) (educoder.ChallengeProgress, bool) {
