@@ -32,8 +32,22 @@ func selfTestRefusal(message string) error {
 // official client treats as "evaluation not started" (it stops without
 // polling). The save before it happened; no formal evaluation did. Observed
 // together with platform resource pressure, so it is transient.
-type EvaluationRefusedError struct{ Code int }
+//
+// Kind distinguishes the evidence: "" for game_build status -2,
+// "environment_quota" for a non-empty data.data_list (the account's open lab
+// environments are exhausted), and "queue_canceled" for a queued evaluation
+// this client withdrew with a confirmed cancel.
+type EvaluationRefusedError struct {
+	Code int
+	Kind string
+}
 
 func (e *EvaluationRefusedError) Error() string {
+	switch e.Kind {
+	case "environment_quota":
+		return "正式评测未启动：账号同时开启的实验环境已达上限"
+	case "queue_canceled":
+		return "正式评测未启动：评测排队未在时限内开始，已取消排队"
+	}
 	return "正式评测未启动：平台拒绝了本次评测（通常为平台资源紧张）"
 }

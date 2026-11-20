@@ -156,8 +156,8 @@ running_code_status=1 → 304 未更新 → running_code_status=2
 | --- | --- | --- |
 | `log_output` 返回 `status:0`、无 `data.wss_url`，`data.error_msg` 为“当前平台资源紧张…” | 平台未启动自测运行，代码没有执行 | `SelfTestRefusedError`：15/45 秒退避重试同一候选，仍未恢复记 `resource_unavailable`，作业延后该关 |
 | `game_build` 返回 `status:-2` | 原站客户端遇到 -2 直接结束评测、不轮询 `game_status`，即评测未启动 | `EvaluationRefusedError`：正式验证记 `error`（非 `unknown`），运行记 `resource_unavailable`，作业延后该关 |
-| `game_build` 响应 `data.data_list` 非空 | 账号同时开启的实验环境已满（原站弹出关闭环境列表） | 尚未专门处理 |
-| `game_build` 响应 `res.data.queueCode === 1` | 评测已受理但需排队：原站轮询 `GET /api/game_queues/get_rank.json`（参数 `tpi_id`=运行实例数字 ID、`homework_common_id`、`exercise_id`），`data.status` 为 1 时每 1.3 秒继续轮询并显示 `data.rank`，为 2 时开始评测，其他值视为未进行；取消为 `POST /api/game_queues/queue_evaluate_cancel.json {tpi_id}` | **尚未实现**：当前客户端最多轮询 `game_status` 2 分钟，排队较久时会被记为结果未知 |
+| `game_build` 响应 `data.data_list` 非空 | 账号同时开启的实验环境已满（原站弹出关闭环境列表） | **已处理（v0.1.145）**：先于状态码检查（与原站顺序一致），记 `EvaluationRefusedError{Kind:environment_quota}`，正式验证记 `error`，作业延后该关；不替用户关闭其他环境 |
+| `game_build` 响应 `res.data.queueCode === 1` | 评测已受理但需排队：原站轮询 `GET /api/game_queues/get_rank.json`（参数 `tpi_id`=运行实例数字 ID、`homework_common_id`、`exercise_id`），`data.status` 为 1 时每 1.3 秒继续轮询并显示 `data.rank`，为 2 时开始评测，其他值视为未进行；取消为 `POST /api/game_queues/queue_evaluate_cancel.json {tpi_id}`，返回 `status:0` 为成功 | **已处理（v0.1.145，编程题）**：按原站节奏轮询；`status 2` 后进入原有 `game_status` 轮询；其他值不做推断，同样交给 `game_status` 观察真实结果；排队超过 15 分钟、任务被取消或连续 3 次读取失败时主动取消排队，取消确认则记“评测未启动”（`queue_canceled`，延后重试），取消未确认则记结果未知。图形题的 `game_build` 仍走原有等待逻辑 |
 
 `-2` 之后平台关卡显示 `evaluate_count` 加 1、`passed_status=1`，但没有任何测试结果（`game.status=0`，测试结果为空），与“评测未启动”一致。原站的“评测”按钮流程是 `update_file(evaluate=1)` → `game_build`，并不要求先自测；当晚的 `-2` 与同一时段所有自测请求返回的“资源紧张”一致。
 

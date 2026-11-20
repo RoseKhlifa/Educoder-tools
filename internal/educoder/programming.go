@@ -476,6 +476,105 @@ type BuildResult struct {
 	Port   int `json:"port"`
 }
 
+// buildResponse is the part of a game_build reply the task page acts on.
+// data and res are decoded leniently: an unexpected shape there must not turn
+// an accepted start into a decode failure.
+type buildResponse struct {
+	Status *int            `json:"status"`
+	Port   int             `json:"port"`
+	Data   json.RawMessage `json:"data"`
+	Res    json.RawMessage `json:"res"`
+}
+
+// environmentQuota mirrors the task page: a non-empty data.data_list means the
+// account's concurrently open lab environments are exhausted and the page asks
+// the user to close one. Nothing was evaluated.
+func (r buildResponse) environmentQuota() bool {
+	var data struct {
+		DataList []json.RawMessage `json:"data_list"`
+	}
+	return len(r.Data) > 0 && json.Unmarshal(r.Data, &data) == nil && len(data.DataList) > 0
+}
+
+// queued reports res.data.queueCode == 1: the platform accepted the build but
+// placed the evaluation in its queue instead of starting it.
+func (r buildResponse) queued() bool {
+	var res struct {
+		Data struct {
+			QueueCode int `json:"queueCode"`
+		} `json:"data"`
+	}
+	return len(r.Res) > 0 && json.Unmarshal(r.Res, &res) == nil && res.Data.QueueCode == 1
+}
+
+// Evaluation queue cadence and bound. The task page polls every 1.3 s and
+// waits indefinitely; an unattended service bounds the wait and then cancels
+// the queued evaluation so its state is known instead of left pending.
+var (
+	evaluationQueueInterval = 1300 * time.Millisecond
+	evaluationQueueTimeout  = 15 * time.Minute
+)
+
+// waitEvaluationQueue returns nil once the platform reports the queued
+// evaluation as started, or when the queue ends in a state the task page does
+// not interpret; game_status then observes the real outcome either way. A
+// timeout, a canceled context or repeated read failures cancel the queued
+// evaluation: a confirmed cancel is a refusal (nothing ran), an unconfirmed one
+// leaves the evaluation unknown.
+func (c *Client) waitEvaluationQueue(ctx context.Context, t *Task) error {
+	query := url.Values{"tpi_id": {strconv.FormatInt(t.MyShixun.ID, 10)}, "exercise_id": {""}, "homework_common_id": {strconv.FormatInt(t.HomeworkID, 10)}}
+	deadline := time.Now().Add(evaluationQueueTimeout)
+	failures := 0
+	for {
+		var rank struct {
+			Data struct {
+				Status int `json:"status"`
+			} `json:"data"`
+		}
+		err := c.requestWithStatuses(ctx, http.MethodGet, "/api/game_queues/get_rank.json", query, nil, taskRef(t), &rank, anyStatus)
+		switch {
+		case ctx.Err() != nil:
+			return c.cancelQueuedEvaluation(t)
+		case err != nil:
+			failures++
+			if failures >= 3 {
+				return c.cancelQueuedEvaluation(t)
+			}
+		case rank.Data.Status == 2:
+			return nil
+		case rank.Data.Status == 1:
+			failures = 0
+		default:
+			// The task page stops here without polling game_status, so it never
+			// learns whether the evaluation ran. Observe it instead.
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return c.cancelQueuedEvaluation(t)
+		}
+		timer := time.NewTimer(evaluationQueueInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return c.cancelQueuedEvaluation(t)
+		case <-timer.C:
+		}
+	}
+}
+
+// cancelQueuedEvaluation withdraws this run instance's queued evaluation. It
+// uses its own short deadline because the caller's context may already be
+// done, and leaving a queued evaluation behind would make its result unknown.
+func (c *Client) cancelQueuedEvaluation(t *Task) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	body := map[string]any{"tpi_id": t.MyShixun.ID}
+	if err := c.requestWithStatuses(ctx, http.MethodPost, "/api/game_queues/queue_evaluate_cancel.json", nil, body, taskRef(t), nil, 0); err != nil {
+		return &EvaluationUncertainError{Reason: "评测排队未结束且取消排队未确认", Cause: err}
+	}
+	return &EvaluationRefusedError{Code: 0, Kind: "queue_canceled"}
+}
+
 func validateSaved(t *Task, saved *SavedCode, evaluation bool) error {
 	if err := requireProgramming(t); err != nil {
 		return err
@@ -507,22 +606,38 @@ func (c *Client) buildCodeInEnvironment(ctx context.Context, t *Task, saved *Sav
 	extras := programmingExtras(t)
 	extras["commitID"] = saved.CommitID
 	body := map[string]any{"sec_key": saved.SecKey, "resubmit": saved.Resubmit, "first": 1, "content_modified": saved.ContentModified, "shixun_environment_id": environment.EnvironmentID, "tab_type": environment.TabType, "extras": extras}
-	var response BuildResult
-	if err := c.requestWithStatuses(ctx, http.MethodPost, "/api/tasks/"+t.Game.Identifier+"/game_build.json", nil, body, taskRef(t), &response, 1); err != nil {
-		var status *APIStatusError
-		if errors.As(err, &status) && status.Code == -2 {
-			// The official task page ends the evaluation on -2 without polling
-			// game_status: the platform did not start an evaluation.
-			return nil, &EvaluationRefusedError{Code: -2}
-		}
+	path := "/api/tasks/" + t.Game.Identifier + "/game_build.json"
+	var response buildResponse
+	if err := c.requestWithStatuses(ctx, http.MethodPost, path, nil, body, taskRef(t), &response, anyStatus); err != nil {
 		return nil, err
 	}
-	if response.Status != 1 {
+	// Same order as the official task page.
+	if response.environmentQuota() {
+		code := 0
+		if response.Status != nil {
+			code = *response.Status
+		}
+		return nil, &EvaluationRefusedError{Code: code, Kind: "environment_quota"}
+	}
+	if response.Status == nil {
 		return nil, errors.New("提交响应没有返回已观察的启动状态 1")
+	}
+	if *response.Status == -2 {
+		// The official task page ends the evaluation on -2 without polling
+		// game_status: the platform did not start an evaluation.
+		return nil, &EvaluationRefusedError{Code: -2}
+	}
+	if *response.Status != 1 {
+		return nil, &APIStatusError{Method: http.MethodPost, Path: path, Code: float64(*response.Status)}
+	}
+	if response.queued() {
+		if err := c.waitEvaluationQueue(ctx, t); err != nil {
+			return nil, err
+		}
 	}
 	saved.evaluationPort = response.Port
 	// res.success=false is present in both successful recorded starts.
-	return &response, nil
+	return &BuildResult{Status: 1, Port: response.Port}, nil
 }
 
 type TestSet struct {

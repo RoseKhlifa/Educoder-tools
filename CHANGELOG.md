@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.145 - 2026-11-20
+
+- Follow the evaluation queue like the official task page and recognize the lab-environment quota, so queued or quota-blocked builds are waited for, canceled or deferred instead of left unknown
+
 ## 0.1.144 - 2026-11-20
 
 - Restore the verified-candidate self-test skip: a daytime control showed game_build succeeds without a prior self-test, and the night-time -2 was a platform resource refusal

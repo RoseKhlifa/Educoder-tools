@@ -246,6 +246,10 @@ func (c *Client) request(ctx context.Context, method, path string, query url.Val
 
 // Some task endpoints use positive status values as lifecycle states. Callers
 // select only the statuses observed for that endpoint; other APIs keep status 0.
+// anyStatus accepts every numeric envelope status, so a caller can decode the
+// body and apply the official client's own ordering of checks to it.
+const anyStatus = -1 << 31
+
 func (c *Client) requestWithStatuses(ctx context.Context, method, path string, query url.Values, body any, ref string, out any, statuses ...int) error {
 	return c.requestWithReadDiagnostics(ctx, method, path, query, body, ref, out, false, statuses...)
 }
@@ -368,7 +372,7 @@ func (c *Client) requestWithReadDiagnostics(ctx context.Context, method, path st
 	if len(envelope.Status) > 0 && json.Unmarshal(envelope.Status, &code) == nil {
 		accepted := false
 		for _, allowed := range statuses {
-			if code == float64(allowed) {
+			if allowed == anyStatus || code == float64(allowed) {
 				accepted = true
 			}
 		}
