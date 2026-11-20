@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.147 - 2026-11-20
+
+- Share one upstream slot pool per Educoder account across all of its login sessions instead of one pool per session
+
 ## 0.1.146 - 2026-11-20
 
 - Let only unknown objective submissions block later batches, stating that score-safe programming re-evaluations never stall an unattended homework

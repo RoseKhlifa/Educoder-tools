@@ -442,7 +442,22 @@ func (c *Client) Login(ctx context.Context, login, password string) (*User, erro
 		return nil, errors.New("登录成功响应未设置 _educoder_session Cookie")
 	}
 	c.LoginName = user.Login
+	c.bindUpstreamAccount(&user)
 	return &user, nil
+}
+
+// bindUpstreamAccount makes every session of one Educoder account share that
+// account's upstream slots.
+func (c *Client) bindUpstreamAccount(user *User) {
+	transport, ok := c.HTTP.Transport.(*accountTransport)
+	if !ok || user == nil {
+		return
+	}
+	key := "login:" + strings.ToLower(strings.TrimSpace(user.Login))
+	if user.UserID > 0 {
+		key = "id:" + strconv.FormatInt(user.UserID, 10)
+	}
+	transport.bindAccount(key)
 }
 
 func (c *Client) UserInfo(ctx context.Context, course string) (*User, error) {

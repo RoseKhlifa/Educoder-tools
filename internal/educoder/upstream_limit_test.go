@@ -2,7 +2,9 @@ package educoder
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -125,4 +127,68 @@ func TestUpstreamLimitsRejectInvalidConfiguration(t *testing.T) {
 			t.Fatalf("accepted invalid limits %v", tc)
 		}
 	}
+}
+
+func loginInflightServer(t *testing.T) *inflightServer {
+	t.Helper()
+	s := &inflightServer{release: make(chan struct{})}
+	s.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/accounts/login.json" {
+			var body struct {
+				Login string `json:"login"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			http.SetCookie(w, &http.Cookie{Name: "_educoder_session", Value: "s-" + body.Login, Path: "/"})
+			id := map[string]int{"alice": 7, "bob": 8}[body.Login]
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"login":%q,"user_id":%d}`, body.Login, id)))
+			return
+		}
+		s.mu.Lock()
+		s.current++
+		s.peak = max(s.peak, s.current)
+		s.mu.Unlock()
+		s.total.Add(1)
+		time.Sleep(150 * time.Millisecond)
+		s.mu.Lock()
+		s.current--
+		s.mu.Unlock()
+		_, _ = w.Write([]byte(`{"status":0}`))
+	}))
+	t.Cleanup(s.Close)
+	return s
+}
+
+func loggedIn(t *testing.T, server *inflightServer, login string) *Client {
+	t.Helper()
+	c := New(server.URL)
+	if _, err := c.Login(context.Background(), login, "fixture-only"); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+// Two sessions of one account share that account's bound; another account
+// keeps its own.
+func TestAccountUpstreamConcurrencyIsSharedAcrossSessions(t *testing.T) {
+	withUpstreamLimits(t, 2, 16)
+	server := loginInflightServer(t)
+	first, second := loggedIn(t, server, "alice"), loggedIn(t, server, "alice")
+	fire(t, []*Client{first, second}, 4)
+	if peak := server.peakValue(); peak > 2 || server.total.Load() != 8 {
+		t.Fatalf("one account exceeded its bound across sessions: peak=%d total=%d", peak, server.total.Load())
+	}
+	other := newPeakReset(server)
+	bob := loggedIn(t, server, "bob")
+	fire(t, []*Client{first, bob}, 4)
+	if peak := other(); peak < 3 || peak > 4 {
+		t.Fatalf("separate accounts should not share a bound: peak=%d", peak)
+	}
+}
+
+func newPeakReset(s *inflightServer) func() int {
+	s.mu.Lock()
+	s.peak = 0
+	s.mu.Unlock()
+	return s.peakValue
 }
