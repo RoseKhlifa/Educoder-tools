@@ -403,3 +403,27 @@ await test('a history record states what happened per assignment without repeati
   const live = visible(renderServiceDetail(record, [], false));
   assert.ok(live.includes('上次提交结果没确认，需要先复核') && live.includes('头歌评测资源紧张，评测没能开始'), live);
 });
+
+await test('a stopped assignment marks only levels with their own reason and states the time once', () => {
+  const levels = [
+    { position: 1, title: '第一关', status: 'completed' },
+    { position: 2, title: '第二关', status: 'support', reason: 'needs_review' },
+    { position: 3, title: '第三关', status: 'support' },
+    { position: 4, title: '第四关', status: 'support' },
+    { position: 5, title: '第五关', status: 'support' },
+  ];
+  const record = { id: 'dddddddddddddddddddddddddddddddd', status: 'failed', request: { scope: 'all', mode: 'submit' },
+    created_at: '2026-01-01T00:00:00Z', started_at: '2026-01-01T00:00:00Z', finished_at: '2026-01-01T00:00:47Z', updated_at: '2026-01-01T00:00:47Z',
+    result: { service_status: 'support', total_homeworks: 1, completed_homeworks: 0, homeworks: [{ title: '示例作业', status: 'support', reason: 'needs_review', completed_levels: 1, total_levels: 5, levels }] } };
+  const html = renderServiceDetail(record, [], true);
+  const grid = html.slice(html.indexOf('class="tzg"'), html.indexOf('</ol>', html.indexOf('class="tzg"')));
+  assert.equal((grid.match(/<li class="warn"/g) ?? []).length, 1, grid);
+  assert.equal((grid.match(/<li class="done"/g) ?? []).length, 1, grid);
+  assert.equal((grid.match(/<li class=""/g) ?? []).length, 3, grid);
+  const notes = html.includes('level-notes') ? html.slice(html.indexOf('level-notes'), html.indexOf('</ul>', html.indexOf('level-notes'))) : '';
+  assert.equal((notes.match(/<li>/g) ?? []).length, 1, notes);
+  assert.ok(notes.includes('第二关') && !notes.includes('第三关'));
+  const text = visible(html);
+  const times = text.match(/用时\s*47\s*秒/g) ?? [];
+  assert.ok(times.length <= 1, `duration repeated: ${text}`);
+});

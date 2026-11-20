@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.163 - 2026-11-20
+
+- Mark a level as needing attention only when it has its own reason, so an assignment stopped early no longer flags every untouched level, and state the run time once on a task record
+
 ## 0.1.162 - 2026-11-20
 
 - Redesign the workbench as a checked exercise book: warm paper and self-hosted LXGW WenKai in the logo red and yellow, course cards with one square per assignment, task records on a red-margin sheet with grid cells per level, plain copy, and the same paper language for the operator pages

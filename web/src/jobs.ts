@@ -335,11 +335,13 @@ export function renderServiceDetail(job: AnswerJob, courses: Course[] = [], hist
   // a count it does not carry — levels or exam questions — plus the time spent.
   const tally = assignmentTally(job);
   const unit = jobProgress(job).unit;
-  const meta = [unit !== '份作业' || !tally.total ? progressText(job) : '', jobElapsed(job)].filter(Boolean).join(' · ');
+  const verdict = jobVerdict(job, historical);
+  const elapsed = jobElapsed(job);
+  const meta = [unit !== '份作业' || !tally.total ? progressText(job) : '', elapsed && !verdict.includes(elapsed) ? elapsed : ''].filter(Boolean).join(' · ');
   const actions = renderJobActions(job, historical, action);
   return `<header class="sheet-head"><div class="eyebrow">${eyebrow}</div>
     <h2 id="modal-title">${e(jobTitle(job, courses))}</h2>
-    <p class="verdict">${jobVerdict(job, historical)}</p>
+    <p class="verdict">${verdict}</p>
     ${meta ? `<p class="sheet-meta num">${e(meta)}</p>` : ''}
     ${complete ? '<span class="seal square" role="img" aria-label="全部完成"><span>全</span><span>部</span><span>完</span><span>成</span></span>' : ''}</header>
     <div class="sheet-body">${note ? `<p class="memo sheet-note">${e(note)}</p>` : ''}

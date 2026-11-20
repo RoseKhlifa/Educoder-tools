@@ -195,15 +195,23 @@ export function marginMark(tone: ProgressStatus): string {
  */
 function renderLevelGrid(levels: ProgressItem[], historical: boolean, active: boolean, admin: boolean): string {
   if (!levels.length) return '';
-  const cells = levels.map((level, index) => {
+  // A level is marked "!" and listed only when it carries its own reason. The
+  // server reports every unfinished level of a stopped assignment as needing
+  // follow-up; the ones that were never attempted are covered by the
+  // assignment's own reason and stay blank instead of repeating it 26 times.
+  const cellTone = (level: ProgressItem): ProgressStatus => {
     const tone = settledTone(level.status, active);
+    return tone === 'support' && !String(level.reason ?? '').trim() ? 'waiting' : tone;
+  };
+  const cells = levels.map((level, index) => {
+    const tone = cellTone(level);
     const position = Number(level.position) || index + 1;
     const title = String(level.title ?? '').trim();
     const cls = tone === 'completed' ? 'done' : tone === 'processing' ? 'run' : tone === 'support' ? 'warn' : '';
     const label = `第 ${position} 关${title ? ` · ${title}` : ''} · ${toneLabel(tone, historical)}`;
     return `<li class="${cls}" title="${e(label)}" aria-label="${e(label)}"><span class="n num">${position}</span></li>`;
   }).join('');
-  const notes = levels.map((level, index) => ({ level, tone: settledTone(level.status, active), position: Number(level.position) || index + 1 }))
+  const notes = levels.map((level, index) => ({ level, tone: cellTone(level), position: Number(level.position) || index + 1 }))
     .filter(row => row.tone === 'support')
     .map(row => {
       const title = String(row.level.title ?? '').trim();
