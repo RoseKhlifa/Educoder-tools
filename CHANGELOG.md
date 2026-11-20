@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.160 - 2026-11-20
+
+- Record the capacity decisions in the plan: memory-served active jobs, per-second progress writes, the idle-tab pause, 16 job workers behind the upstream limiter, and the triggers for a terminal-list cache, scan skipping and a SQLite read pool
+
 ## 0.1.159 - 2026-11-20
 
 - Polish live progress: say where a stopped job stands, keep keyboard focus and scroll across live repaints, unstick the pointer guard, show one admin switch on mobile, refresh admin pages while idle without freezing a closed job, and pause Educoder-bound course revalidation for an idle tab
