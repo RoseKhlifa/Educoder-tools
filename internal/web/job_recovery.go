@@ -371,9 +371,14 @@ func (s *Server) submitJobRecovery(w http.ResponseWriter, r *http.Request, reque
 				return recoveryBlocked(original, err), nil
 			}
 			report(jobs.Event{Phase: "loading", Message: "已确认上次结果或核实尚未正式提交，正在继续剩余作业"})
+			// One write per target, not per event: this callback runs on the
+			// executor's reporting path, which a classroom job locks across.
+			var labels labelMemo
 			out, err := s.jobs.run(ctx, session.Client, owner, request, func(event jobs.Event) {
 				if p := event.Progress; p != nil && p.CurrentCourse != "" && p.CurrentHomeworkID > 0 && strings.TrimSpace(p.CurrentHomeworkTitle) != "" {
-					s.rememberHomeworkLabels(ctx, p.CurrentCourse, []educoder.Homework{{ID: p.CurrentHomeworkID, Name: p.CurrentHomeworkTitle}})
+					if labels.first(p.CurrentCourse, p.CurrentHomeworkID, p.CurrentHomeworkTitle) {
+						s.rememberHomeworkLabels(ctx, p.CurrentCourse, []educoder.Homework{{ID: p.CurrentHomeworkID, Name: p.CurrentHomeworkTitle}})
+					}
 				}
 				report(event)
 			})

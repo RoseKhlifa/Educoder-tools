@@ -24,15 +24,19 @@ var courseIdentifier = regexp.MustCompile(`^[A-Za-z0-9_-]{1,100}$`)
 
 // ServiceProgress contains counters and public target names only. Detailed
 // execution failures belong to the operator-facing result, not user messages.
+// Homeworks carries the per-assignment live detail; Current* describes the
+// assignment the snapshot is focused on.
 type ServiceProgress struct {
-	TotalHomeworks        int            `json:"total_homeworks"`
-	CompletedHomeworks    int            `json:"completed_homeworks"`
-	SkippedHomeworks      int            `json:"skipped_homeworks"`
-	NeedsServiceHomeworks int            `json:"needs_service_homeworks"`
-	CurrentCourse         string         `json:"current_course,omitempty"`
-	CurrentHomeworkID     int64          `json:"current_homework_id,omitempty"`
-	CurrentTitle          string         `json:"current_title,omitempty"`
-	Batch                 *BatchProgress `json:"batch,omitempty"`
+	TotalHomeworks        int                       `json:"total_homeworks"`
+	CompletedHomeworks    int                       `json:"completed_homeworks"`
+	SkippedHomeworks      int                       `json:"skipped_homeworks"`
+	NeedsServiceHomeworks int                       `json:"needs_service_homeworks"`
+	CurrentCourse         string                    `json:"current_course,omitempty"`
+	CurrentHomeworkID     int64                     `json:"current_homework_id,omitempty"`
+	CurrentTitle          string                    `json:"current_title,omitempty"`
+	Stage                 string                    `json:"stage,omitempty"`
+	Batch                 *BatchProgress            `json:"batch,omitempty"`
+	Homeworks             []ServiceHomeworkProgress `json:"homeworks,omitempty"`
 }
 
 type CourseHomeworkResult struct {
@@ -107,16 +111,15 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 		out.Homeworks = visible
 	}()
 	current := ServiceProgress{}
-	emit := func(phase, message string, batch *BatchProgress) {
+	// live is the structured snapshot shared by the consumer and operator views.
+	// It stays nil until the whole plan is resolved and bounded.
+	var live *courseProgress
+	emit := func(phase, message string) {
 		if report == nil {
 			return
 		}
 		p := current
 		p.TotalHomeworks, p.CompletedHomeworks, p.SkippedHomeworks, p.NeedsServiceHomeworks = out.TotalHomeworks, out.CompletedHomeworks, out.SkippedHomeworks, out.NeedsServiceHomeworks
-		if batch != nil {
-			copy := *batch
-			p.Batch = &copy
-		}
 		report(Progress{Phase: phase, Kind: "service", Message: message, Service: &p})
 	}
 	stop := func(err error, reason string) (*CourseBatchResult, error) {
@@ -127,7 +130,7 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 		}
 		return out, err
 	}
-	emit("loading", "正在同步课堂和作业", nil)
+	emit("loading", "正在同步课堂和作业")
 	courses, err := client.Courses(ctx, "processing")
 	if err != nil {
 		return stop(err, "course_sync_failed")
@@ -184,6 +187,7 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 	for _, p := range plan {
 		out.Homeworks = append(out.Homeworks, CourseHomeworkResult{Course: p.course.Identifier, CourseName: p.course.Name, HomeworkID: p.hw.ID, Title: p.hw.Name, Status: "planned"})
 	}
+	live = newCourseProgress(plan)
 	budget := serviceBudgetMicroUSD
 	if req.BudgetMicroUSD > 0 && req.BudgetMicroUSD < budget {
 		budget = req.BudgetMicroUSD
@@ -198,8 +202,9 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 	}
 	// Distinct homeworks own distinct runtimes, so up to `parallel` of them run
 	// at once; runtime, target and graphic account locks still serialize any
-	// shared resource. Counters, the budget and events are guarded by mu, and
-	// each worker writes only its own out.Homeworks[i].
+	// shared resource. Counters, the budget, the live progress snapshot and
+	// events are guarded by mu, and each worker writes only its own
+	// out.Homeworks[i] and its own progress slot.
 	var mu sync.Mutex
 	budgetReleased := sync.NewCond(&mu)
 	var reservedBudget int64
@@ -212,18 +217,33 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 		defer mu.Unlock()
 		f()
 	}
-	emitFor := func(current ServiceProgress, phase, message string, batch *BatchProgress) {
+	// emitFor builds and publishes the snapshot while holding mu. Snapshotting
+	// outside the lock let two parallel assignments deliver their reports in the
+	// opposite order, which moved the counters and the current assignment
+	// backwards in the consumer and operator views.
+	emitFor := func(i int, phase, message string, batch *BatchProgress) {
 		if report == nil {
 			return
 		}
-		p := current
-		locked(func() {
-			p.TotalHomeworks, p.CompletedHomeworks, p.SkippedHomeworks, p.NeedsServiceHomeworks = out.TotalHomeworks, out.CompletedHomeworks, out.SkippedHomeworks, out.NeedsServiceHomeworks
-		})
-		if batch != nil {
-			copy := *batch
-			p.Batch = &copy
+		mu.Lock()
+		defer mu.Unlock()
+		live.at(i).Observe(phase, batch, time.Now().UTC())
+		p := live.snapshot(out.TotalHomeworks, out.CompletedHomeworks, out.SkippedHomeworks, out.NeedsServiceHomeworks)
+		report(Progress{Phase: phase, Kind: "service", Message: message, Service: &p})
+	}
+	// settle records an assignment's terminal state and publishes it in one
+	// lock hold, so no snapshot can show a finished assignment as still running.
+	settle := func(i int, status, reason, phase, message string, result *BatchResult, update func()) {
+		mu.Lock()
+		defer mu.Unlock()
+		if update != nil {
+			update()
 		}
+		live.at(i).Settle(status, reason, result, time.Now().UTC())
+		if report == nil {
+			return
+		}
+		p := live.snapshot(out.TotalHomeworks, out.CompletedHomeworks, out.SkippedHomeworks, out.NeedsServiceHomeworks)
 		report(Progress{Phase: phase, Kind: "service", Message: message, Service: &p})
 	}
 	halt := func(err error) {
@@ -234,30 +254,29 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 		})
 	}
 	process := func(i int, p courseHomeworkPlan) {
-		current := ServiceProgress{CurrentCourse: p.course.Identifier, CurrentHomeworkID: p.hw.ID, CurrentTitle: p.hw.Name}
-		emitFor(current, "loading", "正在处理作业", nil)
+		emitFor(i, "loading", "正在处理作业", nil)
 		h := &out.Homeworks[i]
 		needsService := func(reason, message string, result *BatchResult) {
-			locked(func() {
+			settle(i, ProgressAttention, reason, "service_pending", message, result, func() {
 				h.Status, h.ReasonCode = "needs_service", reason
 				if result != nil {
 					h.Result = result
 				}
 				out.NeedsServiceHomeworks++
 			})
-			emitFor(current, "service_pending", message, nil)
 		}
 		skippedOptional := func() {
-			locked(func() {
+			settle(i, ProgressSkipped, "no_required_levels", "verified", "这份作业没有需要安排的必做关卡", nil, func() {
 				h.Status, h.ReasonCode = "skipped_optional", "no_required_levels"
 				out.TotalHomeworks--
+				live.hide(i)
 			})
-			emitFor(current, "verified", "这份作业没有需要安排的必做关卡", nil)
 		}
 		interrupted := func(err error) {
 			locked(func() {
 				h.Status, h.ReasonCode = "needs_service", "interrupted"
 				out.NeedsServiceHomeworks++
+				live.at(i).Settle(ProgressAttention, "interrupted", nil, time.Now().UTC())
 			})
 			halt(err)
 		}
@@ -294,12 +313,11 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 			return
 		}
 		if homeworkExactlyComplete(p.hw, progress) {
-			locked(func() {
+			settle(i, ProgressSkipped, "already_passed", "verified", "已完成的作业已自动跳过", nil, func() {
 				h.Status = "skipped"
 				out.CompletedHomeworks++
 				out.SkippedHomeworks++
 			})
-			emitFor(current, "verified", "已完成的作业已自动跳过", nil)
 			return
 		}
 		resolvedHomework := p.hw
@@ -358,7 +376,7 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 		childKey := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%d", key, p.course.Identifier, p.hw.ID)))
 		childRequest.IdempotencyKey, childRequest.BudgetMicroUSD = fmt.Sprintf("course-%x", childKey), childCap
 		batch, childErr := s.RunHomework(ctx, client, childRequest, func(update Progress) {
-			emitFor(current, update.Phase, "正在处理作业", update.Batch)
+			emitFor(i, update.Phase, "正在处理作业", update.Batch)
 		})
 		locked(func() {
 			reservedBudget -= childCap
@@ -408,11 +426,10 @@ func (s *Service) RunCourses(ctx context.Context, client *educoder.Client, req R
 			return
 		}
 		if childErr == nil && batch != nil && batch.Status == "passed" && batch.TotalLevels > 0 && batch.CompletedLevels == batch.TotalLevels && batch.FailedLevels == 0 {
-			locked(func() {
+			settle(i, ProgressPassed, "", "verified", "这份作业已完成", batch, func() {
 				h.Status = "passed"
 				out.CompletedHomeworks++
 			})
-			emitFor(current, "verified", "这份作业已完成", nil)
 			return
 		}
 		reason := "execution_failed"
@@ -484,7 +501,6 @@ dispatch:
 		}
 		return stop(stopErr, "canceled")
 	}
-	current = ServiceProgress{}
 	if out.CompletedHomeworks == out.TotalHomeworks && out.NeedsServiceHomeworks == 0 {
 		out.Status = "passed"
 		if out.TotalHomeworks == 0 {
@@ -493,7 +509,8 @@ dispatch:
 	} else {
 		out.Status, out.ReasonCode = "needs_service", "service_required"
 	}
-	emit("completed", "本次作业处理进度已更新", nil)
+	current = live.snapshot(out.TotalHomeworks, out.CompletedHomeworks, out.SkippedHomeworks, out.NeedsServiceHomeworks)
+	emit("completed", "本次作业处理进度已更新")
 	return out, nil
 }
 

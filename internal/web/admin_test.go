@@ -59,6 +59,17 @@ func newPlatformHTTPFixture(t *testing.T, execute func(context.Context, Educoder
 	f.server = httptest.NewServer(f.app)
 	t.Cleanup(func() {
 		f.server.Close()
+		// Let jobs that finish on their own settle before shutdown cancels
+		// them. Canceling a job mid platform query can leave the SQLite file
+		// open after Close on Windows, which fails the TempDir cleanup; a real
+		// shutdown exits the process right after, so only tests notice.
+		settle := time.Now().Add(3 * time.Second)
+		for time.Now().Before(settle) {
+			if st := f.manager.Stats(); st.Running == 0 && st.Queued == 0 {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
 		closeCtx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 		defer cancel()
 		if err := f.manager.Close(closeCtx); err != nil {

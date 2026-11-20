@@ -49,7 +49,18 @@ let todayLoadedAt = 0;
 let todayLoadedDate = '';
 let guidelinesSource = 'login';
 let pollTimer: ReturnType<typeof setTimeout> | undefined;
+// Detailed single-job responses for the job the user is currently watching.
+// The list projection omits per-level detail, so it is kept separately.
+const jobDetails = new Map<string, AnswerJob>();
+let focusTimer: ReturnType<typeof setTimeout> | undefined;
+let adminTimer: ReturnType<typeof setTimeout> | undefined;
 let previousFocus: HTMLElement | null = null;
+let renderedHTML = '';
+// A poll repaints the whole page. If that happens between a user's press and
+// release, the click lands on a node that no longer exists and is lost, so
+// background repaints wait for the pointer to come up.
+let pointerHeld = false;
+let deferredRender = false;
 type DetailTab = 'homework' | 'common' | 'exercise';
 interface CourseDialog {
   course: Course; homeworks: Homework[] | null; exercises: Exercise[] | null; tab: DetailTab;
@@ -109,11 +120,11 @@ async function readCourseData<T>(read: () => Promise<T>): Promise<T> {
 const isAdmin = (): boolean => state.user?.role === 'admin' || Boolean(state.user?.permissions?.includes('admin'));
 const accessible = (): boolean => state.user?.service_access !== false && state.user?.status !== 'disabled';
 const activeJobs = (): AnswerJob[] => state.jobs.filter(job => serviceJob(job) && pendingJob(job));
-function stopPoll(): void { if (pollTimer !== undefined) clearTimeout(pollTimer); pollTimer = undefined; }
+function stopPoll(): void { if (pollTimer !== undefined) clearTimeout(pollTimer); pollTimer = undefined; stopFocusPoll(); stopAdminPoll(); }
 function resetSession(message = ''): void {
-  jobActions.clear(); recoveryNoticeID = ''; adminJobActions.clear(); homeworkRetryKeys.clear(); jobDialog = null; adminJobDialog = null; homeworkSync.clear(); homeworkJobObservations.clear();
+  jobActions.clear(); recoveryNoticeID = ''; adminJobActions.clear(); homeworkRetryKeys.clear(); jobDialog = null; adminJobDialog = null; homeworkSync.clear(); homeworkJobObservations.clear(); jobDetails.clear();
   userTickets = emptyTickets(); adminTickets = emptyTickets(); ticketDialog = null; ticketRetryKeys.clear(); ticketFormDrafts.clear();
-  generation++; jobsRevision++; coursesRevision++; adminRevision++; modalRevision++; bankRevision++; bankLoadedAt = 0; todayRevision++; todayLoadedAt = 0; todayLoadedDate = ''; guidelinesSource = 'login'; stopPoll(); courseDialog = null; courseCache.clear();
+  renderedHTML = ''; generation++; jobsRevision++; coursesRevision++; adminRevision++; modalRevision++; bankRevision++; bankLoadedAt = 0; todayRevision++; todayLoadedAt = 0; todayLoadedDate = ''; guidelinesSource = 'login'; stopPoll(); courseDialog = null; courseCache.clear();
   Object.assign(state, { user: null, page: 'courses', courses: [], jobs: [], selected: [], loading: false, signingIn: false, creating: false, notice: '', loginError: message, modal: '', modalKind: '', modalAction: null, search: '', progressHistoryOpen: false, questionBank: null, bankLoading: false, bankUnavailable: false, todaySummary: null, todayLoading: false, todayUnavailable: false, admin: { overview: {}, users: [], jobs: [], audit: [], loading: false, error: false, userSearch: '', userFilter: 'all' } });
   render();
 }
@@ -370,7 +381,13 @@ function render(): void {
   const replyDraft = state.user ? captureTicketForm('#ticket-reply-form') : null;
   if (createDraft) ticketFormDrafts.set('create:user', createDraft);
   if (replyDraft) ticketFormDrafts.set(`reply:${replyDraft.scope}:${replyDraft.id}`, replyDraft);
-  root!.innerHTML = `${renderAssetUpdateNotice()}${state.user ? renderShell() : renderLogin()}${state.modal ? `<div class="modal-backdrop"><section class="modal${state.modalKind === 'guidelines' ? ' guidelines-modal' : state.modalKind === 'ticket' ? ' ticket-modal' : ''}" data-ticket-scope="${state.modalKind === 'ticket' && ticketDialog ? ticketDialog.admin ? 'admin' : 'user' : ''}" role="dialog" aria-modal="true" aria-labelledby="modal-title" tabindex="-1"><button class="icon-button modal-close" type="button" data-action="close-modal" aria-label="关闭">${icon('close')}</button><div class="modal-content">${state.modal}</div></section></div>` : ''}`;
+  const html = `${renderAssetUpdateNotice()}${state.user ? renderShell() : renderLogin()}${state.modal ? `<div class="modal-backdrop"><section class="modal${state.modalKind === 'guidelines' ? ' guidelines-modal' : state.modalKind === 'ticket' ? ' ticket-modal' : ''}" data-ticket-scope="${state.modalKind === 'ticket' && ticketDialog ? ticketDialog.admin ? 'admin' : 'user' : ''}" role="dialog" aria-modal="true" aria-labelledby="modal-title" tabindex="-1"><button class="icon-button modal-close" type="button" data-action="close-modal" aria-label="关闭">${icon('close')}</button><div class="modal-content">${state.modal}</div></section></div>` : ''}`;
+  // Polling re-renders the page every second or two. Replacing identical
+  // markup would drop focus, text selection and in-flight clicks for nothing,
+  // so an unchanged render is skipped entirely.
+  if (html === renderedHTML && root!.firstChild) return;
+  renderedHTML = html;
+  root!.innerHTML = html;
   if (draft) {
     const account = document.querySelector<HTMLInputElement>('#login');
     const password = document.querySelector<HTMLInputElement>('#password');
@@ -414,6 +431,11 @@ function restoreTicketForm(draft: TicketFormDraft | null): void {
     }
   }
 }
+/** renderLive repaints for background data, never mid-click. */
+function renderLive(): void {
+  if (pointerHeld) { deferredRender = true; return; }
+  render();
+}
 function showModal(content: string, action: (() => Promise<void> | void) | null = null, kind: '' | 'guidelines' | 'ticket' | 'job' | 'admin-job' | 'course' = ''): void {
   if (kind !== 'course') courseDialog = null;
   if (kind !== 'ticket') ticketDialog = null;
@@ -427,6 +449,7 @@ function closeModal(): void {
   const guidelines = state.modalKind === 'guidelines';
   const closedTicket = ticketDialog?.id;
   state.modal = ''; state.modalKind = ''; state.modalAction = null; modalRevision++; courseDialog = null; ticketDialog = null; jobDialog = null; adminJobDialog = null; render();
+  scheduleFocusedJob();
   if (guidelines) document.querySelector<HTMLButtonElement>(`[data-guidelines-source="${guidelinesSource}"]`)?.focus();
   else if (closedTicket) [...document.querySelectorAll<HTMLButtonElement>('[data-ticket-open]')].find(button => button.dataset.ticketOpen === closedTicket)?.focus();
   else if (previousFocus?.isConnected) previousFocus.focus();
@@ -440,13 +463,71 @@ function scheduleJobs(): void {
     void loadJobs(); void loadQuestionBank(); void loadTodaySummary();
   }, activeJobs().length ? 3000 : 15000);
 }
+/**
+ * focusedJobID is the one job whose stage the user is actually watching: the
+ * open detail dialog, or the single running job on the progress page. Only
+ * that job is polled closely; the list keeps its own slower cadence.
+ */
+function focusedJobID(): string {
+  if (jobDialog && state.modalKind === 'job' && !jobDialog.historical) {
+    const job = state.jobs.find(item => item.id === jobDialog?.id);
+    if (job && pendingJob(job)) return job.id;
+  }
+  if (state.modal || state.page !== 'progress') return '';
+  const active = consumerCurrentJobs().filter(pendingJob);
+  return active.length === 1 ? active[0]!.id : '';
+}
+function stopFocusPoll(): void { if (focusTimer !== undefined) clearTimeout(focusTimer); focusTimer = undefined; }
+/**
+ * scheduleFocusedJob refreshes one job about once a second. The server answers
+ * a single running job from the job manager's memory, so this costs one small
+ * request and no extra database read or write.
+ */
+function scheduleFocusedJob(): void {
+  stopFocusPoll(); if (!state.user) return;
+  const id = focusedJobID();
+  if (!id) return;
+  focusTimer = setTimeout(() => {
+    focusTimer = undefined;
+    if (document.visibilityState === 'hidden') { scheduleFocusedJob(); return; }
+    void loadJobDetail(id);
+  }, 1200);
+}
+async function loadJobDetail(id: string): Promise<void> {
+  if (!state.user || !id) return;
+  const session = generation;
+  try {
+    const job = await api.job(id);
+    if (session !== generation || !job || job.id !== id) return;
+    jobDetails.set(id, job);
+    // Keep only the job being watched; a stale detail must never outlive it.
+    for (const key of [...jobDetails.keys()]) if (key !== id) jobDetails.delete(key);
+    state.jobs = state.jobs.map(item => item.id === id ? job : item);
+    if (jobDialog && state.modalKind === 'job' && jobDialog.id === id) {
+      state.modal = jobDetailContent(job, jobDialog.historical);
+      renderLive();
+    } else if (!state.modal) renderLive();
+  } catch (error) {
+    if (session !== generation || handleError(error)) return;
+    // A failed detail poll is not an error state: the list poll still updates.
+  }
+  if (session === generation) scheduleFocusedJob();
+}
 async function loadJobs(): Promise<void> {
   if (!state.user) return; const revision = ++jobsRevision; const session = generation;
   try {
     const result = await api.jobs();
     if (session !== generation || revision !== jobsRevision) return;
     const changed = result.jobs.filter(job => serviceJob(job) && !pendingJob(job) && !state.jobs.some(previous => courseTerminalVersion(previous) === courseTerminalVersion(job)));
-    state.jobs = result.jobs;
+    // The list projection omits per-level detail. Keep the detailed copy of the
+    // watched job while it is at least as fresh as the row from the list.
+    state.jobs = result.jobs.map(job => {
+      const detail = jobDetails.get(job.id);
+      if (!detail) return job;
+      if (Date.parse(detail.updated_at) >= Date.parse(job.updated_at)) return detail;
+      jobDetails.delete(job.id);
+      return job;
+    });
     const noticedRecovery = state.jobs.find(job => job.id === recoveryNoticeID);
     if (noticedRecovery) state.notice = recoveryNotice(noticedRecovery) || state.notice;
     for (const job of state.jobs) if (jobActions.get(job.id) === 'stopping' && !pendingJob(job)) jobActions.delete(job.id);
@@ -454,8 +535,8 @@ async function loadJobs(): Promise<void> {
     if (jobDialog && state.modalKind === 'job') {
       const job = state.jobs.find(item => item.id === jobDialog?.id);
       if (job) state.modal = jobDetailContent(job, jobDialog.historical);
-      render();
-    } else if (!state.modal) render();
+      renderLive();
+    } else if (!state.modal) renderLive();
     const refreshed = new Set<string>();
     for (const job of changed) refreshJobCourseCache(job, refreshed);
   } catch (error) {
@@ -463,6 +544,7 @@ async function loadJobs(): Promise<void> {
     if (handleError(error)) return;
   }
   scheduleJobs();
+  scheduleFocusedJob();
 }
 async function loadQuestionBank(force = false): Promise<void> {
   if (!state.user || state.bankLoading || !force && bankLoadedAt > 0 && Date.now() - bankLoadedAt < 60000) return;
@@ -873,34 +955,90 @@ async function mutateTicket(kind: 'reply' | 'status', status?: TicketStatus, eve
     else if (ticketVisible(dialog.admin)) { screen.error = ticketErrorText(error); render(); }
   }
 }
-async function loadAdmin(): Promise<void> {
+/**
+ * loadAdminJobDetail fetches one job's full projection, including the level
+ * rows the operator list leaves out, and refreshes the open dialog with it.
+ */
+async function loadAdminJobDetail(id: string): Promise<void> {
+  if (!isAdmin() || !id) return;
+  const session = generation;
+  try {
+    const job = await api.adminJob(id);
+    if (session !== generation || !job || job.id !== id) return;
+    state.admin.jobs = state.admin.jobs.map(item => item.id === id ? job : item);
+    if (adminJobDialog && state.modalKind === 'admin-job' && adminJobDialog.id === id) {
+      state.modal = adminJobDetailContent(job, adminJobDialog.historical);
+      renderLive();
+    }
+  } catch (error) {
+    if (session !== generation) return;
+    handleError(error);
+  }
+}
+function stopAdminPoll(): void { if (adminTimer !== undefined) clearTimeout(adminTimer); adminTimer = undefined; }
+/**
+ * scheduleAdmin refreshes the operator pages while work is in flight. The
+ * admin endpoints are heavier than the consumer list and only a few operators
+ * are signed in, so this stays well above the consumer cadence and stops
+ * entirely once nothing is queued or running.
+ */
+function scheduleAdmin(): void {
+  stopAdminPoll();
+  if (!state.user || !isAdmin() || !state.page.startsWith('admin-') || state.page === 'admin-support') return;
+  const active = state.admin.jobs.some(job => ['queued', 'running'].includes(job.status));
+  if (!active) return;
+  adminTimer = setTimeout(() => {
+    adminTimer = undefined;
+    if (document.visibilityState === 'hidden') { scheduleAdmin(); return; }
+    void loadAdmin(true);
+  }, 6000);
+}
+async function loadAdmin(background = false): Promise<void> {
   if (!isAdmin()) return; const session = generation; const revision = ++adminRevision;
-  state.admin.loading = true; state.admin.error = false; render();
+  stopAdminPoll();
+  // A background refresh keeps the rendered page in place: a spinner every few
+  // seconds would make the operator view feel broken rather than live.
+  if (!background) { state.admin.loading = true; state.admin.error = false; render(); }
   try {
     const [overview, users, jobs, audit] = await Promise.all([api.adminOverview(), api.adminUsers(), api.adminJobs(), api.adminAudit()]);
     if (session !== generation || revision !== adminRevision) return;
-    Object.assign(state.admin, { overview, users, jobs, audit, loading: false, error: false }); render();
+    Object.assign(state.admin, { overview, users, jobs, audit, loading: false, error: false });
+    if (adminJobDialog) void loadAdminJobDetail(adminJobDialog.id);
+    if (adminJobDialog && state.modalKind === 'admin-job') {
+      const job = state.admin.jobs.find(item => item.id === adminJobDialog?.id);
+      if (job) state.modal = adminJobDetailContent(job, adminJobDialog.historical);
+    }
+    if (background) renderLive(); else render();
   } catch (error) {
     if (session !== generation || revision !== adminRevision) return;
     if (handleError(error)) return;
     if (error instanceof ApiRequestError && error.status === 403) { state.page = 'courses'; state.notice = '当前账号未获管理授权。'; }
-    state.admin.loading = false; state.admin.error = true; render();
+    state.admin.loading = false; state.admin.error = !background; render();
   }
+  if (session === generation) scheduleAdmin();
 }
 function navigate(page: string): void {
   if (!['courses', 'progress', 'support', 'admin-overview', 'admin-users', 'admin-operations', 'admin-audit', 'admin-support'].includes(page)) return;
   if (page.startsWith('admin-') && !isAdmin()) return;
   if (state.modal) closeModal();
   state.page = page as Page; state.notice = ''; render();
-  revalidateVisibleCourseWork();
-  if (page === 'support' || page === 'admin-support') void loadTickets(page === 'admin-support');
-  else if (page.startsWith('admin-')) void loadAdmin(); else if (page === 'progress') void loadJobs();
+  revalidateVisibleCourseWork(); scheduleFocusedJob();
+  if (page === 'support' || page === 'admin-support') { stopAdminPoll(); void loadTickets(page === 'admin-support'); }
+  else if (page.startsWith('admin-')) void loadAdmin(); else { stopAdminPoll(); if (page === 'progress') void loadJobs(); }
 }
 
 function resumeVisibleCourseWork(): void {
   if (!state.user || document.visibilityState === 'hidden') return;
   revalidateVisibleCourseWork();
   stopPoll(); void loadJobs(); void loadQuestionBank(); void loadTodaySummary();
+  if (state.page.startsWith('admin-')) void loadAdmin(true);
+}
+document.addEventListener('pointerdown', () => { pointerHeld = true; }, true);
+for (const event of ['pointerup', 'pointercancel']) {
+  document.addEventListener(event, () => {
+    pointerHeld = false;
+    if (deferredRender) { deferredRender = false; render(); }
+  }, true);
 }
 document.addEventListener('visibilitychange', resumeVisibleCourseWork);
 window.addEventListener?.('focus', resumeVisibleCourseWork);
@@ -955,6 +1093,9 @@ function bindEvents(): void {
     if (job) {
       courseDialog = null; jobDialog = { id: job.id, historical: button.dataset.jobHistory === 'true' };
       showModal(jobDetailContent(job, jobDialog.historical), null, 'job');
+      // Fetch the detailed projection at once: the list projection a card is
+      // built from has no per-level rows, running or finished.
+      void loadJobDetail(job.id);
     }
   }));
   document.querySelectorAll<HTMLButtonElement>('[data-job-retry]').forEach(button => button.addEventListener('click', () => confirmJobAction(button.dataset.jobRetry!, 'retry')));
@@ -971,6 +1112,7 @@ function bindEvents(): void {
     if (job) {
       adminJobDialog = { id: job.id, historical: partitionAdminJobs(state.admin.jobs).history.some(item => item.id === job.id) };
       showModal(adminJobDetailContent(job, adminJobDialog.historical), null, 'admin-job');
+      void loadAdminJobDetail(job.id);
     }
   }));
   document.querySelectorAll<HTMLButtonElement>('[data-admin-jobs-view]').forEach(button => button.addEventListener('click', () => {

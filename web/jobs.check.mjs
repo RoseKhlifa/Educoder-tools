@@ -35,10 +35,10 @@ await test('consumer completion progress shows one current arrangement per origi
     const result = { levels: [{ title: '已过关', status: 'passed' }, { title: '运行旧快照', status: 'processing' }, { title: '排队旧快照', status: 'waiting' }] };
     for (const status of ['failed','support','canceled','uncertain','interrupted']) {
       const html = renderServiceDetail(job('terminal', 1, { status, result }));
-      assert.match(html, /<p>已完成<\/p>/); assert.match(html, /<p>待跟进<\/p>/);
-      assert.doesNotMatch(html, /<p>正在处理<\/p>|服务人员正在处理|服务处理中/);
+      assert.match(html, />已完成</); assert.match(html, />待跟进</);
+      assert.doesNotMatch(html, />正在处理<|服务人员正在处理|服务处理中/);
     }
-    assert.match(renderServiceDetail(job('active', 1, { status: 'running', result })), /<p>正在处理<\/p>/);
+    assert.match(renderServiceDetail(job('active', 1, { status: 'running', result })), />正在处理</);
   });
   await t.test('retry and stop actions require explicit backend capabilities and never appear in historical records', () => {
     const failed = job('retryable', 1, { status: 'support', can_retry: true });

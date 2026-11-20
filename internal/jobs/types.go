@@ -55,24 +55,59 @@ type Event struct {
 
 // BatchProgress contains public counters only. Completed includes already-full
 // levels skipped by this run; Skipped is a subset of Completed.
+//
+// Current* describes the assignment and level the snapshot is focused on;
+// Homeworks carries the per-assignment live detail for classroom and
+// account-wide jobs. Only the latest snapshot keeps that detail: events are
+// stored with counters only so the stored job stays small.
 type BatchProgress struct {
-	TotalQuestions        int    `json:"total_questions,omitempty"`
-	CompletedQuestions    int    `json:"completed_questions,omitempty"`
-	CurrentExerciseID     int64  `json:"current_exercise_id,omitempty"`
-	CurrentExerciseTitle  string `json:"current_exercise_title,omitempty"`
-	TotalHomeworks        int    `json:"total_homeworks,omitempty"`
-	CompletedHomeworks    int    `json:"completed_homeworks,omitempty"`
-	SkippedHomeworks      int    `json:"skipped_homeworks,omitempty"`
-	NeedsServiceHomeworks int    `json:"needs_service_homeworks,omitempty"`
-	CurrentCourse         string `json:"current_course,omitempty"`
-	CurrentHomeworkID     int64  `json:"current_homework_id,omitempty"`
-	CurrentHomeworkTitle  string `json:"current_homework_title,omitempty"`
-	TotalLevels           int    `json:"total_levels"`
-	CompletedLevels       int    `json:"completed_levels"`
-	SkippedLevels         int    `json:"skipped_levels"`
-	FailedLevels          int    `json:"failed_levels"`
-	CurrentPosition       int    `json:"current_position,omitempty"`
-	CurrentTitle          string `json:"current_title,omitempty"`
+	TotalQuestions        int                `json:"total_questions,omitempty"`
+	CompletedQuestions    int                `json:"completed_questions,omitempty"`
+	CurrentExerciseID     int64              `json:"current_exercise_id,omitempty"`
+	CurrentExerciseTitle  string             `json:"current_exercise_title,omitempty"`
+	TotalHomeworks        int                `json:"total_homeworks,omitempty"`
+	CompletedHomeworks    int                `json:"completed_homeworks,omitempty"`
+	SkippedHomeworks      int                `json:"skipped_homeworks,omitempty"`
+	NeedsServiceHomeworks int                `json:"needs_service_homeworks,omitempty"`
+	CurrentCourse         string             `json:"current_course,omitempty"`
+	CurrentHomeworkID     int64              `json:"current_homework_id,omitempty"`
+	CurrentHomeworkTitle  string             `json:"current_homework_title,omitempty"`
+	TotalLevels           int                `json:"total_levels"`
+	CompletedLevels       int                `json:"completed_levels"`
+	SkippedLevels         int                `json:"skipped_levels"`
+	FailedLevels          int                `json:"failed_levels"`
+	CurrentPosition       int                `json:"current_position,omitempty"`
+	CurrentTitle          string             `json:"current_title,omitempty"`
+	Stage                 string             `json:"stage,omitempty"`
+	Homeworks             []HomeworkProgress `json:"homeworks,omitempty"`
+}
+
+// HomeworkProgress is one assignment's live state. Status and ReasonCode are
+// closed enums; no diagnostic text, score or identifier beyond the target.
+type HomeworkProgress struct {
+	Course          string          `json:"course,omitempty"`
+	CourseName      string          `json:"course_name,omitempty"`
+	HomeworkID      int64           `json:"homework_id,omitempty"`
+	Title           string          `json:"title,omitempty"`
+	Status          string          `json:"status"`
+	ReasonCode      string          `json:"reason_code,omitempty"`
+	TotalLevels     int             `json:"total_levels"`
+	CompletedLevels int             `json:"completed_levels"`
+	SkippedLevels   int             `json:"skipped_levels"`
+	FailedLevels    int             `json:"failed_levels"`
+	CurrentPosition int             `json:"current_position,omitempty"`
+	CurrentTitle    string          `json:"current_title,omitempty"`
+	Stage           string          `json:"stage,omitempty"`
+	StartedAt       *time.Time      `json:"started_at,omitempty"`
+	UpdatedAt       *time.Time      `json:"updated_at,omitempty"`
+	Levels          []LevelProgress `json:"levels,omitempty"`
+}
+
+// LevelProgress is one level's live state inside an assignment.
+type LevelProgress struct {
+	Position int    `json:"position"`
+	Title    string `json:"title,omitempty"`
+	Status   string `json:"status"`
 }
 
 type Job struct {

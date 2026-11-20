@@ -356,6 +356,7 @@ export interface EducoderApi {
   adminOverview(): Promise<AdminOverview>;
   adminUsers(): Promise<AdminUser[]>;
   adminJobs(): Promise<AdminJob[]>;
+  adminJob(id: string): Promise<AdminJob>;
   adminAudit(): Promise<AdminAudit[]>;
   adminUserStatus(id: string | number, status: 'active' | 'disabled'): Promise<void>;
   adminCancelJob(id: string): Promise<void>;
@@ -493,6 +494,10 @@ export class BrowserApi implements EducoderApi {
     const value = await this.request<unknown>('/api/admin/jobs');
     const row = asRecord(value), items = Array.isArray(value) ? value : row.jobs ?? row.items ?? [];
     return (Array.isArray(items) ? items : []).map(normalizeAdminJob);
+  }
+  // The admin list projection omits per-level rows; one job carries them.
+  async adminJob(id: string): Promise<AdminJob> {
+    return normalizeAdminJob(await this.request<unknown>(`/api/admin/jobs/${encodeURIComponent(id)}`));
   }
   async adminAudit(): Promise<AdminAudit[]> {
     const value = await this.request<unknown>('/api/admin/audit');

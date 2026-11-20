@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.153 - 2026-11-20
+
+- Show users and operators live per-assignment progress with a consistent snapshot under parallel homeworks, throttled progress writes and plain next steps; join the access watcher before a job returns
+
 ## 0.1.152 - 2026-11-20
 
 - Lock first and load once when the task service already knows the run instance, dropping the pre-lock task and editor reads from every level

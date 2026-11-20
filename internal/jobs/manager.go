@@ -17,7 +17,15 @@ type execution struct {
 	exec            Executor
 	cancel          context.CancelFunc
 	cancelRequested bool
+	// lastWrite and dirty throttle progress persistence. Live state is served
+	// from memory, so the stored copy only has to be good enough for a restart.
+	lastWrite time.Time
+	dirty     bool
 }
+
+// progressWriteInterval bounds how often a running job's progress reaches
+// SQLite. Phase changes and terminal states are always written immediately.
+const progressWriteInterval = time.Second
 
 type Manager struct {
 	mu         sync.Mutex
@@ -158,6 +166,10 @@ func (m *Manager) Get(ctx context.Context, owner, id string) (Job, error) {
 	if owner == "" {
 		return Job{}, fail("not_found", "Job not found")
 	}
+	// A queued or running job is authoritative in memory and needs no read.
+	if job, ok := m.liveJob(owner, id); ok {
+		return job, nil
+	}
 	s, err := readStored(m.db.QueryRowContext(ctx, `SELECT owner,payload,target,mutating,data FROM async_jobs WHERE id=? AND owner=?`, id, owner))
 	if err != nil {
 		return Job{}, err
@@ -179,16 +191,32 @@ func (m *Manager) List(ctx context.Context, owner string, limit int) ([]Job, err
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	out := make([]Job, 0)
 	for rows.Next() {
 		s, e := readStored(rows)
 		if e != nil {
+			rows.Close()
 			return nil, e
 		}
 		out = append(out, clone(s.Job))
 	}
-	return out, rows.Err()
+	err = rows.Err()
+	// Release the connection before locking. The store is limited to a single
+	// connection and a worker holds the manager mutex while it writes, so
+	// taking the mutex with a cursor still open deadlocks the two against
+	// each other. Reading memory afterwards also keeps the overlay the
+	// fresher of the two copies.
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	live := m.liveJobs(owner)
+	for i, job := range out {
+		if fresh, ok := live[job.ID]; ok {
+			out[i] = fresh
+		}
+	}
+	return out, nil
 }
 
 func (m *Manager) Cancel(ctx context.Context, owner, id string) (Job, error) {
@@ -475,6 +503,7 @@ func (m *Manager) report(r *execution, e Event) {
 	e.Message = publicText(e.Message, "Job is working")
 	e.Progress = publicProgress(e.Progress)
 	e.At = time.Now().UTC()
+	phaseChanged := r.Phase != e.Phase
 	r.Phase = e.Phase
 	if e.Kind != "" {
 		r.Kind = e.Kind
@@ -484,11 +513,20 @@ func (m *Manager) report(r *execution, e Event) {
 	if e.Progress != nil {
 		r.Progress = cloneProgress(e.Progress)
 	}
+	// A transition into a mutating phase is always a phase change, so the
+	// sticky flag that classifies a crash as uncertain is never only in memory.
 	r.mutating = r.mutating || mutatingPhase(e.Phase)
-	r.Events = append(r.Events, e)
+	event := e
+	event.Progress = eventProgress(e.Progress)
+	r.Events = append(r.Events, event)
 	if len(r.Events) > m.cfg.EventLimit {
 		r.Events = append([]Event(nil), r.Events[len(r.Events)-m.cfg.EventLimit:]...)
 	}
+	r.dirty = true
+	if !phaseChanged && e.At.Sub(r.lastWrite) < progressWriteInterval {
+		return
+	}
+	r.lastWrite, r.dirty = e.At, false
 	if err := writeStore(m.db, &r.stored, false); err != nil {
 		r.cancelRequested = true
 		if r.cancel != nil {
@@ -505,14 +543,49 @@ func (m *Manager) terminalLocked(r *execution, status, code, message string, res
 	r.ErrorCode = code
 	r.Message = message
 	r.Result = result
+	// The settled result owns the per-assignment detail. Dropping it from the
+	// stored progress keeps finished jobs small in the list endpoints.
+	if r.Progress != nil && len(r.Progress.Homeworks) > 0 {
+		trimmed := *r.Progress
+		trimmed.Homeworks = nil
+		r.Progress = &trimmed
+	}
 	r.Events = append(r.Events, Event{Phase: status, Message: message, At: now})
 	if len(r.Events) > m.cfg.EventLimit {
 		r.Events = append([]Event(nil), r.Events[len(r.Events)-m.cfg.EventLimit:]...)
 	}
+	r.dirty = false
+	r.lastWrite = now
 	_ = writeStore(m.db, &r.stored, false)
 	delete(m.active, r.ID)
 	r.exec = nil
 	r.cancel = nil
+}
+
+// liveJobs snapshots the in-memory state of queued and running jobs. Progress
+// is throttled on its way to SQLite, so every read path overlays memory to
+// stay within a second or two of the executor without extra writes.
+func (m *Manager) liveJobs(owner string) map[string]Job {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make(map[string]Job, len(m.active))
+	for id, r := range m.active {
+		if owner != "" && r.owner != owner {
+			continue
+		}
+		out[id] = clone(r.Job)
+	}
+	return out
+}
+
+func (m *Manager) liveJob(owner, id string) (Job, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	r := m.active[id]
+	if r == nil || (owner != "" && r.owner != owner) {
+		return Job{}, false
+	}
+	return clone(r.Job), true
 }
 
 // Close stops admission and cancels queued/running work. Executors must honor

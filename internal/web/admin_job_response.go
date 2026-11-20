@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strconv"
 	"strings"
+	"sync"
 
 	"educoder-cli/internal/educoder"
 	"educoder-cli/internal/jobs"
@@ -22,7 +23,9 @@ type adminJobResponse struct {
 // Join verified platform identities and display labels on the server. The
 // user's first page of accounts is never used as an ownership/name lookup.
 // Result labels can also explain historical records without network requests.
-func (s *Server) adminJobResponses(ctx context.Context, records []jobs.AdminRecord) ([]adminJobResponse, error) {
+// detail controls the nested per-level projection: the frequently polled job
+// list stays summary-only, while a single job view carries its level roster.
+func (s *Server) adminJobResponses(ctx context.Context, records []jobs.AdminRecord, detail bool) ([]adminJobResponse, error) {
 	out := make([]adminJobResponse, len(records))
 	courses, homeworks := map[string]string{}, map[string]string{}
 	homeworkKey := func(course string, id int64) string { return course + ":" + strconv.FormatInt(id, 10) }
@@ -37,6 +40,7 @@ func (s *Server) adminJobResponses(ctx context.Context, records []jobs.AdminReco
 	}
 	for i, record := range records {
 		c := deriveJobContext(record.Job)
+		c.Progress = adminJobProgress(record.Job, detail)
 		out[i] = adminJobResponse{AdminRecord: record, Context: c, CanRecover: canRecoverJob(record.Job), CanRetry: canRetryJob(record.Job)}
 		remember(c.Course.Identifier, c.Course.Name, c.Homework.ID, c.Homework.Name)
 		for _, h := range c.Summary.AttentionHomeworks {
@@ -127,6 +131,35 @@ func (s *Server) rememberCourseLabels(ctx context.Context, courses []educoder.Co
 		}
 	}
 	_ = s.platform.RememberCourses(ctx, labels)
+}
+
+// labelMemo remembers which display labels a running job already persisted.
+// A job reports progress several times per second and a classroom job reports
+// from parallel workers, so the memo is both a write filter and goroutine
+// safe in its own right, rather than relying on the caller's locking.
+type labelMemo struct {
+	mu   sync.Mutex
+	seen map[string]bool
+}
+
+// first reports whether this course/assignment label is new to the job.
+func (m *labelMemo) first(course string, id int64, name string) bool {
+	key := course + "|" + strconv.FormatInt(id, 10) + "|" + name
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.seen[key] {
+		return false
+	}
+	if m.seen == nil {
+		m.seen = map[string]bool{}
+	}
+	// Bound the memo: a job plans at most a hundred assignments, and a renamed
+	// one must still be able to refresh its label.
+	if len(m.seen) >= 512 {
+		m.seen = map[string]bool{}
+	}
+	m.seen[key] = true
+	return true
 }
 
 func (s *Server) rememberHomeworkLabels(ctx context.Context, course string, homeworks []educoder.Homework) {

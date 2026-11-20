@@ -1,5 +1,6 @@
-import type { AnswerJob, Course } from './types.js';
+import type { AnswerJob, Course, ProgressItem } from './types.js';
 import { count, dateTime, escapeHtml as e, record } from './ui.js';
+import { autoRetryText, progressCounts, progressTone, reasonText, renderProgressTree, stageLabel } from './progress.js';
 export const pendingJob = (job: AnswerJob): boolean => ['queued', 'running', 'waiting', 'processing'].includes(job.status);
 export const serviceJob = (job: AnswerJob): boolean => job.request.mode !== 'collect_verified';
 // Capability flags come from the session-bound API. Missing flags fail closed.
@@ -138,15 +139,71 @@ function progressText(job: AnswerJob): string {
   if (job.request.scope === 'exercise' && ['submitted', 'awaiting_review', 'graded'].includes(serviceStatus(job))) return `已交卷${progress.total ? ` · 共 ${progress.total} 道题` : ''}`;
   return progress.total ? `${progress.completed} / ${progress.total} ${progress.unit}` : serviceStatus(job) === 'completed' ? '已完成' : '进度待更新';
 }
+/**
+ * jobHomeworks returns one assignment list for a job whatever its state: the
+ * live snapshot while it runs, the stored outcome once it has settled. Both
+ * publish the same shape, so the pages share a single progress renderer.
+ */
+export function jobHomeworks(job: AnswerJob): ProgressItem[] {
+  const live = job.progress?.homeworks;
+  if (Array.isArray(live) && live.length) return live;
+  const result = record(job.result);
+  const rows = Array.isArray(result.homeworks) ? result.homeworks : Array.isArray(result.levels) ? result.levels : [];
+  return rows.map(row => record(row) as ProgressItem);
+}
+/** currentStage names the step the job is on, e.g. "第 3 关 · 公开自测". */
+export function currentStage(job: AnswerJob): string {
+  if (!pendingJob(job)) return '';
+  const progress = record(job.progress);
+  const position = count(progress.current_position);
+  const level = typeof progress.current_level === 'string' ? progress.current_level.trim() : '';
+  const stage = stageLabel(typeof progress.stage === 'string' ? progress.stage : '');
+  return [position ? `第 ${position} 关` : '', level, stage].filter(Boolean).join(' · ');
+}
+/** autoRetryNotice renders the automatic retry the backend has scheduled. */
+export function autoRetryNotice(job: AnswerJob): string {
+  return autoRetryText(job.result?.auto_retry);
+}
+/**
+ * serviceReason explains a stop in the user's own words. A resource shortage
+ * on Educoder is a "try again later", never a staff hand-off.
+ */
+export function serviceReason(job: AnswerJob): string {
+  if (pendingJob(job)) return '';
+  const reason = record(job.result).reason;
+  return reasonText(typeof reason === 'string' ? reason : '');
+}
 function serviceAttention(job: AnswerJob): string {
   return serviceStatus(job) === 'support' && record(job.result).attention === 'upstream_question_conflict'
     ? '题目要求与评测样例存在矛盾，已保留进度，待课程方核对后继续。' : '';
+}
+/** renderJobLive is the one-line "what is happening right now" summary. */
+function renderJobLive(job: AnswerJob, historical: boolean): string {
+  if (historical) return '';
+  const items = jobHomeworks(job);
+  const counts = progressCounts(items);
+  const stage = currentStage(job);
+  const title = typeof record(job.result).current_title === 'string' ? String(record(job.result).current_title).trim() : '';
+  if (pendingJob(job)) {
+    // The stage belongs to the assignment the server focused on, so name that
+    // one and only count the others: listing three titles plus a level reads
+    // as if the level belonged to all of them.
+    const running = items.filter(item => progressTone(item.status) === 'processing');
+    const focus = title || running.map(item => String(item.title ?? '').trim()).filter(Boolean)[0] || '';
+    const also = running.length > 1 ? `（同时处理 ${running.length} 份）` : '';
+    const parts = [focus ? `正在处理 ${focus}${also}` : '正在安排处理', stage].filter(Boolean);
+    const tally = items.length ? `${counts.completed} / ${items.length} 份作业已完成${counts.support ? ` · ${counts.support} 份待跟进` : ''}` : '';
+    return `<p class="job-live" role="status"><span class="live-dot" aria-hidden="true"></span><span>${e(parts.join(' · '))}</span>${tally ? `<small>${e(tally)}</small>` : ''}</p>`;
+  }
+  const reason = serviceReason(job), retry = autoRetryNotice(job);
+  if (!reason && !retry) return '';
+  return `<p class="job-live job-live-attention" role="status"><span>${e(reason)}</span>${retry ? `<small>${e(retry)}</small>` : ''}</p>`;
 }
 export function renderServiceJob(job: AnswerJob, courses: Course[] = [], historical = false, action?: JobActionState): string {
   const status = serviceStatus(job);
   const progress = jobProgress(job);
   const submitted = job.request.scope === 'exercise' && ['submitted', 'awaiting_review', 'graded'].includes(status);
-  return `<article class="service-job service-job-compact hw-card status-${status}${historical ? ' service-job-history' : ''}" data-service-record="${historical ? 'history' : 'current'}"><div class="hw-top job-heading"><div class="hw-title"><span class="job-symbol" aria-hidden="true">${status === 'completed' || submitted ? '✓' : status === 'support' ? '·' : '◌'}</span><div><h3>${e(jobTitle(job, courses))}</h3><p class="meta">${e(dateTime(job.created_at))} · ${historical ? '本次任务' : '开始时间'}</p></div></div><div class="hw-badges"><span class="badge ${historical ? 'stopped' : status}">${historical ? displayLabel(status, true) : serviceLabel(job)}</span></div></div><div class="hw-progress job-footer"><div class="job-progress">${submitted ? '' : `<div class="progress-track bar-wrap" aria-hidden="true"><span class="progress-fill" style="width:${progress.percent}%"></span></div>`}<span>${historical ? '本次进度 · ' : ''}${progressText(job)}</span></div>${!historical && recoveryMessage(job) ? `<p class="job-recovery-message" role="status">${e(recoveryNotice(job))}</p>` : ''}${!historical && serviceAttention(job) ? `<p class="job-recovery-message" role="status">${e(serviceAttention(job))}</p>` : ''}<button class="text-button" data-job-detail="${e(job.id)}"${historical ? ' data-job-history="true"' : ''}>${historical ? '查看记录' : '查看详情'}</button>${renderJobActions(job, historical, action)}</div></article>`;
+  return `<article class="service-job service-job-compact hw-card status-${status}${historical ? ' service-job-history' : ''}" data-service-record="${historical ? 'history' : 'current'}"><div class="hw-top job-heading"><div class="hw-title"><span class="job-symbol" aria-hidden="true">${status === 'completed' || submitted ? '✓' : status === 'support' ? '·' : '◌'}</span><div><h3>${e(jobTitle(job, courses))}</h3><p class="meta">${e(dateTime(job.created_at))} · ${historical ? '本次任务' : '开始时间'}</p></div></div><div class="hw-badges"><span class="badge ${historical ? 'stopped' : status}">${historical ? displayLabel(status, true) : serviceLabel(job)}</span></div></div><div class="hw-progress job-footer"><div class="job-progress">${submitted ? '' : `<div class="progress-track bar-wrap" aria-hidden="true"><span class="progress-fill" style="width:${progress.percent}%"></span></div>`}<span>${historical ? '本次进度 · ' : ''}${progressText(job)}</span></div>${renderJobLive(job, historical)}${!historical && recoveryMessage(job) ? `<p class="job-recovery-message" role="status">${e(recoveryNotice(job))}</p>` : ''}${!historical && serviceAttention(job) ? `<p class="job-recovery-message" role="status">${e(serviceAttention(job))}</p>` : ''}<button class="text-button" data-job-detail="${e(job.id)}"${historical ? ' data-job-history="true"' : ''}>${historical ? '查看记录' : '查看详情'}</button>${renderJobActions(job, historical, action)}</div></article>`;
 }
 export function renderJobs(jobs: AnswerJob[], courses: Course[] = [], historyOpen = false, actions: ReadonlyMap<string, JobActionState> = new Map(), historicalIds?: ReadonlySet<string>): string {
   const { current, history } = partitionServiceJobs(jobs, historicalIds);
@@ -161,14 +218,15 @@ export function renderJobs(jobs: AnswerJob[], courses: Course[] = [], historyOpe
 }
 export function renderServiceDetail(job: AnswerJob, courses: Course[] = [], historical = false, action?: JobActionState): string {
   const data = { ...record(job.progress), ...record(job.result) };
-  const rows = Array.isArray(data.homeworks) ? data.homeworks.map(record) : Array.isArray(data.levels) ? data.levels.map(record) : [];
+  const rows = jobHomeworks(job);
   const status = serviceStatus(job);
   const currentTitle = typeof data.current_title === 'string' ? data.current_title.trim() : '';
-  const liveProgress = !historical && ['waiting', 'processing', 'support'].includes(status) ? `<div class="detail-progress-card"><div><span>当前状态</span><b>${e(serviceLabel(job))}</b></div>${currentTitle ? `<strong>${e(currentTitle)}</strong>` : '<strong>正在准备下一步</strong>'}<p>${e(progressText(job))}</p>${recoveryMessage(job) ? `<small>${e(recoveryMessage(job))}</small>` : ''}</div>` : '';
+  const stage = currentStage(job);
+  const counts = progressCounts(rows);
+  const retry = autoRetryNotice(job);
+  const liveProgress = !historical && ['waiting', 'processing', 'support'].includes(status) ? `<div class="detail-progress-card"><div><span>当前状态</span><b>${e(serviceLabel(job))}</b></div><strong>${e(currentTitle || (pendingJob(job) ? '正在准备下一步' : status === 'stopped' ? '已停止，进度已保留' : '已暂停，可重新执行'))}</strong>${stage ? `<p class="detail-stage">${e(stage)}</p>` : ''}<p>${e(progressText(job))}</p>${rows.length ? `<p class="detail-tally">已完成 ${counts.completed} · 进行中 ${counts.processing} · 待处理 ${counts.waiting} · 待跟进 ${counts.support}</p>` : ''}${recoveryMessage(job) ? `<small>${e(recoveryMessage(job))}</small>` : ''}${retry ? `<small class="detail-retry">${e(retry)}</small>` : ''}</div>` : '';
   const exerciseNote = job.request.scope === 'exercise' ? historical ? '历史记录：以下为本次考试的交卷状态，当前任务请查看上方列表。' : status === 'submitted' || status === 'awaiting_review' ? '已交卷，成绩以头歌公布为准。' : status === 'graded' ? `考试成绩已公布。${data.score_known === true && (typeof data.score === 'number' || typeof data.score === 'string') ? `成绩 ${e(data.score)}${typeof data.max_score === 'number' || typeof data.max_score === 'string' ? ` / ${e(data.max_score)}` : ''}` : ''}` : status === 'support' ? '考试事项需要服务人员跟进，请勿重复提交。' : '服务人员会处理整场考试，完成后显示交卷状态。' : '';
   const recoveryNote = recoveryMessage(job);
-  return `<h2>${e(jobTitle(job, courses))}</h2><p class="subtext">${e(dateTime(job.created_at))} · ${historical ? '本次任务' : '开始时间'}</p><span class="badge ${historical ? 'stopped' : status}">${historical ? displayLabel(status, true) : serviceLabel(job)}</span>${renderJobActions(job, historical, action)}<div class="detail-note">${exerciseNote || (!historical && serviceAttention(job)) || (historical ? '历史记录：以下为本次任务的进度，不代表当前仍在处理。' : recoveryNote ? recoveryNote : canRetryJob(job) ? '本次任务已暂停。可以重新执行原来的任务；已核验通过的必做关卡会自动跳过，只继续未完成的内容。' : canRecoverJob(job) ? '可以先复核上次任务的完成结果，再继续剩余的必做内容；结果仍未明确时不会重复提交。' : status === 'support' ? '本次处理已暂停，已完成进度保留，剩余内容待跟进。' : status === 'completed' ? '本次服务已经完成，结果已核验。' : status === 'stopped' ? '本次服务已停止，已完成的结果会保留。' : '我们会按顺序完成未完成的内容。')}</div>${liveProgress}${rows.length ? `<ol class="completion-list">${rows.map((row, index) => {
-    const done = ['passed', 'skipped', 'completed', 'succeeded'].includes(String(row.status));
-    return `<li><span class="completion-icon ${done ? 'done' : ''}">${done ? '✓' : index + 1}</span><div><strong>${e(typeof row.title === 'string' ? row.title : `作业 ${index + 1}`)}</strong><p>${historical ? done ? '当次已完成' : '当次未完成' : done ? '已完成' : status === 'support' || status === 'stopped' ? '待跟进' : row.status === 'support' ? '待跟进' : status === 'processing' && ['running', 'processing'].includes(String(row.status)) ? '正在处理' : '待完成'}</p></div></li>`;
-  }).join('')}</ol>` : `<p class="muted">${historical ? '本次未记录详细进度。' : status === 'support' || status === 'stopped' ? '本次未记录详细进度，已完成结果保留。' : '处理详情会随任务推进更新。'}</p>`}`;
+  const reason = !historical ? serviceReason(job) : '';
+  return `<h2>${e(jobTitle(job, courses))}</h2><p class="subtext">${e(dateTime(job.created_at))} · ${historical ? '本次任务' : '开始时间'}</p><span class="badge ${historical ? 'stopped' : status}">${historical ? displayLabel(status, true) : serviceLabel(job)}</span>${renderJobActions(job, historical, action)}<div class="detail-note">${exerciseNote || (!historical && serviceAttention(job)) || (historical ? '历史记录：以下为本次任务的进度，不代表当前仍在处理。' : reason ? reason + (retry ? `${'　'}${retry}。` : '') : recoveryNote ? recoveryNote : canRetryJob(job) ? '本次任务已暂停。可以重新执行原来的任务；已核验通过的必做关卡会自动跳过，只继续未完成的内容。' : canRecoverJob(job) ? '可以先复核上次任务的完成结果，再继续剩余的必做内容；结果仍未明确时不会重复提交。' : status === 'support' ? '本次处理已暂停，已完成进度保留，剩余内容待跟进。' : status === 'completed' ? '本次服务已经完成，结果已核验。' : status === 'stopped' ? '本次服务已停止，已完成的结果会保留。' : '我们会继续完成剩下的内容，可能同时处理多份作业。')}</div>${liveProgress}${rows.length ? `<div class="detail-section"><h3>每份作业的进度</h3>${renderProgressTree(rows, { historical, levels: true, parentActive: pendingJob(job) })}</div>` : `<p class="muted">${historical ? '本次未记录详细进度。' : status === 'support' || status === 'stopped' ? '本次未记录详细进度，已完成结果保留。' : '处理详情会随任务推进更新。'}</p>`}`;
 }

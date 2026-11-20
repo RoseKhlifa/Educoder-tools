@@ -19,6 +19,68 @@ type AdminJobContext struct {
 	Level      AdminJobLevel        `json:"level"`
 	ScopeLabel string               `json:"scope_label"`
 	Summary    AdminJobSummary      `json:"summary"`
+	// Progress is the live structured snapshot of a queued or running job. It
+	// uses the same field names as the consumer projection so both pages render
+	// one component; operators additionally see the exact reason code.
+	Progress *AdminJobProgress `json:"progress,omitempty"`
+}
+
+type AdminJobProgress struct {
+	TotalHomeworks     int            `json:"total_homeworks"`
+	CompletedHomeworks int            `json:"completed_homeworks"`
+	SkippedHomeworks   int            `json:"skipped_homeworks,omitempty"`
+	AttentionHomeworks int            `json:"attention_homeworks,omitempty"`
+	TotalLevels        int            `json:"total_levels"`
+	CompletedLevels    int            `json:"completed_levels"`
+	TotalQuestions     int            `json:"total_questions,omitempty"`
+	CompletedQuestions int            `json:"completed_questions,omitempty"`
+	CurrentTitle       string         `json:"current_title,omitempty"`
+	CurrentPosition    int            `json:"current_position,omitempty"`
+	CurrentLevel       string         `json:"current_level,omitempty"`
+	Stage              string         `json:"stage,omitempty"`
+	Homeworks          []consumerItem `json:"homeworks,omitempty"`
+}
+
+// adminJobProgress exposes the live snapshot for jobs that are still active.
+// A finished job keeps its per-assignment detail in the stored result, which
+// the operator views already render.
+func adminJobProgress(j jobs.Job, detail bool) *AdminJobProgress {
+	p := j.Progress
+	if p == nil || (j.Status != jobs.Queued && j.Status != jobs.Running) {
+		return nil
+	}
+	out := &AdminJobProgress{
+		TotalHomeworks: p.TotalHomeworks, CompletedHomeworks: p.CompletedHomeworks, SkippedHomeworks: p.SkippedHomeworks,
+		AttentionHomeworks: p.NeedsServiceHomeworks, TotalLevels: p.TotalLevels, CompletedLevels: p.CompletedLevels,
+		TotalQuestions: p.TotalQuestions, CompletedQuestions: p.CompletedQuestions,
+		CurrentTitle: adminContextText(p.CurrentHomeworkTitle, 200), CurrentPosition: p.CurrentPosition,
+		CurrentLevel: adminContextText(p.CurrentTitle, 200), Stage: p.Stage,
+	}
+	for _, item := range p.Homeworks {
+		if len(out.Homeworks) >= 100 {
+			break
+		}
+		entry := consumerItem{
+			Title: adminContextText(item.Title, 200), CourseName: adminContextText(item.CourseName, 200),
+			Status: consumerLiveStatus(item.Status), Reason: adminContextText(item.ReasonCode, 120),
+			TotalLevels: item.TotalLevels, CompletedLevels: item.CompletedLevels, SkippedLevels: item.SkippedLevels,
+			CurrentPosition: item.CurrentPosition, CurrentTitle: adminContextText(item.CurrentTitle, 200),
+			Stage: item.Stage, StartedAt: item.StartedAt, UpdatedAt: item.UpdatedAt,
+		}
+		if entry.Title == "" {
+			entry.Title = "作业名称待补充"
+		}
+		if detail {
+			for _, level := range item.Levels {
+				if len(entry.Levels) >= 100 {
+					break
+				}
+				entry.Levels = append(entry.Levels, consumerItem{Position: level.Position, Title: adminContextText(level.Title, 200), Status: consumerLiveStatus(level.Status)})
+			}
+		}
+		out.Homeworks = append(out.Homeworks, entry)
+	}
+	return out
 }
 
 type AdminJobContextUser struct {

@@ -95,7 +95,7 @@ func TestAdminHistoricalLabelsWarmFromResultsWithoutClaimingLegacyOwner(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	views, err := app.adminJobResponses(ctx, []jobs.AdminRecord{raw})
+	views, err := app.adminJobResponses(ctx, []jobs.AdminRecord{raw}, true)
 	if err != nil || views[0].Context.User.Linked || views[0].Context.User.Name != "历史账号未关联" {
 		t.Fatalf("legacy display hash was claimed as a current user: %+v %v", views, err)
 	}

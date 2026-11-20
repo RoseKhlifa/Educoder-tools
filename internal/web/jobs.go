@@ -196,7 +196,7 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 				e := jobs.Event{Phase: p.Phase, Kind: p.Kind, Message: p.Message}
 				if p.Service != nil {
 					v := p.Service
-					e.Progress = &jobs.BatchProgress{TotalHomeworks: v.TotalHomeworks, CompletedHomeworks: v.CompletedHomeworks, SkippedHomeworks: v.SkippedHomeworks, NeedsServiceHomeworks: v.NeedsServiceHomeworks, CurrentCourse: v.CurrentCourse, CurrentHomeworkID: v.CurrentHomeworkID, CurrentHomeworkTitle: v.CurrentTitle}
+					e.Progress = &jobs.BatchProgress{TotalHomeworks: v.TotalHomeworks, CompletedHomeworks: v.CompletedHomeworks, SkippedHomeworks: v.SkippedHomeworks, NeedsServiceHomeworks: v.NeedsServiceHomeworks, CurrentCourse: v.CurrentCourse, CurrentHomeworkID: v.CurrentHomeworkID, CurrentHomeworkTitle: v.CurrentTitle, Stage: v.Stage, Homeworks: jobHomeworkProgressList(v.Homeworks)}
 					if v.Batch != nil {
 						b := v.Batch
 						e.Progress.TotalLevels, e.Progress.CompletedLevels, e.Progress.SkippedLevels, e.Progress.FailedLevels = b.TotalLevels, b.CompletedLevels, b.SkippedLevels, b.FailedLevels
@@ -208,10 +208,17 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 			return courseOutcome(result, err)
 		}
 		if req.Scope == "homework" {
+			// One assignment reports its levels sequentially. Deriving the same
+			// structured snapshot here lets a single-assignment job use exactly
+			// the same consumer and operator views as a classroom job.
+			live := taskservice.NewHomeworkProgressTracker(req.Course, "", req.HomeworkID, "")
 			batch, err := service.RunHomework(ctx, protocol, taskservice.Request{Owner: owner, Course: req.Course, HomeworkID: req.HomeworkID, Mode: solver.ModeSubmit, IdempotencyKey: req.IdempotencyKey}, func(progress taskservice.Progress) {
 				e := jobs.Event{Phase: progress.Phase, Kind: progress.Kind, Message: progress.Message}
+				live.Observe(progress.Phase, progress.Batch, time.Now().UTC())
 				if progress.Batch != nil {
 					e.Progress = jobHomeworkProgress(req, progress.Batch)
+					e.Progress.Stage = progress.Phase
+					e.Progress.Homeworks = jobHomeworkProgressList([]taskservice.ServiceHomeworkProgress{live.Snapshot()})
 				}
 				report(e)
 			})
@@ -255,6 +262,28 @@ func NewJobRuntime(cfg Config) (*JobRuntime, error) {
 
 func jobHomeworkProgress(req jobs.Request, batch *taskservice.BatchProgress) *jobs.BatchProgress {
 	return &jobs.BatchProgress{CurrentCourse: req.Course, CurrentHomeworkID: req.HomeworkID, TotalLevels: batch.TotalLevels, CompletedLevels: batch.CompletedLevels, SkippedLevels: batch.SkippedLevels, FailedLevels: batch.FailedLevels, CurrentPosition: batch.CurrentPosition, CurrentTitle: batch.CurrentTitle}
+}
+
+// jobHomeworkProgressList copies the execution package's live snapshot into the
+// transport shape. The job manager sanitizes and bounds it before storage.
+func jobHomeworkProgressList(items []taskservice.ServiceHomeworkProgress) []jobs.HomeworkProgress {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]jobs.HomeworkProgress, 0, len(items))
+	for _, item := range items {
+		entry := jobs.HomeworkProgress{
+			Course: item.Course, CourseName: item.CourseName, HomeworkID: item.HomeworkID, Title: item.Title,
+			Status: item.Status, ReasonCode: item.ReasonCode, TotalLevels: item.TotalLevels, CompletedLevels: item.CompletedLevels,
+			SkippedLevels: item.SkippedLevels, FailedLevels: item.FailedLevels, CurrentPosition: item.CurrentPosition,
+			CurrentTitle: item.CurrentTitle, Stage: item.Stage, StartedAt: item.StartedAt, UpdatedAt: item.UpdatedAt,
+		}
+		for _, level := range item.Levels {
+			entry.Levels = append(entry.Levels, jobs.LevelProgress{Position: level.Position, Title: level.Title, Status: level.Status})
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 func courseOutcome(result *taskservice.CourseBatchResult, err error) (jobs.Outcome, error) {
@@ -427,7 +456,10 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request, requestID st
 			s.jobError(w, requestID, err)
 			return
 		}
-		s.writeJSON(w, requestID, http.StatusOK, toConsumerJob(job))
+		// A single job carries the per-level detail; a running job is served
+		// from the manager's memory, so this is cheap enough to poll closely.
+		w.Header().Set("Cache-Control", "no-store")
+		s.writeJSON(w, requestID, http.StatusOK, toConsumerDetail(job))
 		return
 	}
 	if len(parts) == 4 && parts[3] == "cancel" && r.Method == http.MethodPost {

@@ -43,7 +43,7 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, requestID s
 					return
 				}
 			}
-			views, err := s.adminJobResponses(r.Context(), items)
+			views, err := s.adminJobResponses(r.Context(), items, false)
 			if err != nil {
 				s.adminError(w, requestID, err)
 				return
@@ -113,7 +113,7 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, requestID s
 			s.jobError(w, requestID, err)
 			return
 		}
-		views, err := s.adminJobResponses(r.Context(), []jobs.AdminRecord{job})
+		views, err := s.adminJobResponses(r.Context(), []jobs.AdminRecord{job}, true)
 		if err != nil {
 			s.adminError(w, requestID, err)
 			return
@@ -148,7 +148,7 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request, requestID s
 			s.jobError(w, requestID, err)
 			return
 		}
-		views, err := s.adminJobResponses(r.Context(), []jobs.AdminRecord{{Job: canceled, OwnerID: job.OwnerID}})
+		views, err := s.adminJobResponses(r.Context(), []jobs.AdminRecord{{Job: canceled, OwnerID: job.OwnerID}}, true)
 		if err != nil {
 			s.adminError(w, requestID, err)
 			return

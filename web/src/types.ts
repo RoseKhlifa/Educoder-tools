@@ -192,21 +192,66 @@ export interface AnswerJob {
   error_code?: string;
   message?: string;
   progress?: HomeworkProgress;
-  result?: Record<string, unknown>;
+  result?: JobResult;
   events?: Array<{ phase: string; kind?: string; message: string; at: string; progress?: HomeworkProgress }>;
+}
+// ProgressItem is one assignment or one level in a job's progress tree. The
+// consumer and operator endpoints publish the same shape so both pages share
+// one renderer; `levels` is present only for a single job's detail response.
+export interface ProgressItem {
+  position?: number;
+  title?: string;
+  course_name?: string;
+  status?: string;
+  reason?: string;
+  total_levels?: number;
+  completed_levels?: number;
+  skipped_levels?: number;
+  current_position?: number;
+  current_title?: string;
+  stage?: string;
+  started_at?: string;
+  updated_at?: string;
+  levels?: ProgressItem[];
+}
+// AutoRetry is the backend-scheduled automatic retry of a stopped job.
+export interface AutoRetry {
+  next_at?: string;
+  attempt?: number;
+  max?: number;
 }
 export interface HomeworkProgress {
   service_status?: string;
   total_homeworks?: number;
   completed_homeworks?: number;
+  skipped_homeworks?: number;
+  attention_homeworks?: number;
   total_levels?: number;
   completed_levels?: number;
   skipped_levels?: number;
   failed_levels?: number;
   current_position?: number;
   current_title?: string;
+  current_level?: string;
+  stage?: string;
   total_questions?: number;
   completed_questions?: number;
+  homeworks?: ProgressItem[];
+}
+// JobResult is the public projection of a finished job. Unknown keys stay
+// available for forward compatibility; nothing technical is published here.
+export interface JobResult extends Record<string, unknown> {
+  service_status?: string;
+  attention?: string;
+  reason?: string;
+  auto_retry?: AutoRetry;
+  total_homeworks?: number;
+  completed_homeworks?: number;
+  total_levels?: number;
+  completed_levels?: number;
+  current_title?: string;
+  homeworks?: ProgressItem[];
+  levels?: ProgressItem[];
 }
 export interface JobCapacity {
   workers: number;
@@ -245,6 +290,7 @@ export interface AdminJobContext {
   exercise?: { id?: number; name?: string };
   level?: { title?: string; position?: number; score?: string; max_score?: string };
   scope_label?: string;
+  progress?: HomeworkProgress;
   summary?: { stop_reason?: string; pending_homeworks?: number; reason?: string; reason_code?: string; message?: string; diagnostics?: string[]; progress_label?: string; attention_homeworks?: Array<{ id?: number; name?: string; course_identifier?: string; course_name?: string; reason?: string; reason_code?: string; diagnostics?: string[]; level_title?: string; level_position?: number }> };
 }
 export type AdminJobAction = 'retry' | 'recover' | 'cancel';

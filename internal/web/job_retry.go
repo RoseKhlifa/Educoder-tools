@@ -186,7 +186,7 @@ func (s *Server) handleAdminJobRetry(w http.ResponseWriter, r *http.Request, req
 		s.jobError(w, requestID, err)
 		return
 	}
-	views, err := s.adminJobResponses(r.Context(), []jobs.AdminRecord{{Job: job, OwnerID: original.OwnerID}})
+	views, err := s.adminJobResponses(r.Context(), []jobs.AdminRecord{{Job: job, OwnerID: original.OwnerID}}, true)
 	if err != nil {
 		s.adminError(w, requestID, err)
 		return
@@ -207,9 +207,15 @@ func (s *Server) submitSessionJob(ctx context.Context, session Session, req jobs
 			if !session.ExpiresAt.After(s.store.now()) {
 				return jobs.Outcome{Status: jobs.Failed, ErrorCode: "OWNER_LOGIN_REQUIRED", Message: "用户登录已过期，请重新登录后再执行"}, nil
 			}
+			// The progress callback runs on the executor's reporting path, which
+			// a classroom job holds its own lock across. Remember each label
+			// once per target instead of writing on every event.
+			var labels labelMemo
 			out, err := s.jobs.run(ctx, session.Client, owner, request, func(event jobs.Event) {
 				if p := event.Progress; p != nil && p.CurrentCourse != "" && p.CurrentHomeworkID > 0 && p.CurrentHomeworkTitle != "" {
-					s.rememberHomeworkLabels(ctx, p.CurrentCourse, []educoder.Homework{{ID: p.CurrentHomeworkID, Name: p.CurrentHomeworkTitle}})
+					if labels.first(p.CurrentCourse, p.CurrentHomeworkID, p.CurrentHomeworkTitle) {
+						s.rememberHomeworkLabels(ctx, p.CurrentCourse, []educoder.Homework{{ID: p.CurrentHomeworkID, Name: p.CurrentHomeworkTitle}})
+					}
 				}
 				report(event)
 			})

@@ -267,7 +267,7 @@ func TestAdminJobRetryCapabilitiesRejectUnknownNestedAndUnsupportedRequests(t *t
 			if response.StatusCode != http.StatusConflict || !strings.Contains(response.Body, "JOB_NOT_RETRYABLE") || calls.Load() != 0 {
 				t.Fatalf("protected task retried: %d %s", response.StatusCode, response.Body)
 			}
-			views, err := f.app.adminJobResponses(context.Background(), []jobs.AdminRecord{{Job: original, OwnerID: f.alice.Owner()}})
+			views, err := f.app.adminJobResponses(context.Background(), []jobs.AdminRecord{{Job: original, OwnerID: f.alice.Owner()}}, true)
 			if err != nil || len(views) != 1 || views[0].CanRetry || views[0].CanRecover != canRecoverJob(original) {
 				t.Fatalf("admin capabilities changed recovery boundary: %+v %v", views, err)
 			}

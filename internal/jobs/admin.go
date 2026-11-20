@@ -17,22 +17,38 @@ func (m *Manager) AdminList(ctx context.Context, limit int) ([]AdminRecord, erro
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	out := []AdminRecord{}
 	for rows.Next() {
 		s, e := readStored(rows)
 		if e != nil {
+			rows.Close()
 			return nil, e
 		}
 		out = append(out, AdminRecord{Job: clone(s.Job), OwnerID: s.owner})
 	}
-	return out, rows.Err()
+	err = rows.Err()
+	// Close the cursor before locking: the single store connection and the
+	// manager mutex are taken in the opposite order by a running worker.
+	rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	live := m.liveJobs("")
+	for i, record := range out {
+		if fresh, ok := live[record.ID]; ok {
+			out[i].Job = fresh
+		}
+	}
+	return out, nil
 }
 
 func (m *Manager) AdminGet(ctx context.Context, id string) (AdminRecord, error) {
 	s, err := readStored(m.db.QueryRowContext(ctx, `SELECT owner,payload,target,mutating,data FROM async_jobs WHERE id=?`, id))
 	if err != nil {
 		return AdminRecord{}, err
+	}
+	if job, ok := m.liveJob("", id); ok {
+		return AdminRecord{Job: job, OwnerID: s.owner}, nil
 	}
 	return AdminRecord{Job: clone(s.Job), OwnerID: s.owner}, nil
 }

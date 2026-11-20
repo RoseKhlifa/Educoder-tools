@@ -199,6 +199,39 @@ func cloneProgress(p *BatchProgress) *BatchProgress {
 		return nil
 	}
 	copy := *p
+	copy.Homeworks = cloneHomeworks(p.Homeworks)
+	return &copy
+}
+
+func cloneHomeworks(items []HomeworkProgress) []HomeworkProgress {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]HomeworkProgress, len(items))
+	for i, item := range items {
+		out[i] = item
+		out[i].Levels = append([]LevelProgress(nil), item.Levels...)
+		if item.StartedAt != nil {
+			at := *item.StartedAt
+			out[i].StartedAt = &at
+		}
+		if item.UpdatedAt != nil {
+			at := *item.UpdatedAt
+			out[i].UpdatedAt = &at
+		}
+	}
+	return out
+}
+
+// eventProgress keeps the per-event history to counters only. A job keeps up to
+// EventLimit events, so repeating the per-assignment detail in each of them
+// would multiply the stored job size by the event limit.
+func eventProgress(p *BatchProgress) *BatchProgress {
+	if p == nil {
+		return nil
+	}
+	copy := *p
+	copy.Homeworks = nil
 	return &copy
 }
 
@@ -209,15 +242,98 @@ func publicProgress(p *BatchProgress) *BatchProgress {
 	if p.TotalQuestions < 0 || p.TotalQuestions > 256 || p.CompletedQuestions < 0 || p.CompletedQuestions > p.TotalQuestions || p.CurrentExerciseID < 0 {
 		return nil
 	}
-	if p.TotalHomeworks < 0 || p.TotalHomeworks > 100 || p.CompletedHomeworks < 0 || p.CompletedHomeworks > p.TotalHomeworks || p.SkippedHomeworks < 0 || p.SkippedHomeworks > p.CompletedHomeworks || p.NeedsServiceHomeworks < 0 || p.CompletedHomeworks+p.NeedsServiceHomeworks > p.TotalHomeworks || (p.TotalLevels == 0 && p.TotalHomeworks == 0 && p.TotalQuestions == 0) || p.CurrentHomeworkID < 0 {
+	if p.TotalHomeworks < 0 || p.TotalHomeworks > 100 || p.CompletedHomeworks < 0 || p.CompletedHomeworks > p.TotalHomeworks || p.SkippedHomeworks < 0 || p.SkippedHomeworks > p.CompletedHomeworks || p.NeedsServiceHomeworks < 0 || p.CompletedHomeworks+p.NeedsServiceHomeworks > p.TotalHomeworks || (p.TotalLevels == 0 && p.TotalHomeworks == 0 && p.TotalQuestions == 0 && len(p.Homeworks) == 0) || p.CurrentHomeworkID < 0 {
 		return nil
 	}
 	result := *p
 	result.CurrentTitle = publicText(result.CurrentTitle, "")
 	result.CurrentHomeworkTitle = publicText(result.CurrentHomeworkTitle, "")
 	result.CurrentExerciseTitle = publicText(result.CurrentExerciseTitle, "")
+	result.Stage = publicLabel(result.Stage, "")
 	if result.CurrentCourse != "" && !identifier.MatchString(result.CurrentCourse) {
 		result.CurrentCourse = ""
 	}
+	result.Homeworks = publicHomeworks(p.Homeworks)
 	return &result
+}
+
+// publicHomeworks bounds and sanitizes the per-assignment detail. An entry that
+// cannot be represented publicly is dropped rather than published partially,
+// and the whole list is capped so no upstream plan can grow a stored job.
+func publicHomeworks(items []HomeworkProgress) []HomeworkProgress {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]HomeworkProgress, 0, min(len(items), 100))
+	for _, item := range items {
+		if len(out) >= 100 {
+			break
+		}
+		if item.HomeworkID < 0 || item.TotalLevels < 0 || item.TotalLevels > 100 || item.CurrentPosition < 0 || item.CurrentPosition > 500 {
+			continue
+		}
+		if !progressStatus(item.Status) {
+			continue
+		}
+		entry := item
+		entry.Title = publicText(item.Title, "")
+		entry.CourseName = publicText(item.CourseName, "")
+		entry.CurrentTitle = publicText(item.CurrentTitle, "")
+		entry.Stage = publicLabel(item.Stage, "")
+		entry.ReasonCode = publicLabel(item.ReasonCode, "")
+		if entry.Course != "" && !identifier.MatchString(entry.Course) {
+			entry.Course = ""
+		}
+		entry.CompletedLevels = clampCount(item.CompletedLevels, entry.TotalLevels)
+		entry.SkippedLevels = clampCount(item.SkippedLevels, entry.CompletedLevels)
+		entry.FailedLevels = clampCount(item.FailedLevels, entry.TotalLevels)
+		entry.Levels = publicLevels(item.Levels)
+		out = append(out, entry)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func publicLevels(items []LevelProgress) []LevelProgress {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]LevelProgress, 0, min(len(items), 100))
+	seen := map[int]bool{}
+	for _, item := range items {
+		if len(out) >= 100 {
+			break
+		}
+		if item.Position < 0 || item.Position > 500 || seen[item.Position] || !progressStatus(item.Status) {
+			continue
+		}
+		seen[item.Position] = true
+		out = append(out, LevelProgress{Position: item.Position, Title: publicText(item.Title, ""), Status: item.Status})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// progressStatus is the closed enum the live views render. An unknown status is
+// rejected so a new execution state cannot leak through as display text.
+func progressStatus(status string) bool {
+	switch status {
+	case "waiting", "running", "passed", "skipped", "failed", "stopped", "needs_attention":
+		return true
+	}
+	return false
+}
+
+func clampCount(value, limit int) int {
+	if value < 0 {
+		return 0
+	}
+	if value > limit {
+		return limit
+	}
+	return value
 }

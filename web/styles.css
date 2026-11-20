@@ -1879,3 +1879,115 @@ td { border-color:var(--line); }
 .asset-update-banner { position:sticky; top:0; z-index:80; display:flex; align-items:center; justify-content:center; flex-wrap:wrap; gap:12px; padding:10px 16px; background:var(--amber-bg); color:var(--amber); border-bottom:1px solid var(--line); }
 
 .job-recovery-message { margin:0; color:var(--muted); font-size:12px; line-height:1.6; }
+
+/* ---------------------------------------------------------------------------
+   Live progress: shared by the consumer progress page and the operator views.
+   One component renders a job's assignments and the levels inside them, so a
+   running job and a finished record read the same way on both sides.
+--------------------------------------------------------------------------- */
+.job-live {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
+  margin: 0; font-size: 13px; color: var(--ink-soft); line-height: 1.7;
+}
+.job-live small { color: var(--muted); font-size: 12px; }
+.job-live-attention { color: var(--amber); }
+.live-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--coral);
+  flex: none; align-self: center; animation: live-pulse 1.8s ease-in-out infinite;
+}
+@keyframes live-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
+
+.detail-stage { font-size: 13px; color: var(--coral-deep); font-weight: 600; }
+.detail-tally, .detail-retry { font-size: 12px; color: var(--muted); }
+.detail-section { margin-top: 24px; }
+.detail-section > h3 { font-size: 14px; margin-bottom: 4px; }
+
+.progress-tree { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 2px; }
+.progress-node {
+  display: flex; gap: 12px; align-items: flex-start;
+  padding: 13px 0; border-bottom: 1px solid var(--line);
+}
+.progress-node:last-child { border-bottom: 0; }
+.node-mark {
+  width: 24px; height: 24px; flex: none; border-radius: 50%;
+  display: grid; place-items: center; font-size: 12px;
+  background: var(--surface-2); color: var(--muted); border: 1px solid var(--line);
+}
+.progress-node.tone-completed .node-mark { background: var(--ok-bg); color: var(--ok); border-color: transparent; }
+.progress-node.tone-processing .node-mark { background: var(--doing-bg); color: var(--doing); border-color: transparent; }
+.progress-node.tone-support .node-mark { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
+.node-body { flex: 1; min-width: 0; display: grid; gap: 3px; }
+.node-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.node-head strong { font-size: 14px; overflow-wrap: anywhere; }
+.node-course, .node-counts, .node-current, .node-reason, .node-time {
+  margin: 0; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere;
+}
+.node-course, .node-counts, .node-time { color: var(--muted); }
+.node-current { color: var(--doing); font-weight: 600; }
+.node-reason { color: var(--amber); }
+.progress-tree-empty { font-size: 13px; }
+
+.level-track { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.level-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+  padding: 4px 9px; border-radius: var(--radius-sm); border: 1px solid var(--line);
+  background: var(--surface); font-size: 12px; color: var(--muted);
+}
+.level-chip .level-index { font-variant-numeric: tabular-nums; color: var(--muted-2); }
+.level-chip .level-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 15em; color: var(--ink-soft); }
+.level-chip .level-state { font-size: 11px; }
+.level-chip .level-mark { font-size: 11px; }
+.level-chip.tone-completed { background: var(--ok-bg); border-color: transparent; color: var(--ok); }
+.level-chip.tone-processing { background: var(--doing-bg); border-color: transparent; color: var(--doing); font-weight: 600; }
+.level-chip.tone-support { background: var(--warn-bg); border-color: transparent; color: var(--warn); }
+
+/* Operator overview: live jobs, queue pressure and failures by reason. */
+.admin-pressure { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 0 22px; }
+.admin-active-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }
+.admin-active-card {
+  border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 15px;
+  background: var(--surface); display: grid; gap: 6px; align-content: start;
+}
+.admin-active-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.admin-active-head strong { font-size: 14px; }
+.admin-active-head p { margin: 2px 0 0; }
+.admin-active-stage {
+  margin: 0; display: flex; align-items: center; gap: 7px;
+  font-size: 13px; font-weight: 600; color: var(--doing); overflow-wrap: anywhere;
+}
+.admin-active-actions { display: flex; gap: 6px; margin-top: 2px; }
+.admin-live-stage { display: inline-flex; align-items: center; gap: 6px; color: var(--doing); font-weight: 600; }
+.admin-auto-retry { color: var(--amber); }
+.admin-progress { margin-top: 22px; }
+.admin-reason-groups { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.admin-reason-groups > li { padding: 13px 0; border-bottom: 1px solid var(--line); }
+.admin-reason-groups > li:last-child { border-bottom: 0; }
+.admin-reason-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.admin-reason-head strong { font-size: 14px; overflow-wrap: anywhere; }
+.admin-reason-groups p { margin: 3px 0 0; }
+.admin-reason-actions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
+
+@media (max-width: 620px) {
+  .progress-node { gap: 10px; }
+  .node-head { flex-direction: column; align-items: flex-start; gap: 4px; }
+  .level-chip .level-name { max-width: 9em; }
+  .admin-active-list { grid-template-columns: minmax(0, 1fr); }
+  .admin-pressure { grid-template-columns: minmax(0, 1fr); }
+  .admin-reason-head { flex-direction: column; align-items: flex-start; gap: 3px; }
+}
+
+/* The job card footer now carries a live status line as well as the bar and
+   the actions. Let it wrap so a long "what is happening now" sentence pushes
+   the controls onto their own row instead of overlapping them. */
+.job-footer { flex-wrap: wrap; row-gap: 8px; }
+.job-footer > .job-progress { flex: 1 1 260px; min-width: 0; margin-block: 0; }
+.job-footer > .job-live { flex: 1 1 100%; min-width: 0; }
+.job-footer > .job-actions { margin-left: auto; }
+.job-live > span:not(.live-dot) { flex: 1 1 auto; min-width: 0; }
+.job-live > small { flex: 1 1 100%; }
+@media (max-width: 620px) {
+  .job-footer { align-items: flex-start; }
+  .job-footer > .job-progress { flex-basis: 100%; }
+  .job-footer > .text-button, .job-footer > .job-actions { margin-left: 0; }
+}

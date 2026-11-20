@@ -34,8 +34,16 @@ func (s *Server) runAuthorized(ctx context.Context, owner string, run func(conte
 		return run(ctx)
 	}
 	execCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	// The watcher reads the platform store. Join it before returning, so no
+	// platform query outlives the job: shutdown closes that store right after
+	// the job manager's workers finish.
+	watcherDone := make(chan struct{})
+	defer func() {
+		cancel()
+		<-watcherDone
+	}()
 	go func() {
+		defer close(watcherDone)
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 		for {
