@@ -165,6 +165,40 @@ func TestPlatformLoginRetainsCSRFAndCookieProtectionsWithoutCards(t *testing.T) 
 	}
 }
 
+func TestPhoneCodeEndpointAppliesOriginAndSendLimits(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.WebOrigin = "https://service.example"
+	fake := &fakeClient{}
+	app := NewServerWithFactory(cfg, func(string) EducoderClient { return fake })
+	now := time.Now()
+	app.loginLimits.now = func() time.Time { return now }
+	request := func(origin string) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodPost, "http://service.example/api/auth/sms/send", strings.NewReader(`{"phone":"13000000000"}`))
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		w := httptest.NewRecorder()
+		app.ServeHTTP(w, r)
+		return w
+	}
+	if response := request("https://attacker.example"); response.Code != http.StatusForbidden || fake.codeSent != "" {
+		t.Fatalf("foreign-origin SMS request reached upstream: %d %s", response.Code, fake.codeSent)
+	}
+	for i := 0; i < 3; i++ {
+		if response := request(cfg.WebOrigin); response.Code != http.StatusOK {
+			t.Fatalf("SMS request %d = %d %s", i+1, response.Code, response.Body.String())
+		}
+		if response := request(cfg.WebOrigin); response.Code != http.StatusTooManyRequests || response.Header().Get("Retry-After") != "60" {
+			t.Fatalf("SMS cooldown ignored: %d", response.Code)
+		}
+		now = now.Add(time.Minute)
+	}
+	if response := request(cfg.WebOrigin); response.Code != http.StatusTooManyRequests || response.Header().Get("Retry-After") != "300" {
+		t.Fatalf("fourth SMS request was not limited: %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestLegacyCardConfigurationIgnoredAndEndpointsRemoved(t *testing.T) {
 	for _, value := range []string{"true", "invalid-old-value"} {
 		t.Setenv("ACCESS_CARD_REQUIRED", value)

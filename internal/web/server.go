@@ -109,6 +109,7 @@ type Server struct {
 	jobs                *JobRuntime
 	platform            *platform.Store
 	loginLimits         *loginLimiter
+	wechatLogins        *wechatLoginStore
 	questionBankSummary questionBankSummaryCache
 	todaySummary        todaySummaryCache
 	settledProgress     *settledProgressCache
@@ -138,7 +139,7 @@ func NewServerWithFactory(config Config, factory ClientFactory) *Server {
 	if factory == nil {
 		factory = func(baseURL string) EducoderClient { return educoder.New(baseURL) }
 	}
-	s := &Server{config: config, store: NewSessionStore(config.SessionTTL), factory: factory, avatars: avatar.New(), loginLimits: newLoginLimiter(), settledProgress: newSettledProgressCache()}
+	s := &Server{config: config, store: NewSessionStore(config.SessionTTL), factory: factory, avatars: avatar.New(), loginLimits: newLoginLimiter(), wechatLogins: newWeChatLoginStore(), settledProgress: newSettledProgressCache()}
 	s.static = newStaticHandler(config.StaticDir)
 	return s
 }
@@ -267,6 +268,10 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request, requestID str
 		return
 	}
 	parts := splitPath(r.URL.Path)
+	if len(parts) == 4 && parts[0] == "api" && parts[1] == "auth" && parts[2] == "wechat" {
+		s.handleWeChatLogin(w, r, requestID, parts[3])
+		return
+	}
 	if len(parts) == 2 && parts[0] == "api" && parts[1] == "collections" {
 		s.handleCollection(w, r, requestID)
 		return
@@ -277,6 +282,21 @@ func (s *Server) handleAPI(w http.ResponseWriter, r *http.Request, requestID str
 			return
 		}
 		s.handleLogin(w, r, requestID)
+		return
+	}
+	if len(parts) == 4 && parts[0] == "api" && parts[1] == "auth" && parts[2] == "sms" {
+		if r.Method != http.MethodPost {
+			s.methodError(w, requestID)
+			return
+		}
+		switch parts[3] {
+		case "send":
+			s.handleSendPhoneCode(w, r, requestID)
+		case "login":
+			s.handlePhoneLogin(w, r, requestID)
+		default:
+			s.writeError(w, requestID, http.StatusNotFound, "NOT_FOUND", "接口不存在")
+		}
 		return
 	}
 	if len(parts) == 3 && parts[0] == "api" && parts[1] == "auth" && parts[2] == "me" {
@@ -358,29 +378,9 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, requestID s
 		s.writeError(w, requestID, http.StatusUnauthorized, "AUTH_FAILED", "登录失败，请检查账号或密码")
 		return
 	}
-	var principal platform.User
-	if s.platform != nil {
-		principal, err = s.platform.UpsertLogin(ctx, platform.Identity{UpstreamID: user.UserID, Login: user.Login, Name: user.Name})
-		if err != nil {
-			s.platformLoginError(w, requestID, err)
-			return
-		}
-	}
-	if old, err := r.Cookie(sessionCookieName); err == nil {
-		s.store.Delete(old.Value)
-	}
-	// Store only the public user fields returned by the upstream client.
-	sessionID, err := s.store.createPrincipal(client, *user, resolveAvatarKey(r.Context(), client, *user), principal)
-	if err != nil {
-		s.writeError(w, requestID, http.StatusInternalServerError, "SESSION_CREATE_FAILED", "创建会话失败")
-		return
-	}
-	s.setSessionCookie(w, sessionID)
-	response := map[string]any{"user": toUserDTO(*user), "platform": principalDTO(principal)}
-	if s.jobs != nil && s.jobs.collect != nil {
-		s.enqueueCollection(r.Context(), client, sessionJobOwner(Session{User: *user, Principal: principal}), "")
-	}
-	s.writeJSON(w, requestID, http.StatusOK, response)
+	// Password and phone-code authentication share the same platform identity
+	// and server-side session lifecycle.
+	s.completeLogin(w, r, requestID, client, user)
 }
 
 // Profile requests stay on the authenticated protocol client. Only a public

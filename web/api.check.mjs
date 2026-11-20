@@ -444,6 +444,52 @@ await test('browser API uses the Go workbench contract', async t => {
     assert.deepEqual(JSON.parse(request.options.body), { login: 'demo', password: 'test-password' });
     assert.doesNotMatch(request.url, /test-password/);
   });
+  await t.test('phone-code authentication sends secrets only in same-origin POST bodies', async () => {
+    const requests = [];
+    globalThis.fetch = async (url, options) => { requests.push({url, options}); return envelope({ user: { login: 'demo', name: '同学' }, platform: { role: 'user', status: 'active' } }); };
+    const api = new BrowserApi();
+    await api.sendPhoneCode('13000000000');
+    await api.loginWithPhone('13000000000', 'sms-code-canary');
+    assert.equal(requests[0].url, '/api/auth/sms/send');
+    assert.deepEqual(JSON.parse(requests[0].options.body), { phone: '13000000000' });
+    assert.equal(requests[1].url, '/api/auth/sms/login');
+    assert.deepEqual(JSON.parse(requests[1].options.body), { phone: '13000000000', code: 'sms-code-canary' });
+    assert.ok(requests.every(({options}) => options.method === 'POST' && options.credentials === 'include'));
+    assert.ok(requests.every(({url}) => !url.includes('13000000000') && !url.includes('sms-code-canary')));
+  });
+  await t.test('WeChat uses only same-origin empty POSTs and projects the verified platform identity', async () => {
+    const requests = [], controller = new AbortController();
+    globalThis.fetch = async (url, options) => {
+      requests.push({ url, options });
+      return envelope(url.endsWith('/start') ? { status: 'waiting', expiresInSeconds: 300, uuid: 'private-uuid' }
+        : url.endsWith('/cancel') ? { status: 'canceled' }
+        : { status: 'succeeded', user: { login: 'verified-user', name: '同学' }, platform: { role: 'admin', status: 'active' }, code: 'private-oauth-code' });
+    };
+    const api = new BrowserApi();
+    assert.deepEqual(await api.startWechatLogin(), { status: 'waiting', expiresInSeconds: 300 });
+    const result = await api.pollWechatLogin(controller.signal);
+    assert.equal(result.status, 'succeeded'); assert.equal(result.user.login, 'verified-user'); assert.equal(result.user.role, 'admin');
+    assert.equal('code' in result, false); assert.equal('uuid' in result, false);
+    await api.cancelWechatLogin();
+    assert.deepEqual(requests.map(request => request.url), ['/api/auth/wechat/start', '/api/auth/wechat/poll', '/api/auth/wechat/cancel']);
+    assert.ok(requests.every(({ options }) => options.method === 'POST' && options.body === '{}' && options.credentials === 'include'));
+    assert.equal(requests[1].options.signal, controller.signal);
+  });
+  await t.test('WeChat rejects malformed QR and poll responses and retains only supported terminal states', async () => {
+    const api = new BrowserApi();
+    for (const payload of [{}, { status: 'waiting' }, { status: 'waiting', expiresInSeconds: '300' }, { status: 'waiting', expiresInSeconds: -1 }, { status: 'waiting', expiresInSeconds: 9000 }, { status: 'succeeded', expiresInSeconds: 300 }]) {
+      globalThis.fetch = async () => envelope(payload);
+      await assert.rejects(api.startWechatLogin(), error => error.code === 'INVALID_RESPONSE');
+    }
+    for (const payload of [{}, { status: '405', user: { login: 'x' } }, { status: 'succeeded' }, { status: 'succeeded', user: { login: '' } }]) {
+      globalThis.fetch = async () => envelope(payload);
+      await assert.rejects(api.pollWechatLogin(), error => error.code === 'INVALID_RESPONSE');
+    }
+    for (const status of ['waiting', 'scanned', 'canceled', 'expired']) {
+      globalThis.fetch = async () => envelope({ status, uuid: 'private-uuid', code: 'private-code' });
+      assert.deepEqual(await api.pollWechatLogin(), { status });
+    }
+  });
   await t.test('retired access-card configuration and administration are absent from the browser API', () => {
     const api = new BrowserApi();
     for (const method of ['authConfig', 'adminCards', 'adminCreateCard', 'adminRevokeCard']) assert.equal(method in api, false, method);

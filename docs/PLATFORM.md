@@ -8,7 +8,7 @@
 
 ## 身份与个人数据分区
 
-1. 用户提交头歌登录名和密码，Go 服务向上游核验。
+1. 用户选择账号密码、手机验证码或微信扫码。Go 服务完成对应的上游认证；短信验证码与微信授权码不入库，微信扫码事务通过独立的 HttpOnly Cookie 关联到当前浏览器。
 2. 上游必须返回正整数 `user_id`；平台以此自动查找或建立本地身份，生成平台用户 ID 与独立 `tenant_id`。
 3. 平台存储上游数字 ID、当前登录名、姓名、角色、状态和时间戳；不存储头歌密码、Cookie 或模型密钥。
 4. 浏览器取得随机的站内 HttpOnly 会话 Cookie，上游客户端及 CookieJar 只留在服务端内存。
@@ -25,6 +25,12 @@
 | 方法 | 路径 | 行为 |
 | --- | --- | --- |
 | POST | `/api/auth/login` | 校验头歌账号并自动建档；只接受 `login`、`password` |
+| POST | `/api/auth/sms/send` | 向头歌请求登录验证码，只接受 `phone`；服务端冷却 60 秒 |
+| POST | `/api/auth/sms/login` | 校验 `phone`、`code`，同上游会话复核用户身份并自动建档 |
+| POST | `/api/auth/wechat/start` | `{}`，创建浏览器绑定的 5 分钟扫码事务 |
+| GET | `/api/auth/wechat/image` | 当前扫码事务的同源图片，禁止缓存 |
+| POST | `/api/auth/wechat/poll` | `{}`，读取扫码状态，确认后消费授权码并建立站内会话 |
+| POST | `/api/auth/wechat/cancel` | `{}`，取消该扫码事务、网络工作及其已创建的会话 |
 | GET | `/api/auth/me` | 返回本人公开头歌资料与平台 `id / tenant_id / role / status` |
 | POST | `/api/auth/logout` | 删除当前站内会话并清 Cookie |
 | GET | `/api/service/today-summary` | 按可核验记录累计及北京时间当日实际完成的学生数与题数，仅返回日期、时区和计数 |

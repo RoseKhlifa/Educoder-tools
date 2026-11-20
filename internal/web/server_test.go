@@ -16,6 +16,10 @@ import (
 type fakeClient struct {
 	loginName string
 	password  string
+	phone     string
+	code      string
+	codeSent  string
+	phoneErr  error
 	user      educoder.User
 	courses   []educoder.Course
 	homeworks []educoder.Homework
@@ -27,6 +31,21 @@ func (f *fakeClient) Login(_ context.Context, login, password string) (*educoder
 	user := f.user
 	if user.Login == "" {
 		user = educoder.User{UserID: 9, Login: login, Name: "学生", Identity: "student"}
+	}
+	return &user, nil
+}
+func (f *fakeClient) SendPhoneVerificationCode(_ context.Context, phone string) error {
+	f.codeSent = phone
+	return f.phoneErr
+}
+func (f *fakeClient) LoginWithPhone(_ context.Context, phone, code string) (*educoder.User, error) {
+	f.phone, f.code = phone, code
+	if f.phoneErr != nil {
+		return nil, f.phoneErr
+	}
+	user := f.user
+	if user.Login == "" {
+		user = educoder.User{UserID: 9, Login: "sms-student", Name: "短信用户", Identity: "student"}
 	}
 	return &user, nil
 }
@@ -108,6 +127,39 @@ func TestLoginCoursesHomeworksEnter(t *testing.T) {
 	after := doJSON(t, client, http.MethodGet, ts.URL+"/api/courses", "")
 	if after.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("courses after logout = %d %s", after.StatusCode, after.Body)
+	}
+}
+
+func TestPhoneCodeLoginCreatesTheSameServerSideSession(t *testing.T) {
+	ts, fake := newTestServer()
+	defer ts.Close()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &http.Client{Jar: jar}
+	const phone = "13000000000"
+	const code = "sms-code-canary"
+	sent := doJSON(t, client, http.MethodPost, ts.URL+"/api/auth/sms/send", `{"phone":"`+phone+`"}`)
+	if sent.StatusCode != http.StatusOK || !strings.Contains(sent.Body, `"sent":true`) || strings.Contains(sent.Body, phone) {
+		t.Fatalf("send phone code = %d %s", sent.StatusCode, sent.Body)
+	}
+	if fake.codeSent != phone {
+		t.Fatalf("phone code sender received %q", fake.codeSent)
+	}
+	login := doJSON(t, client, http.MethodPost, ts.URL+"/api/auth/sms/login", `{"phone":"`+phone+`","code":"`+code+`"}`)
+	if login.StatusCode != http.StatusOK || strings.Contains(login.Body, phone) || strings.Contains(login.Body, code) {
+		t.Fatalf("phone login = %d %s", login.StatusCode, login.Body)
+	}
+	if fake.phone != phone || fake.code != code {
+		t.Fatal("phone login did not pass its request values to the protocol client")
+	}
+	if len(jarCookies(t, jar, ts.URL)) != 1 {
+		t.Fatal("phone login did not create the usual HttpOnly session cookie")
+	}
+	me := doJSON(t, client, http.MethodGet, ts.URL+"/api/auth/me", "")
+	if me.StatusCode != http.StatusOK || !strings.Contains(me.Body, `"login":"sms-student"`) {
+		t.Fatalf("phone session identity = %d %s", me.StatusCode, me.Body)
 	}
 }
 

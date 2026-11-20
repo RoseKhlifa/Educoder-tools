@@ -1306,6 +1306,18 @@ mark {
 .login-card .fine { margin: 4px 0 0; font-size: 13px; line-height: 1.8; color: var(--ink-3); }
 .login-card .fine .link { font-size: 13px; }
 .login-card .btn.red { height: 44px; font-size: 16px; }
+.login-card .auth-methods { flex-wrap: nowrap; gap: 0; border-bottom: 1px solid var(--rule); padding-bottom: 7px; }
+.login-card .auth-methods button { flex: 1; justify-content: center; white-space: nowrap; font-size: 13.5px; }
+.login-card .auth-methods button:disabled { opacity: .55; cursor: default; }
+.code-entry { display: grid; grid-template-columns: minmax(0, 1fr) 122px; align-items: end; gap: 8px; }
+.code-entry .field { min-width: 0; }
+.code-send { height: 40px; min-width: 0; padding-inline: 8px; white-space: nowrap; font-size: 12.5px; }
+.login-success { border-left: 2px solid var(--green, #387a4a); padding: 7px 10px; color: var(--green, #387a4a); background: rgba(56, 122, 74, .08); font-size: 13px; line-height: 1.6; }
+.wechat-login-status { border: 1px solid var(--rule); border-left: 3px solid var(--red); padding: 13px 14px; background: rgba(255, 255, 255, .52); text-align: center; }
+.wechat-login-status b { font-size: 14px; }
+.wechat-login-status p { margin: 6px 0 0; color: var(--ink-2); font-size: 13px; line-height: 1.7; }
+.wechat-login-status .btn { margin-top: 14px; }
+.wechat-qr { display: block; width: min(200px, 100%); height: auto; aspect-ratio: 1; margin: 14px auto 0; padding: 8px; box-sizing: content-box; max-width: calc(100% - 16px); background: white; border: 1px solid var(--rule); border-radius: 5px; }
 
 .input-wrap { position: relative; display: block; }
 .input-wrap > svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--ink-3); pointer-events: none; }

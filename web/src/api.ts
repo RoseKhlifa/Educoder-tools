@@ -337,8 +337,16 @@ function normalizeEnteredTask(value: unknown): EnteredTask {
   };
 }
 
+export interface WechatLoginStart { status: 'waiting'; expiresInSeconds: number }
+export type WechatLoginResult = { status: 'waiting' | 'scanned' | 'canceled' | 'expired' } | { status: 'succeeded'; user: User };
+
 export interface EducoderApi {
   login(login: string, password: string): Promise<User>;
+  sendPhoneCode(phone: string): Promise<void>;
+  loginWithPhone(phone: string, code: string): Promise<User>;
+  startWechatLogin(): Promise<WechatLoginStart>;
+  pollWechatLogin(signal?: AbortSignal): Promise<WechatLoginResult>;
+  cancelWechatLogin(): Promise<void>;
   me(): Promise<User>;
   logout(): Promise<void>;
   courses(): Promise<Course[]>;
@@ -429,6 +437,43 @@ export class BrowserApi implements EducoderApi {
       body: JSON.stringify({ login: login.trim(), password }),
     });
     return normalizeUser(payload);
+  }
+
+  async sendPhoneCode(phone: string): Promise<void> {
+    await this.request<unknown>('/api/auth/sms/send', {
+      method: 'POST',
+      body: JSON.stringify({ phone: phone.trim() }),
+    });
+  }
+
+  async loginWithPhone(phone: string, code: string): Promise<User> {
+    const payload = await this.request<unknown>('/api/auth/sms/login', {
+      method: 'POST',
+      body: JSON.stringify({ phone: phone.trim(), code }),
+    });
+    return normalizeUser(payload);
+  }
+
+  async startWechatLogin(): Promise<WechatLoginStart> {
+    const payload = asRecord(await this.request<unknown>('/api/auth/wechat/start', { method: 'POST', body: '{}' }));
+    const expires = payload.expiresInSeconds;
+    if (payload.status !== 'waiting' || typeof expires !== 'number' || !Number.isSafeInteger(expires) || expires <= 0 || expires > 600) {
+      throw new ApiRequestError('微信登录暂时不可用，请重新获取二维码', 200, 'INVALID_RESPONSE');
+    }
+    return { status: 'waiting', expiresInSeconds: expires };
+  }
+
+  async pollWechatLogin(signal?: AbortSignal): Promise<WechatLoginResult> {
+    const payload = asRecord(await this.request<unknown>('/api/auth/wechat/poll', { method: 'POST', body: '{}', signal }));
+    if (payload.status === 'succeeded' && typeof asRecord(payload.user).login === 'string' && String(asRecord(payload.user).login).trim()) {
+      return { status: 'succeeded', user: normalizeUser(payload) };
+    }
+    if (payload.status === 'waiting' || payload.status === 'scanned' || payload.status === 'canceled' || payload.status === 'expired') return { status: payload.status };
+    throw new ApiRequestError('微信登录暂未完成，请重新获取二维码', 200, 'INVALID_RESPONSE');
+  }
+
+  async cancelWechatLogin(): Promise<void> {
+    await this.request<unknown>('/api/auth/wechat/cancel', { method: 'POST', body: '{}' });
   }
 
   async me(): Promise<User> { return normalizeUser(await this.request<unknown>('/api/auth/me')); }

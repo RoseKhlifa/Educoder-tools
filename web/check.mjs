@@ -20,7 +20,8 @@ for (const [, selector, body] of css.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
   }
 }
 
-for (const route of ['/api/auth/login', '/api/auth/me', '/api/courses', '/api/jobs', '/api/admin/overview', '/api/admin/users', '/api/admin/jobs', '/api/admin/audit']) assert.ok(api.includes(route), `missing route ${route}`);
+for (const route of ['/api/auth/login', '/api/auth/sms/send', '/api/auth/sms/login', '/api/auth/wechat/start', '/api/auth/wechat/poll', '/api/auth/wechat/cancel', '/api/auth/me', '/api/courses', '/api/jobs', '/api/admin/overview', '/api/admin/users', '/api/admin/jobs', '/api/admin/audit']) assert.ok(api.includes(route), `missing route ${route}`);
+assert.doesNotMatch(`${source}\n${api}`, /eval\s*\(|qrconnect|open\.weixin\.qq\.com|wx_code|signedState/, 'browser must not execute or manage the upstream WeChat protocol');
 assert.match(api, /credentials:\s*'include'/);
 assert.doesNotMatch(api, /access_code|access_card|cardCode|authConfig|adminCards|adminCreateCard|adminRevokeCard|\/api\/admin\/cards|\/api\/auth\/config/, 'retired access-card API must not remain in the browser bundle');
 const admin = await readFile(new URL('./src/admin.ts', import.meta.url), 'utf8');

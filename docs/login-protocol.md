@@ -2,7 +2,7 @@
 
 核对日期：2026-11-20。本文记录头歌官方 Web 客户端的登录协议，说明请求参数、状态流转、会话建立方式及验证范围。
 
-当前头歌妈妈的 Go 客户端只实现账号密码登录。本文补充的是手机验证码与微信扫码的协议研究，未增加应用接口、前端入口或后端适配器。
+第 1～7 节保留 2026-11-20 官方协议取证及其验证范围；第 8 节记录随后新增的本站 Go 适配、前端入口和验证结果。后者实现了密码、短信验证码与服务端微信扫码登录，不能把模拟测试覆盖等同于真实账号认证已成功。
 
 ## 1. 入口与验证范围
 
@@ -318,9 +318,9 @@ https://open.weixin.qq.com/connect/oauth2/authorize
 
 上述为移动分支 APPID；当前函数还保留使用桌面 APPID 的非移动分支。独立 `/wxlogin.html` 的 iframe 使用桌面 APPID、`scope=snsapi_login`，但 state 是单独的 `null`。这些入口的 scope、APPID 和 state 不能统一成同一个固定模板。
 
-## 5. 未来适配时必须验证的接口契约
+## 5. 初次研究列出的验证项
 
-以下为协议实施所需的验证条件，本次没有实现这些功能：
+以下为初次协议研究列出的验证条件；后续实现和实际覆盖见第 8 节：
 
 | 环节 | 需要补充的真实证据 |
 | --- | --- |
@@ -332,9 +332,9 @@ https://open.weixin.qq.com/connect/oauth2/authorize
 | 浏览器与 Go 会话衔接 | 明确已授权 OAuth code 如何到达 Go 认证流程；验证官方回调域限制，不能假定二维码显示即建立本站会话 |
 | 取消/超时/重启 | 本次二维码或验证码是否仍有效、是否已被消费；用户重新发起与网络自动重放须分开 |
 
-官方 APPID 的回调域已在其微信开放平台配置。静态客户端不能证明可以把 `redirect_uri` 任意改成 `touge.mom`；浏览器同源规则也阻止本站直接读取官方域回调页面的会话。未来方案必须先解决授权返回和会话衔接，再接到本站现有的数字用户身份核验与 HttpOnly 会话流程。
+官方 APPID 的回调域已在其微信开放平台配置。静态客户端不能证明可以把 `redirect_uri` 任意改成 `touge.mom`；浏览器同源规则也阻止本站直接读取官方域回调页面的会话。第 8 节的适配保留官方回调地址，由 Go 持有二维码事务、读取微信轮询中的确认结果，并向官方 callback API 完成会话建立，因此不依赖浏览器跨域读取官方返回页。
 
-当前仓库的 `internal/educoder/client.go`、`internal/web/platform_auth.go`、`internal/platform` 可以作为现有密码登录及平台身份边界的参照；本文没有开放新的站内 API。微信 iframe、短信登录参数、Cookie、`cs`、授权 code 和二维码 UUID 均不进入题库、任务持久化、镜像、Git 或公开错误文本。原始取证在忽略目录保留，Git 只收录字段说明和脱敏证据索引。
+`internal/educoder/client.go`、`internal/web/platform_auth.go`、`internal/platform` 承担协议及平台身份边界。新增站内 API 见第 8 节。短信验证码、Cookie、`cs`、授权 code 和二维码 UUID 均不进入题库、任务持久化、镜像、Git 或公开错误文本。原始取证在忽略目录保留，Git 只收录字段说明和脱敏证据索引。
 
 ## 6. 证据索引与复核方法
 
@@ -378,3 +378,65 @@ REA 隔离浏览器使用空存储，结束后已终止其自有进程。本次�
 ## 7. 文档边界
 
 本文是 2026-11-20 的接口与客户端流程记录。新增功能前应重新确认当前静态资源版本、完成真实用户授权下的成功样本，并根据上游实际响应更新字段与状态。普通项目启动、测试、发布、部署和数据备份分别见 [README](../README.md)、[平台说明](PLATFORM.md) 与 [部署说明](../deploy/README.md)。
+
+## 8. 本站登录适配
+
+实现核对日期：2026-11-21。协议代码位于 `internal/educoder/client.go` 和 `wechat_login.go`，站内认证位于 `internal/web/platform_auth.go` 和 `wechat_auth.go`，界面位于 `web/src/app.ts`。TypeScript 只调用本站 API；签名、短信摘要、微信轮询和认证回调均由 Go 处理。
+
+### 8.1 站内 API
+
+所有 JSON API 返回 `{data,error,requestId}`，要求同源请求并设置 `Cache-Control: no-store`。下列 POST 的输入均为 JSON body，拒绝未知字段；验证码和授权码不出现在本站 URL 中。
+
+| 方法与路径 | 输入 | 成功结果 |
+| --- | --- | --- |
+| `POST /api/auth/login` | `{login,password}` | `{status:"succeeded",user,platform}` |
+| `POST /api/auth/sms/send` | `{phone}` | `{sent:true,retryAfterSeconds:60}` |
+| `POST /api/auth/sms/login` | `{phone,code}` | `{status:"succeeded",user,platform}` |
+| `POST /api/auth/wechat/start` | `{}` | `{status:"waiting",expiresInSeconds:300}`；设置独立事务 Cookie |
+| `GET /api/auth/wechat/image` | 当前事务 Cookie；允许非敏感缓存刷新参数 | 实际格式的二维码图片，支持 PNG/JPEG/GIF |
+| `POST /api/auth/wechat/poll` | `{}` 与当前事务 Cookie | `waiting/scanned/canceled/expired` 或 `{status:"succeeded",user,platform}` |
+| `POST /api/auth/wechat/cancel` | `{}` 与当前事务 Cookie | `{status:"canceled"}`；取消网络工作并撤销本事务已创建的会话 |
+
+手机号码使用官方表单的 `1` 开头 11 位数字规则；短信 code 非空且不超过 128 字节，不捏造严格 6 位约束。发码前先调用手机号检查接口，存在性响应须包含有效整数 status；按官方调用点处理 `status>0`，而非猜测未记录的负状态含义。发码接受明确的 `0/1`，其他或缺失状态均失败；`sent` 仅表示接口接受请求，不证明短信实际送达。发送结果不确定时仍保留冷却，提示先查看短信。
+
+验证码登录接受明确的 `status=0`，随后要求 `_educoder_session` 及同 CookieJar 用户信息的正数字 ID。`-4` 映射为 `SMS_BINDING_REQUIRED`，`-5` 为 `SMS_RESTRICTED`；不会替用户绑定或解锁考试。每个手机号 60 秒内最多请求一次、5 分钟最多三次；登录尝试按账号 5 分钟最多 12 次，短信发送/微信创建各按连接来源 5 分钟最多 120 次。来源使用实际连接地址，反向代理后可能聚合多个用户，不信任任意传入的 `X-Forwarded-For`。
+
+### 8.2 微信事务与身份建立
+
+```mermaid
+sequenceDiagram
+    actor U as 用户
+    participant B as 本站浏览器
+    participant G as Go 认证服务
+    participant W as 微信
+    participant E as 头歌 API
+    B->>G: start {}
+    G->>W: 官方 qrconnect 与二维码图片
+    G-->>B: 事务 HttpOnly Cookie + 有效时间
+    B->>G: image（同源、事务 Cookie）
+    U->>W: 微信扫一扫并确认
+    B->>G: poll {}
+    G->>W: UUID 对应的有界长轮询
+    W-->>G: 405 与一次性 wx_code
+    G->>E: callback.json?code=...（只消费一次）
+    E-->>G: Set-Cookie 或 cs
+    G->>E: 同 CookieJar get_user_info
+    G->>G: 数字身份、平台账户状态核验
+    G-->>B: 站内 HttpOnly 会话 + user/platform
+```
+
+保留官方 APPID、回调地址和 `state=null`，不修改微信注册回调域。服务端读取微信确认脚本只接受已核对的 `wx_errcode/wx_code` 赋值语法，绝不执行远端脚本。网络目的地址限定为所需微信 host/path 和头歌 callback，禁止跟随重定向；响应体、图片尺寸和请求时间均有限制。真实二维码图片曾返回非 PNG 格式，因此不能硬编码 PNG 解码或 Content-Type。
+
+每个二维码事务拥有独立 Go 客户端和 256 位随机浏览器 Cookie（HttpOnly、SameSite=Strict、生产 HTTPS 下 Secure，路径限定 `/api/auth/wechat`），最长 5 分钟；同时最多保留 128 个事务。浏览器不能提交 UUID、OAuth code、用户 ID、返回 host 或上游 Cookie。二维码创建时机为主动选择微信或刷新，轮询串行进行，页面隐藏时暂停。切换方式或刷新时先等待旧事务取消，再发起另一认证，避免迟到结果串号。
+
+长轮询最长 35 秒；确认后的 callback/身份复核另给 20 秒预算，仍受事务总有效期约束。确认后即标记 code 消费已开始，未知结果不自动重放；浏览器断开不打断已经开始的回调，显式取消会打断。成功结果短期保留在原事务，下次 poll 可以补发同一个站内会话而不重复 callback、建会话或采集。补发前再次检查平台账号权限。取消仅撤销此扫码事务建立的会话。
+
+`new_user` 映射为 `WECHAT_BINDING_REQUIRED`；callback `-3` 为 `WECHAT_RESTRICTED`，提示用户先在官网处理。本站只登录已有关联账号，不新增注册、微信绑定或条款代确认流程。
+
+### 8.3 会话与验证范围
+
+仅成功的密码/验证码/微信认证响应允许从 `cs` 更新自己的 `_educoder_session`，并支持普通 `Set-Cookie`；缺少、空值、`null/logout` 标记或非法会话均不作为已认证身份。新手机/微信认证先清空旧上游认证状态，失败也清空，防止误用前一个账号。三种方式共用数字平台身份、账号停用检查、站内会话及登录后只读采集入口。原始响应文本不进入用户错误提示。
+
+自动化测试覆盖短信参数、摘要、状态、Cookie/`cs`、身份缺失/错误、限制/绑定分支；微信覆盖二维码解析、图片格式、脚本严格解析、405 确认回调、Cookie/身份、取消/过期、重复轮询和成功响应丢失恢复；前端覆盖方式切换、草稿、短信不确定结果冷却、串行轮询、隐藏恢复及迟到响应。
+
+真实核验已完成：创建官方二维码、读取有效图片、一次轮询返回 `waiting`；本站本地浏览器已实际加载 470×470 二维码。用户实际扫码后，官方 callback 返回需要账号关联的分支，本站正确显示 `WECHAT_BINDING_REQUIRED` 并未建立会话。随后用户在本站本地预览实际完成短信发码、输入收到的验证码并成功登录，工作台成功读取课程列表，验证了同上游会话身份复核与站内会话链路。已绑定微信账号的正式登录成功仍待真实账号验证，当前不能把模拟通过写成该项已通过。原始材料和脱敏烟测摘要位于忽略目录，不随发布入 Git。

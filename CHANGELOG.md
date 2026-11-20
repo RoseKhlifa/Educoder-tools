@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.166 - 2026-11-21
+
+- Add phone-code and server-mediated WeChat login with verified upstream identities, bounded browser-bound QR transactions, cancellation and replay protection; validate live SMS login and document WeChat binding requirements
+
 ## 0.1.165 - 2026-11-20
 
 - Scale the workbench up on wide 2K and 4K screens so it uses the width, turn the login page into a landing that shows the product at work with a password reveal, let a few course cards fill the row, and say the courses are syncing while they load

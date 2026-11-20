@@ -63,6 +63,9 @@ async function app(overrides={}, options={}) {
   globalThis.fetch=async(url,options)=>{
     requests.push({url,options});if(overrides[url])return overrides[url](options);
     if(url==='/api/auth/me'||url==='/api/auth/login')return ok({user,platform:{role:'user',status:'active'}});
+    if(url==='/api/auth/wechat/start')return ok({status:'waiting',expiresInSeconds:300});
+    if(url==='/api/auth/wechat/poll')return ok({status:'waiting'});
+    if(url==='/api/auth/wechat/cancel')return ok({status:'canceled'});
     if(url==='/api/auth/logout')return ok({loggedOut:true});
     if(url==='/api/courses')return ok(courses);
     if(url==='/api/service/today-summary')return ok({date:serviceDate(),timezone:'Asia/Shanghai',completed_students:7,completed_questions:103,total_served_students:28,total_completed_questions:1042});
@@ -835,6 +838,205 @@ await test('consumer course service and administrator boundary',async t=>{
     page.get('#login').value='demo';page.get('#password').value='synthetic-password';page.get('#login-form').dispatch('submit');await settle();
     assert.match(page.html(), /登录有点频繁，请稍后再试/);assert.doesNotMatch(page.html(), /internal-rate-details|synthetic-password/);
     assert.equal(page.get('#password').value,'');
+  });
+  await t.test('phone-code login sends only after requesting a code, preserves the phone, and establishes a session', async () => {
+    const page = await app({
+      '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x'),
+      '/api/auth/sms/send': () => ok({ sent: true, retryAfterSeconds: 60 }),
+      '/api/auth/sms/login': () => ok({ user, platform: { role: 'user', status: 'active' } }),
+    });
+    page.get('[data-auth-mode="sms"]').dispatch('click');
+    page.get('#login').value = '13000000000';
+    page.get('[data-action="send-phone-code"]').dispatch('click'); await settle();
+    assert.match(page.html(), /验证码已发送，请查收短信/);
+    assert.equal(page.get('#login').value, '13000000000');
+    assert.equal(page.get('[data-action="send-phone-code"]').disabled, true);
+    page.get('#sms-code').value = 'sms-code-canary';
+    page.get('#login-form').dispatch('submit'); await settle();
+    const sent = page.requests.find(item => item.url === '/api/auth/sms/send');
+    const login = page.requests.find(item => item.url === '/api/auth/sms/login');
+    assert.deepEqual(JSON.parse(sent.options.body), { phone: '13000000000' });
+    assert.deepEqual(JSON.parse(login.options.body), { phone: '13000000000', code: 'sms-code-canary' });
+    assert.doesNotMatch(page.html(), /sms-code-canary|13000000000/);
+    assert.doesNotMatch(page.html(), /id="login-form"/);
+    assert.equal([...page.timers.values()].some(timer => timer.delay <= 1000), false, 'successful login stops the SMS countdown');
+  });
+  await t.test('uncertain phone-code sends show fixed feedback and cool down instead of sending duplicates', async () => {
+    for (const send of [() => failure(502, 'SMS_SEND_FAILED', 'private-upstream-message'), () => { throw new TypeError('private-network-error'); }]) {
+      const page = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x'), '/api/auth/sms/send': send });
+      page.get('[data-auth-mode="sms"]').dispatch('click'); page.get('#login').value = '13000000000';
+      page.get('[data-action="send-phone-code"]').dispatch('click'); await settle();
+      assert.match(page.html(), /验证码发送结果未确认，请先查看短信，稍后再试/);
+      assert.doesNotMatch(page.html(), /private-upstream-message|private-network-error|13000000000|验证码暂未发送/);
+      assert.equal(page.get('#login').value, '13000000000');
+      assert.equal(page.get('[data-action="send-phone-code"]').disabled, true);
+      assert.match(page.html(), /60 秒后重发/);
+      page.get('[data-action="send-phone-code"]').dispatch('click'); await settle();
+      assert.equal(page.requests.filter(item => item.url === '/api/auth/sms/send').length, 1);
+    }
+  });
+  await t.test('WeChat starts only on entry, displays a local QR, and re-rendering never creates another attempt', async () => {
+    const page = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x') });
+    assert.equal(page.requests.some(item => item.url.includes('wechat')), false);
+    page.get('[data-auth-mode="wechat"]').dispatch('click'); await settle();
+    assert.match(page.html(), /请用微信扫一扫/);
+    assert.equal(page.get('[data-wechat-image]').attributes.src, '/api/auth/wechat/image?v=1');
+    assert.doesNotMatch(page.html(), /qrconnect|wx\.qq\.com|尚未接通|回传接口/);
+    page.get('[data-action="user-guidelines"]').dispatch('click');
+    page.get('[data-action="close-modal"]').dispatch('click');
+    page.get('[data-auth-mode="wechat"]').dispatch('click'); await settle();
+    const starts = page.requests.filter(item => item.url === '/api/auth/wechat/start');
+    assert.equal(starts.length, 1); assert.equal(starts[0].options.body, '{}');
+  });
+  await t.test('WeChat moves from waiting through scanned to a verified platform session', async () => {
+    let status = 'scanned';
+    const page = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x'),
+      '/api/auth/wechat/poll': () => ok(status === 'succeeded' ? { status, user, platform: { role: 'admin', status: 'active' } } : { status }),
+    });
+    page.get('[data-auth-mode="wechat"]').dispatch('click'); await settle(); await page.tick();
+    assert.match(page.html(), /已扫码，请在手机上确认/); assert.match(page.html(), /id="login-form"/);
+    status = 'succeeded'; await page.tick();
+    assert.doesNotMatch(page.html(), /id="login-form"/); assert.match(page.html(), /管理后台/);
+    assert.equal(page.requests.some(item => item.url === '/api/auth/wechat/cancel'), false);
+    assert.equal([...page.timers.values()].some(timer => timer.delay <= 1000), false);
+  });
+  await t.test('WeChat polling stays serial while a long poll is pending', async () => {
+    const poll = deferred();
+    const page = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x'), '/api/auth/wechat/poll': () => poll.promise });
+    page.get('[data-auth-mode="wechat"]').dispatch('click'); await settle();
+    await page.tick(); await page.tick(); await page.tick();
+    assert.equal(page.requests.filter(item => item.url === '/api/auth/wechat/poll').length, 1);
+    poll.resolve(ok({ status: 'waiting' })); await settle();
+    assert.equal(page.timers.size, 1); assert.equal([...page.timers.values()][0].delay, 1000);
+  });
+  await t.test('switching away cancels a scan and waits for server cleanup before password authentication', async () => {
+    const poll = deferred(), cancel = deferred();
+    const page = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x'), '/api/auth/wechat/poll': () => poll.promise, '/api/auth/wechat/cancel': () => cancel.promise });
+    page.get('[data-auth-mode="wechat"]').dispatch('click'); await settle(); await page.tick();
+    page.get('[data-auth-mode="password"]').dispatch('click'); await settle();
+    assert.equal(page.requests.find(item => item.url === '/api/auth/wechat/poll').options.signal.aborted, true);
+    page.get('#login').value = 'other'; page.get('#password').value = 'fixture-password'; page.get('#login-form').dispatch('submit'); await settle();
+    assert.equal(page.requests.some(item => item.url === '/api/auth/login'), false);
+    poll.resolve(ok({ status: 'succeeded', user: { login: 'stale-scanned-account' } })); await settle();
+    assert.match(page.html(), /id="login-form"/); assert.doesNotMatch(page.html(), /stale-scanned-account/);
+    cancel.resolve(ok({ status: 'canceled' })); await settle();
+    assert.equal(page.requests.filter(item => item.url === '/api/auth/login').length, 1); assert.doesNotMatch(page.html(), /id="login-form"/);
+    assert.equal(page.requests.filter(item => item.url === '/api/auth/wechat/cancel').length, 1);
+  });
+  await t.test('QR refresh invalidates the prior long poll and starts only after cancel completes', async () => {
+    const oldPoll = deferred(), cancel = deferred();
+    const page = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x'), '/api/auth/wechat/poll': () => oldPoll.promise, '/api/auth/wechat/cancel': () => cancel.promise });
+    page.get('[data-auth-mode="wechat"]').dispatch('click'); await settle(); await page.tick();
+    page.get('[data-action="refresh-wechat"]').dispatch('click'); await settle();
+    assert.equal(page.requests.filter(item => item.url === '/api/auth/wechat/start').length, 1);
+    oldPoll.resolve(ok({ status: 'succeeded', user: { login: 'old-scan' } })); await settle();
+    assert.match(page.html(), /正在获取二维码/); assert.match(page.html(), /id="login-form"/);
+    cancel.resolve(ok({ status: 'canceled' })); await settle();
+    assert.equal(page.requests.filter(item => item.url === '/api/auth/wechat/start').length, 2);
+    assert.equal(page.get('[data-wechat-image]').attributes.src, '/api/auth/wechat/image?v=2');
+  });
+  await t.test('expired and canceled QR attempts stop polling until the user refreshes', async () => {
+    for (const status of ['expired', 'canceled']) {
+      const page = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x'), '/api/auth/wechat/poll': () => ok({ status }) });
+      page.get('[data-auth-mode="wechat"]').dispatch('click'); await settle(); await page.tick();
+      assert.match(page.html(), status === 'expired' ? /二维码已过期/ : /本次微信登录已取消/);
+      assert.equal(page.document.querySelector('[data-wechat-image]'), null); assert.equal(page.timers.size, 0);
+      page.get('[data-action="refresh-wechat"]').dispatch('click'); await settle();
+      assert.equal(page.requests.filter(item => item.url === '/api/auth/wechat/start').length, 2);
+    }
+  });
+  await t.test('WeChat binding restrictions and service failures use fixed copy without an automatic retry or binding', async () => {
+    const cases = { WECHAT_BINDING_REQUIRED: /头歌官网完成绑定/, WECHAT_RESTRICTED: /暂不允许该账号使用微信登录/, WECHAT_LOGIN_EXPIRED: /二维码已过期/, WECHAT_LOGIN_UNAVAILABLE: /微信登录暂时不可用/, WECHAT_LOGIN_FAILED: /重新获取二维码/, LOGIN_RATE_LIMITED: /太频繁/ };
+    for (const [code, copy] of Object.entries(cases)) {
+      const page = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x'), '/api/auth/wechat/poll': () => failure(409, code, 'private-upstream-oauth-code') });
+      page.get('[data-auth-mode="wechat"]').dispatch('click'); await settle(); await page.tick();
+      assert.match(page.html(), copy); assert.doesNotMatch(page.html(), /private-upstream-oauth-code/); assert.equal(page.timers.size, 0);
+      assert.equal(page.requests.filter(item => item.url === '/api/auth/wechat/start').length, 1);
+    }
+  });
+  await t.test('failed QR image loading stops polling and leaves an explicit refresh action', async () => {
+    const page = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x') });
+    page.get('[data-auth-mode="wechat"]').dispatch('click'); await settle();
+    page.get('[data-wechat-image]').dispatch('error'); await settle();
+    assert.match(page.html(), /二维码暂未加载/); assert.equal(page.timers.size, 0);
+    assert.equal(page.get('[data-action="refresh-wechat"]').disabled, false);
+  });
+  await t.test('hidden pages abort QR polling, and visible pages resume the same attempt', async () => {
+    let pollCount = 0;
+    const page = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x'), '/api/auth/wechat/poll': options => {
+      pollCount++;
+      return new Promise((resolve, reject) => options.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))));
+    } });
+    page.get('[data-auth-mode="wechat"]').dispatch('click'); await settle(); await page.tick();
+    page.document.visibilityState = 'hidden'; page.document.listeners.get('visibilitychange')(); await settle();
+    assert.equal(page.timers.size, 0); assert.equal(pollCount, 1);
+    page.document.visibilityState = 'visible'; page.document.listeners.get('visibilitychange')(); await page.tick();
+    assert.equal(pollCount, 2); assert.equal(page.requests.filter(item => item.url === '/api/auth/wechat/start').length, 1);
+    page.document.visibilityState = 'hidden'; page.document.listeners.get('visibilitychange')(); await settle();
+  });
+  await t.test('leaving while QR start is pending waits for its cancellation and ignores the late QR', async () => {
+    const start = deferred();
+    const page = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x'), '/api/auth/wechat/start': () => start.promise });
+    page.get('[data-auth-mode="wechat"]').dispatch('click'); await settle();
+    page.get('[data-auth-mode="password"]').dispatch('click'); await settle();
+    page.get('#login').value = 'other'; page.get('#password').value = 'fixture'; page.get('#login-form').dispatch('submit'); await settle();
+    assert.equal(page.requests.some(item => item.url === '/api/auth/login'), false);
+    start.resolve(ok({ status: 'waiting', expiresInSeconds: 300 })); await settle();
+    assert.equal(page.requests.filter(item => item.url === '/api/auth/wechat/cancel').length, 1);
+    assert.equal(page.requests.filter(item => item.url === '/api/auth/login').length, 1);
+    assert.equal(page.document.querySelector('[data-wechat-image]'), null);
+  });
+  await t.test('failed QR cleanup blocks alternate authentication until an explicit attempt can cancel it', async () => {
+    let cleanupWorks = false;
+    const page = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x'), '/api/auth/wechat/cancel': () => cleanupWorks ? ok({ status: 'canceled' }) : failure(503, 'WECHAT_LOGIN_UNAVAILABLE', 'private-cancel-failure') });
+    page.get('[data-auth-mode="wechat"]').dispatch('click'); await settle();
+    page.get('[data-auth-mode="password"]').dispatch('click'); await settle();
+    page.get('#login').value = 'other'; page.get('#password').value = 'fixture'; page.get('#login-form').dispatch('submit'); await settle();
+    assert.equal(page.requests.some(item => item.url === '/api/auth/login'), false);
+    assert.match(page.html(), /登录暂未完成/); assert.doesNotMatch(page.html(), /private-cancel-failure/);
+    cleanupWorks = true;
+    page.get('#login').value = 'other'; page.get('#password').value = 'fixture'; page.get('#login-form').dispatch('submit'); await settle();
+    assert.equal(page.requests.filter(item => item.url === '/api/auth/login').length, 1);
+    assert.doesNotMatch(page.html(), /id="login-form"/);
+  });
+  await t.test('a delayed initial session check cannot replace a newly selected scan attempt', async () => {
+    const me = deferred();
+    const page = await app({ '/api/auth/me': () => me.promise });
+    page.get('[data-auth-mode="wechat"]').dispatch('click'); await settle();
+    me.resolve(ok({ user: { login: 'previous-session-account' }, platform: { role: 'user', status: 'active' } })); await settle();
+    assert.match(page.html(), /请用微信扫一扫/); assert.match(page.html(), /id="login-form"/);
+    assert.equal(page.requests.some(item => item.url === '/api/courses'), false);
+  });
+  await t.test('changing login methods clears private drafts while reading guidelines preserves them', async () => {
+    const page = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x') });
+    page.get('#login').value = 'private-email'; page.get('#password').value = 'private-password';
+    page.get('[data-auth-mode="sms"]').dispatch('click');
+    assert.equal(page.get('#login').value, ''); assert.equal(page.get('#sms-code').value, '');
+    page.get('#login').value = '13000000000'; page.get('#sms-code').value = 'private-sms-code';
+    page.get('[data-action="user-guidelines"]').dispatch('click');
+    assert.equal(page.get('#sms-code').value, 'private-sms-code'); assert.doesNotMatch(page.html(), /private-sms-code/);
+    page.get('[data-action="close-modal"]').dispatch('click'); page.get('[data-auth-mode="password"]').dispatch('click');
+    assert.equal(page.get('#login').value, ''); assert.equal(page.get('#password').value, '');
+  });
+  await t.test('SMS sends block a method switch until completion and preserve the phone draft across countdown paints', async () => {
+    const send = deferred();
+    const page = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x'), '/api/auth/sms/send': () => send.promise });
+    page.get('[data-auth-mode="sms"]').dispatch('click'); page.get('#login').value = '13000000000';
+    page.get('[data-action="send-phone-code"]').dispatch('click'); await settle();
+    page.get('[data-auth-mode="wechat"]').dispatch('click');
+    assert.equal(page.requests.some(item => item.url === '/api/auth/wechat/start'), false); assert.ok(page.get('#sms-code'));
+    send.resolve(ok({ sent: true, retryAfterSeconds: 60 })); await settle();
+    page.get('#sms-code').value = 'private-draft'; await page.tick();
+    assert.equal(page.get('#login').value, '13000000000'); assert.equal(page.get('#sms-code').value, 'private-draft');
+    page.document.visibilityState = 'hidden'; page.document.listeners.get('visibilitychange')(); assert.equal(page.timers.size, 0);
+  });
+  await t.test('SMS binding and restricted errors describe the required official action without exposing backend text', async () => {
+    for (const [code, copy] of [['SMS_BINDING_REQUIRED', /官网完成账号绑定/], ['SMS_RESTRICTED', /官网处理登录限制/]]) {
+      const page = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x'), '/api/auth/sms/login': () => failure(409, code, 'private-state') });
+      page.get('[data-auth-mode="sms"]').dispatch('click'); page.get('#login').value = '13000000000'; page.get('#sms-code').value = 'private-code';
+      page.get('#login-form').dispatch('submit'); await settle();
+      assert.match(page.html(), copy); assert.doesNotMatch(page.html(), /private-state|private-code/); assert.equal(page.get('#sms-code').value, '');
+    }
   });
   await t.test('platform administrator permission unlocks genuine admin data, not a local preview role toggle',async()=>{
     const admin=job({status:'failed',error_code:'SELFTEST_FAILED',message:'公开样例未通过',owner_id:'7',result:{model_calls:3,cost_micro_usd:23000,total_levels:5,completed_levels:2}});

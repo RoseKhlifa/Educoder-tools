@@ -32,7 +32,7 @@ const ticketRetryKeys = new Map<string, Map<string, string>>();
 const ticketFormDrafts = new Map<string, TicketFormDraft>();
 const state = {
   user: null as User | null, page: 'courses' as Page, courses: [] as Course[], jobs: [] as AnswerJob[],
-  selected: [] as string[], loading: false, signingIn: false, creating: false, notice: '', loginError: '', search: '',
+  selected: [] as string[], loading: false, signingIn: false, sendingCode: false, creating: false, notice: '', loginError: '', loginNotice: '', search: '',
   modal: '' as string, modalKind: '' as '' | 'guidelines' | 'ticket' | 'job' | 'admin-job' | 'course', modalAction: null as (() => Promise<void> | void) | null,
   progressHistoryOpen: false, questionBank: null as QuestionBankSummary | null, bankLoading: false, bankUnavailable: false, todaySummary: null as DailyServiceSummary | null, todayLoading: false, todayUnavailable: false,
   admin: { overview: {}, users: [], jobs: [], audit: [], loading: false, error: false, jobsView: 'current', jobsKind: 'service' } as AdminState,
@@ -50,6 +50,19 @@ let todayLoadedAt = 0;
 let todayLoadedDate = '';
 let guidelinesSource = 'login';
 let pollTimer: ReturnType<typeof setTimeout> | undefined;
+let loginMode: 'password' | 'sms' | 'wechat' = 'password';
+let smsCooldownUntil = 0;
+let smsCooldownTimer: ReturnType<typeof setTimeout> | undefined;
+let loginRevision = 0;
+type WechatStatus = 'idle' | 'starting' | 'waiting' | 'scanned' | 'canceled' | 'expired' | 'failed';
+let wechatStatus: WechatStatus = 'idle';
+let wechatRevision = 0, wechatImageVersion = 0, wechatExpiresAt = 0;
+let wechatPollTimer: ReturnType<typeof setTimeout> | undefined;
+let wechatPollController: AbortController | undefined;
+let wechatStartTask: Promise<void> | undefined;
+let wechatCancelTask: Promise<void> | undefined;
+let wechatAttemptActive = false, wechatNeedsCancel = false;
+let wechatCancelPending = false;
 // Detailed single-job responses for the job the user is currently watching.
 // The list projection omits per-level detail, so it is kept separately.
 const jobDetails = new Map<string, AnswerJob>();
@@ -141,11 +154,22 @@ const activeJobs = (): AnswerJob[] => state.jobs.filter(job => serviceJob(job) &
 // every cycle, so cancelling the operator refresh here left the admin pages
 // frozen after their first load: nothing re-armed that timer.
 function stopPoll(): void { if (pollTimer !== undefined) clearTimeout(pollTimer); pollTimer = undefined; stopFocusPoll(); }
+function stopSmsCooldown(): void { if (smsCooldownTimer !== undefined) clearTimeout(smsCooldownTimer); smsCooldownTimer = undefined; }
+function scheduleSmsCooldown(): void {
+  stopSmsCooldown();
+  if (state.user || loginMode !== 'sms' || document.visibilityState === 'hidden' || smsCooldownUntil <= Date.now()) return;
+  smsCooldownTimer = setTimeout(() => {
+    smsCooldownTimer = undefined;
+    render();
+    scheduleSmsCooldown();
+  }, Math.min(1000, smsCooldownUntil - Date.now()));
+}
 function resetSession(message = ''): void {
+  loginRevision++; void stopWechatAttempt().catch(() => {});
   jobActions.clear(); recoveryNoticeID = ''; adminJobActions.clear(); homeworkRetryKeys.clear(); jobDialog = null; adminJobDialog = null; homeworkSync.clear(); homeworkJobObservations.clear(); jobDetails.clear(); adminJobDetails.clear();
   userTickets = emptyTickets(); adminTickets = emptyTickets(); ticketDialog = null; ticketRetryKeys.clear(); ticketFormDrafts.clear();
-  renderedHTML = ''; stopAdminPoll(); generation++; jobsRevision++; coursesRevision++; adminRevision++; modalRevision++; bankRevision++; bankLoadedAt = 0; todayRevision++; todayLoadedAt = 0; todayLoadedDate = ''; guidelinesSource = 'login'; passwordVisible = false; stopPoll(); courseDialog = null; courseCache.clear();
-  Object.assign(state, { user: null, page: 'courses', courses: [], jobs: [], selected: [], loading: false, signingIn: false, creating: false, notice: '', loginError: message, modal: '', modalKind: '', modalAction: null, search: '', progressHistoryOpen: false, questionBank: null, bankLoading: false, bankUnavailable: false, todaySummary: null, todayLoading: false, todayUnavailable: false, admin: { overview: {}, users: [], jobs: [], audit: [], loading: false, error: false, userSearch: '', userFilter: 'all' } });
+  renderedHTML = ''; stopAdminPoll(); generation++; jobsRevision++; coursesRevision++; adminRevision++; modalRevision++; bankRevision++; bankLoadedAt = 0; todayRevision++; todayLoadedAt = 0; todayLoadedDate = ''; guidelinesSource = 'login'; passwordVisible = false; loginMode = 'password'; smsCooldownUntil = 0; stopSmsCooldown(); stopPoll(); courseDialog = null; courseCache.clear();
+  Object.assign(state, { user: null, page: 'courses', courses: [], jobs: [], selected: [], loading: false, signingIn: false, sendingCode: false, creating: false, notice: '', loginError: message, loginNotice: '', modal: '', modalKind: '', modalAction: null, search: '', progressHistoryOpen: false, questionBank: null, bankLoading: false, bankUnavailable: false, todaySummary: null, todayLoading: false, todayUnavailable: false, admin: { overview: {}, users: [], jobs: [], audit: [], loading: false, error: false, userSearch: '', userFilter: 'all' } });
   render();
 }
 function handleError(error: unknown): boolean {
@@ -206,6 +230,32 @@ function renderLogin(): string {
   ];
   const trust = ['头歌账号直接登录，不用注册', '成绩以头歌为准', '做题数据用于题目与答案复用'];
   const reveal = passwordVisible;
+  const sms = loginMode === 'sms';
+  const wechat = loginMode === 'wechat';
+  const secondsRemaining = Math.max(0, Math.ceil((smsCooldownUntil - Date.now()) / 1000));
+  const wechatCopy: Record<WechatStatus, [string, string]> = {
+    idle: ['微信扫码登录', '请获取二维码后，用已绑定头歌账号的微信扫一扫。'],
+    starting: ['正在获取二维码…', '请稍候。'],
+    waiting: ['请用微信扫一扫', '使用已绑定头歌账号的微信扫码，并在手机上确认登录。'],
+    scanned: ['已扫码，请在手机上确认', '确认后将自动进入你的课程。'],
+    canceled: ['本次微信登录已取消', '可以重新获取二维码，或选择其他登录方式。'],
+    expired: ['二维码已过期', '请重新获取二维码后扫码。'],
+    failed: ['微信登录暂未完成', '可以重新获取二维码，或选择其他登录方式。'],
+  };
+  const fields = wechat ? `<div class="wechat-login-status" role="status"><b>${wechatCopy[wechatStatus][0]}</b><p>${wechatCopy[wechatStatus][1]}</p>
+      ${['waiting', 'scanned'].includes(wechatStatus) ? `<img class="wechat-qr" data-wechat-image src="/api/auth/wechat/image?v=${wechatImageVersion}" alt="微信登录二维码" width="200" height="200">` : ''}
+      <button class="btn full" type="button" data-action="refresh-wechat" ${wechatStatus === 'starting' ? 'disabled' : ''}>${wechatStatus === 'idle' ? '获取二维码' : wechatStatus === 'starting' ? '正在获取…' : '重新获取二维码'}</button>
+      </div>` : sms ? `
+      <div class="field"><label for="login">头歌绑定手机号</label>
+        <span class="input-wrap">${icon('user')}<input id="login" name="login" type="tel" inputmode="tel" autocomplete="tel" placeholder="输入头歌账号绑定的手机号" required maxlength="11"></span></div>
+      <div class="code-entry"><div class="field"><label for="sms-code">短信验证码</label>
+        <span class="input-wrap">${icon('doc')}<input id="sms-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="输入短信验证码" required maxlength="128"></span></div>
+        <button class="btn code-send" type="button" data-action="send-phone-code" ${state.sendingCode || state.signingIn || secondsRemaining > 0 ? 'disabled' : ''}>${state.sendingCode ? '正在发送' : secondsRemaining > 0 ? `${secondsRemaining} 秒后重发` : '获取验证码'}</button></div>` : `
+      <div class="field"><label for="login">头歌账号</label>
+        <span class="input-wrap">${icon('user')}<input id="login" name="login" autocomplete="username" placeholder="手机号 / 邮箱 / 学号" required maxlength="120"></span></div>
+      <div class="field"><label for="password">头歌密码</label>
+        <span class="input-wrap">${icon('lock')}<input id="password" name="password" type="${reveal ? 'text' : 'password'}" autocomplete="current-password" placeholder="输入头歌密码" required maxlength="512"><button class="reveal" type="button" data-action="toggle-password" aria-pressed="${reveal}" aria-label="${reveal ? '隐藏密码' : '显示密码'}" title="${reveal ? '隐藏密码' : '显示密码'}">${icon(reveal ? 'eye-off' : 'eye')}</button></span></div>`;
+  const submit = wechat ? '' : `<button class="btn red full" type="submit" ${state.signingIn || state.sendingCode ? 'disabled' : ''}>${state.signingIn ? '正在登录…' : '登录'}</button>`;
   return `<main id="view-login" class="login">
     <header class="login-top">
       <div class="brand login-brand-mark"><img class="brand-logo" src="/assets/brand-logo.png?v=0.1.50" alt="" width="64" height="64" decoding="async"><span class="brand-name">头歌妈妈</span><span class="brand-domain">touge.mom</span></div>
@@ -219,12 +269,15 @@ function renderLogin(): string {
       <span class="washi" aria-hidden="true"></span>
       <h2>登录</h2>
       <p class="sub">头歌账号就是这里的账号，不用另外注册。</p>
-      <div class="field"><label for="login">头歌账号</label>
-        <span class="input-wrap">${icon('user')}<input id="login" name="login" autocomplete="username" placeholder="手机号 / 邮箱 / 学号" required maxlength="120"></span></div>
-      <div class="field"><label for="password">头歌密码</label>
-        <span class="input-wrap">${icon('lock')}<input id="password" name="password" type="${reveal ? 'text' : 'password'}" autocomplete="current-password" placeholder="输入头歌密码" required maxlength="512"><button class="reveal" type="button" data-action="toggle-password" aria-pressed="${reveal}" aria-label="${reveal ? '隐藏密码' : '显示密码'}" title="${reveal ? '隐藏密码' : '显示密码'}">${icon(reveal ? 'eye-off' : 'eye')}</button></span></div>
+      <div class="seg auth-methods" role="tablist" aria-label="登录方式">
+        <button class="${loginMode === 'password' ? 'on' : ''}" type="button" role="tab" data-auth-mode="password" aria-selected="${loginMode === 'password'}" ${state.signingIn || state.sendingCode ? 'disabled' : ''}>账号密码</button>
+        <button class="${sms ? 'on' : ''}" type="button" role="tab" data-auth-mode="sms" aria-selected="${sms}" ${state.signingIn || state.sendingCode ? 'disabled' : ''}>手机验证码</button>
+        <button class="${wechat ? 'on' : ''}" type="button" role="tab" data-auth-mode="wechat" aria-selected="${wechat}" ${state.signingIn || state.sendingCode ? 'disabled' : ''}>微信</button>
+      </div>
+      ${fields}
       ${state.loginError ? `<div class="form-feedback" role="alert">${e(state.loginError)}</div>` : ''}
-      <button class="btn red full" type="submit" ${state.signingIn ? 'disabled' : ''}>${state.signingIn ? '正在登录…' : '登录'}</button>
+      ${state.loginNotice ? `<div class="login-success" role="status">${e(state.loginNotice)}</div>` : ''}
+      ${submit}
       <p class="fine">登录前请看<button class="link" type="button" data-action="user-guidelines" data-guidelines-source="login">《用户准则》</button>。平台会收集做题数据，用于题目与答案复用。</p>
     </form>
     <p class="login-aside">独立服务，成绩以头歌为准。<br>遇到问题，登录后可以提交反馈。</p></section></main>`;
@@ -833,9 +886,10 @@ function render(): void {
   }
   // Draft values live only in the form controls. Preserve them across opening a
   // read-only dialog without serializing them into markup or persistent state.
-  const draft = !state.user && !state.signingIn ? {
+  const draft = !state.user ? {
     login: document.querySelector<HTMLInputElement>('#login')?.value ?? '',
     password: document.querySelector<HTMLInputElement>('#password')?.value ?? '',
+    code: document.querySelector<HTMLInputElement>('#sms-code')?.value ?? '',
   } : null;
   const createDraft = state.user ? captureTicketForm('#ticket-create-form') : null;
   const replyDraft = state.user ? captureTicketForm('#ticket-reply-form') : null;
@@ -862,8 +916,10 @@ function render(): void {
   if (draft) {
     const account = document.querySelector<HTMLInputElement>('#login');
     const password = document.querySelector<HTMLInputElement>('#password');
+    const code = document.querySelector<HTMLInputElement>('#sms-code');
     if (account) account.value = draft.login;
     if (password) password.value = draft.password;
+    if (code) code.value = draft.code;
   }
   restoreTicketForm(ticketFormDrafts.get('create:user') ?? null);
   const replyForm = document.querySelector<HTMLFormElement>('#ticket-reply-form');
@@ -1073,23 +1129,162 @@ async function loadCourses(forceDetails = false): Promise<void> {
   }
   state.loading = false; render();
 }
+function stopWechatPoll(): void {
+  if (wechatPollTimer !== undefined) clearTimeout(wechatPollTimer);
+  wechatPollTimer = undefined;
+}
+// A canceled request can still have reached the service. Wait for its start
+// response and the server's cancellation before allowing another login to set
+// cookies; ignoring a stale UI response alone does not close that race.
+function stopWechatAttempt(): Promise<void> {
+  wechatRevision++; stopWechatPoll(); wechatPollController?.abort();
+  wechatPollController = undefined;
+  const starting = wechatStartTask, previousCancel = wechatCancelTask;
+  wechatStartTask = undefined; wechatStatus = 'idle'; wechatExpiresAt = 0;
+  if (!wechatAttemptActive && !starting && !wechatNeedsCancel) return previousCancel ?? Promise.resolve();
+  if (!wechatAttemptActive && !starting && wechatCancelPending) return previousCancel!;
+  wechatNeedsCancel = true; wechatAttemptActive = false;
+  wechatCancelPending = true;
+  let cancel!: Promise<void>;
+  cancel = (async () => {
+    try {
+      await previousCancel?.catch(() => {});
+      await starting?.catch(() => {});
+      await api.cancelWechatLogin();
+      wechatNeedsCancel = false;
+    } finally { if (wechatCancelTask === cancel) wechatCancelPending = false; }
+  })();
+  wechatCancelTask = cancel;
+  return cancel;
+}
+function wechatCurrent(revision: number, session: number): boolean {
+  return revision === wechatRevision && session === generation && loginMode === 'wechat' && !state.user;
+}
+function wechatError(error: unknown): string {
+  const code = error instanceof ApiRequestError ? error.code : '';
+  const messages: Record<string, string> = {
+    WECHAT_BINDING_REQUIRED: '该微信尚未关联可用的头歌账号，请先在头歌官网完成绑定，再重新扫码。',
+    WECHAT_RESTRICTED: '头歌暂不允许该账号使用微信登录，请使用账号密码或手机验证码登录。',
+    WECHAT_LOGIN_EXPIRED: '二维码已过期，请重新获取后扫码。',
+    WECHAT_LOGIN_UNAVAILABLE: '微信登录暂时不可用，请稍后重新获取二维码或选择其他登录方式。',
+    WECHAT_LOGIN_FAILED: '微信登录暂未完成，请重新获取二维码。',
+    LOGIN_RATE_LIMITED: '获取二维码或登录太频繁，请稍后再试。',
+    ACCOUNT_DISABLED: '账号服务暂不可用，请联系服务人员。',
+  };
+  return messages[code || ''] || '微信登录暂未完成，请重新获取二维码。';
+}
+function completeLogin(user: User): void {
+  stopSmsCooldown(); stopWechatPoll(); wechatPollController?.abort(); wechatPollController = undefined;
+  wechatAttemptActive = false; wechatStatus = 'idle'; wechatRevision++;
+  state.user = user; state.signingIn = false; state.sendingCode = false; state.loginError = ''; state.loginNotice = '';
+  render(); void loadJobs(); void loadCourses(); void loadQuestionBank(); void loadTodaySummary();
+}
+function scheduleWechatPoll(delay = 1000): void {
+  stopWechatPoll();
+  if (state.user || loginMode !== 'wechat' || document.visibilityState === 'hidden' || !['waiting', 'scanned'].includes(wechatStatus) || wechatPollController) return;
+  wechatPollTimer = setTimeout(() => { wechatPollTimer = undefined; void pollWechatLogin(); }, delay);
+}
+async function pollWechatLogin(): Promise<void> {
+  if (state.user || loginMode !== 'wechat' || document.visibilityState === 'hidden' || wechatPollController || !['waiting', 'scanned'].includes(wechatStatus)) return;
+  if (Date.now() >= wechatExpiresAt) { wechatStatus = 'expired'; render(); return; }
+  const revision = wechatRevision, session = generation, controller = new AbortController();
+  wechatPollController = controller;
+  try {
+    const result = await api.pollWechatLogin(controller.signal);
+    if (controller.signal.aborted || !wechatCurrent(revision, session)) return;
+    if (result.status === 'succeeded') { completeLogin(result.user); return; }
+    wechatStatus = result.status; render();
+  } catch (error) {
+    if (controller.signal.aborted || !wechatCurrent(revision, session)) return;
+    wechatStatus = error instanceof ApiRequestError && error.code === 'WECHAT_LOGIN_EXPIRED' ? 'expired' : 'failed';
+    state.loginError = wechatError(error); render();
+  } finally {
+    if (wechatPollController === controller) wechatPollController = undefined;
+    if (wechatCurrent(revision, session)) scheduleWechatPoll();
+  }
+}
+function startWechatLogin(): void {
+  if (state.user || loginMode !== 'wechat' || wechatStatus === 'starting') return;
+  const canceled = stopWechatAttempt(), revision = wechatRevision, session = generation;
+  wechatStatus = 'starting'; state.loginError = ''; state.loginNotice = ''; render();
+  let task!: Promise<void>;
+  task = (async () => {
+    try {
+      await canceled;
+      if (!wechatCurrent(revision, session)) return;
+      wechatAttemptActive = true;
+      const result = await api.startWechatLogin();
+      if (!wechatCurrent(revision, session)) return;
+      wechatExpiresAt = Date.now() + result.expiresInSeconds * 1000;
+      wechatImageVersion++; wechatStatus = 'waiting'; render(); scheduleWechatPoll();
+    } catch (error) {
+      if (!wechatCurrent(revision, session)) return;
+      wechatStatus = 'failed'; state.loginError = wechatError(error); render();
+    } finally {
+      if (wechatStartTask === task) wechatStartTask = undefined;
+    }
+  })();
+  wechatStartTask = task;
+}
 async function login(event: Event): Promise<void> {
-  event.preventDefault(); if (state.signingIn) return;
+  event.preventDefault(); if (state.signingIn || state.sendingCode) return;
+  if (loginMode === 'wechat') return;
   const form = event.currentTarget as HTMLFormElement;
   const value = (name: string): string => (form.elements.namedItem(name) as HTMLInputElement).value;
-  const account = value('login').trim(); const password = value('password');
-  if (!account || !password) { state.loginError = '请输入头歌账号和密码。'; render(); return; }
-  form.reset(); const session = ++generation; courseCache.clear(); state.signingIn = true; state.loginError = ''; render();
+  const account = value('login').trim();
+  const mode = loginMode;
+  const password = mode === 'password' ? value('password') : '';
+  const code = mode === 'sms' ? value('code').trim() : '';
+  if (!account || loginMode === 'password' && !password) { state.loginError = '请输入头歌账号和密码。'; render(); return; }
+  if (loginMode === 'sms' && (!/^1\d{10}$/.test(account) || !code)) { state.loginError = '请输入手机号和短信验证码。'; render(); return; }
+  if (loginMode === 'password') form.reset();
+  else { const codeInput = form.elements.namedItem('code') as HTMLInputElement | null; if (codeInput) codeInput.value = ''; }
+  const session = ++generation, revision = ++loginRevision; courseCache.clear(); state.signingIn = true; state.loginError = ''; state.loginNotice = ''; render();
   try {
-    const user = await api.login(account, password);
-    if (session !== generation) return;
-    state.user = user; state.signingIn = false; render(); void loadJobs(); void loadCourses(); void loadQuestionBank(); void loadTodaySummary();
+    if (wechatNeedsCancel) await stopWechatAttempt(); else await wechatCancelTask;
+    if (session !== generation || revision !== loginRevision) return;
+    const user = mode === 'sms' ? await api.loginWithPhone(account, code) : await api.login(account, password);
+    if (session !== generation || revision !== loginRevision) return;
+    completeLogin(user);
   } catch (error) {
-    if (session !== generation) return;
+    if (session !== generation || revision !== loginRevision) return;
     const code = error instanceof ApiRequestError ? error.code : '';
-    const messages: Record<string, string> = { AUTH_FAILED: '账号或密码不正确，请检查后重新登录。', USER_SUSPENDED: '账号服务暂不可用，请联系服务人员。', ACCOUNT_DISABLED: '账号服务暂不可用，请联系服务人员。', LOGIN_RATE_LIMITED: '登录有点频繁，请稍后再试。' };
+    const messages: Record<string, string> = { AUTH_FAILED: mode === 'sms' ? '手机号或验证码不正确，或验证码已失效。' : '账号或密码不正确，请检查后重新登录。', SMS_BINDING_REQUIRED: '该手机号需要先在头歌官网完成账号绑定，再使用验证码登录。', SMS_RESTRICTED: '头歌暂不允许该账号使用验证码登录，请前往头歌官网处理登录限制。', USER_SUSPENDED: '账号服务暂不可用，请联系服务人员。', ACCOUNT_DISABLED: '账号服务暂不可用，请联系服务人员。', LOGIN_RATE_LIMITED: '登录有点频繁，请稍后再试。' };
     state.signingIn = false; state.loginError = messages[code || ''] || '登录暂未完成，请稍后再试或联系服务人员。'; render();
   }
+}
+async function sendPhoneCode(): Promise<void> {
+  if (state.sendingCode || state.signingIn || loginMode !== 'sms') return;
+  const phone = document.querySelector<HTMLInputElement>('#login')?.value.trim() ?? '';
+  if (!/^1\d{10}$/.test(phone)) { state.loginError = '请输入 11 位头歌绑定手机号。'; state.loginNotice = ''; render(); return; }
+  if (smsCooldownUntil > Date.now()) { scheduleSmsCooldown(); return; }
+  const session = generation, revision = loginRevision;
+  state.sendingCode = true; state.loginError = ''; state.loginNotice = ''; render();
+  try {
+    await api.sendPhoneCode(phone);
+    if (session !== generation || revision !== loginRevision || loginMode !== 'sms') return;
+    smsCooldownUntil = Date.now() + 60_000;
+    state.loginNotice = document.querySelector<HTMLInputElement>('#login')?.value.trim() === phone ? '验证码已发送，请查收短信。' : '验证码已发送至之前填写的手机号，请核对后登录。';
+  } catch (error) {
+    if (session !== generation || revision !== loginRevision || loginMode !== 'sms') return;
+    const code = error instanceof ApiRequestError ? error.code : '';
+    const uncertain = '验证码发送结果未确认，请先查看短信，稍后再试。';
+    const messages: Record<string, string> = { LOGIN_RATE_LIMITED: '获取验证码太频繁，请稍后再试。', PHONE_NOT_REGISTERED: '该手机号尚未关联头歌账号。', SMS_SEND_FAILED: uncertain };
+    if (code !== 'LOGIN_RATE_LIMITED' && code !== 'PHONE_NOT_REGISTERED') smsCooldownUntil = Date.now() + 60_000;
+    state.loginError = messages[code || ''] || uncertain;
+  }
+  state.sendingCode = false;
+  render(); scheduleSmsCooldown();
+}
+function changeLoginMode(mode: string): void {
+  if (state.signingIn || state.sendingCode || !['password', 'sms', 'wechat'].includes(mode) || mode === loginMode) return;
+  loginRevision++; generation++;
+  document.querySelector<HTMLFormElement>('#login-form')?.reset();
+  if (loginMode === 'wechat') void stopWechatAttempt().catch(() => {});
+  loginMode = mode as 'password' | 'sms' | 'wechat';
+  state.loginError = ''; state.loginNotice = ''; state.sendingCode = false; passwordVisible = false;
+  render(); scheduleSmsCooldown();
+  if (loginMode === 'wechat') startWechatLogin();
 }
 async function logout(): Promise<void> { resetSession(); try { await api.logout(); } catch { /* The local account context has already been cleared. */ } }
 function confirmStart(all: boolean): void {
@@ -1548,12 +1743,20 @@ window.addEventListener('blur', releasePointer);
 // One handler per event: hiding the page releases a press that will never
 // deliver its pointerup, and showing it again resumes the visible work.
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') { releasePointer(); return; }
+  if (document.visibilityState === 'hidden') { releasePointer(); stopSmsCooldown(); stopWechatPoll(); wechatPollController?.abort(); return; }
+  scheduleSmsCooldown(); scheduleWechatPoll();
   resumeVisibleCourseWork();
 });
 window.addEventListener?.('focus', resumeVisibleCourseWork);
 function bindEvents(): void {
   document.querySelector<HTMLFormElement>('#login-form')?.addEventListener('submit', event => { void login(event); });
+  document.querySelectorAll<HTMLButtonElement>('[data-auth-mode]').forEach(button => button.addEventListener('click', () => changeLoginMode(button.dataset.authMode ?? '')));
+  const imageRevision = wechatRevision;
+  document.querySelector<HTMLImageElement>('[data-wechat-image]')?.addEventListener('error', () => {
+    if (imageRevision !== wechatRevision || loginMode !== 'wechat' || !['waiting', 'scanned'].includes(wechatStatus)) return;
+    stopWechatPoll(); wechatPollController?.abort(); wechatStatus = 'failed';
+    state.loginError = '二维码暂未加载，请重新获取二维码。'; render();
+  });
   document.querySelector<HTMLFormElement>('#ticket-create-form')?.addEventListener('submit', event => { void createTicket(event); });
   document.querySelector<HTMLFormElement>('#ticket-reply-form')?.addEventListener('submit', event => { void mutateTicket('reply', undefined, event); });
   const ticketAdmin = state.page === 'admin-support';
@@ -1668,6 +1871,8 @@ function bindEvents(): void {
   document.querySelectorAll<HTMLElement>('[data-action]').forEach(button => button.addEventListener(button instanceof HTMLInputElement ? 'change' : 'click', () => {
     switch (button.dataset.action) {
       case 'logout': void logout(); break;
+      case 'send-phone-code': void sendPhoneCode(); break;
+      case 'refresh-wechat': startWechatLogin(); break;
       case 'refresh': void loadCourses(true); break;
       case 'jobs-refresh': void loadJobs(); break;
       case 'user-guidelines': guidelinesSource = button.dataset.guidelinesSource || 'login'; showModal(renderUserGuidelines(), null, 'guidelines'); break;

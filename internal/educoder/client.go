@@ -45,6 +45,39 @@ var secretKey = decodeTwice("TW1VelpHRXdObUZsTWpaaVlUbG1OelpoTldRNFpETTFOVGMwTm1
 // Login popup module 22887387 uses this literal UTF-8 key as both AES key and IV.
 var passwordKey = []byte("5183666c72eec9e4")
 
+var (
+	ErrPhoneNotRegistered   = errors.New("phone is not registered with Educoder")
+	ErrLoginBindingRequired = errors.New("Educoder login requires account binding")
+	ErrLoginExamRestricted  = errors.New("Educoder login requires examination authorization")
+)
+
+// LoginError retains a fixed classification without retaining credentials,
+// upstream response messages or a URL containing a one-time code.
+type LoginError struct {
+	Code           string
+	UpstreamStatus int
+}
+
+func (e *LoginError) Error() string {
+	if e == nil {
+		return "Educoder authentication failed"
+	}
+	switch e.Code {
+	case "INVALID_RESPONSE":
+		return "Educoder authentication returned an invalid response"
+	case "REQUEST_FAILED":
+		return "Educoder authentication request failed"
+	case "SESSION_MISSING":
+		return "Educoder authentication did not establish a session"
+	case "IDENTITY_UNVERIFIED":
+		return "Educoder authentication identity could not be verified"
+	default:
+		return "Educoder authentication failed"
+	}
+}
+
+const phoneVerificationSalt = "79e33abd4b6588941ab7622aed1e67e8"
+
 func decodeTwice(value string) string {
 	a, err := base64.StdEncoding.DecodeString(value)
 	if err != nil {
@@ -290,6 +323,14 @@ func (c *Client) requestWithReadDiagnostics(ctx context.Context, method, path st
 	if err != nil {
 		return err
 	}
+	// These GETs consume a code or send an SMS. A non-replayable body disables
+	// net/http's implicit retry on a reused connection; redirects must not
+	// forward their query parameters or repeat the operation at another URL.
+	authRequest := isAuthenticationPath(path)
+	if authRequest && method == http.MethodGet {
+		req.Body = io.NopCloser(strings.NewReader(""))
+		req.GetBody = nil
+	}
 	timestamp := strconv.FormatInt(time.Now().UnixMilli(), 10)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json; charset=utf-8")
@@ -314,7 +355,13 @@ func (c *Client) requestWithReadDiagnostics(ctx context.Context, method, path st
 	}
 	req.Header.Set("Pc-Authorization", session)
 	stage, category = "transport", "transport"
-	resp, err := c.HTTP.Do(req)
+	httpClient := c.HTTP
+	if authRequest {
+		isolated := *c.HTTP
+		isolated.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		httpClient = &isolated
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		diagnosticCause = err
 		// Transport errors can include the full signed URL. Preserve context
@@ -387,7 +434,69 @@ func (c *Client) requestWithReadDiagnostics(ctx context.Context, method, path st
 			return fmt.Errorf("%s %s: expected JSON response: %w", method, path, err)
 		}
 	}
+	if authRequest && authenticationResponseAllowsSession(path, envelope.Status) {
+		if err := c.acceptAuthenticationSession(resp, u); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func isAuthenticationPath(path string) bool {
+	switch path {
+	case "/api/accounts/login.json", "/api/accounts/valid_email_and_phone.json", "/api/accounts/get_verification_code.json", "/api/accounts/login_for_phone.json", "/api/auth/wechat/callback.json", "/api/auth/wechat/web_callback.json":
+		return true
+	default:
+		return false
+	}
+}
+
+func authenticationResponseAllowsSession(path string, raw json.RawMessage) bool {
+	switch path {
+	case "/api/accounts/login.json":
+		// Historic password responses contain the user object without status.
+		if len(raw) == 0 {
+			return true
+		}
+	case "/api/accounts/login_for_phone.json", "/api/auth/wechat/callback.json", "/api/auth/wechat/web_callback.json":
+	default:
+		return false
+	}
+	status, err := numericAPIStatus(raw)
+	return err == nil && status == 0
+}
+
+// The official request wrapper also sets _educoder_session from response cs.
+// Only successful authentication responses opt in here. Do not change session
+// handling for unrelated task APIs, redirects or negative authentication states.
+func (c *Client) acceptAuthenticationSession(response *http.Response, endpoint *url.URL) error {
+	value := response.Header.Get("cs")
+	if value == "" {
+		return nil
+	}
+	if c.HTTP == nil || c.HTTP.Jar == nil || len(value) > 8192 || value == "logout" || value == "null" {
+		return &LoginError{Code: "INVALID_RESPONSE"}
+	}
+	cookie := &http.Cookie{Name: "_educoder_session", Value: value, Path: "/", Secure: endpoint.Scheme == "https", HttpOnly: true}
+	if err := cookie.Valid(); err != nil {
+		return &LoginError{Code: "INVALID_RESPONSE"}
+	}
+	c.HTTP.Jar.SetCookies(endpoint, []*http.Cookie{cookie})
+	return nil
+}
+
+// Authentication begins with an empty jar so a success-shaped response cannot
+// accidentally verify an earlier account's session. Clone the http.Client to
+// avoid replacing a jar shared by an already installed session client.
+func (c *Client) resetAuthenticationSession() {
+	jar, _ := cookiejar.New(nil)
+	if c.HTTP != nil {
+		isolated := *c.HTTP
+		isolated.Jar = jar
+		c.HTTP = &isolated
+	}
+	c.LoginName = ""
+	c.courseMetadataCache = &courseMetadataCache{}
 }
 
 func isProgrammingExecutionPath(path string) bool {
@@ -431,19 +540,175 @@ func (c *Client) Login(ctx context.Context, login, password string) (*User, erro
 	if user.Login == "" {
 		return nil, errors.New("登录响应缺少 login，可能需要验证码或其他登录步骤")
 	}
-	u, _ := url.Parse(c.BaseURL)
-	hasSession := false
-	for _, cookie := range c.HTTP.Jar.Cookies(u) {
-		if cookie.Name == "_educoder_session" && cookie.Value != "" {
-			hasSession = true
-		}
-	}
-	if !hasSession {
+	if !hasEducoderSession(c) {
 		return nil, errors.New("登录成功响应未设置 _educoder_session Cookie")
 	}
 	c.LoginName = user.Login
 	c.bindUpstreamAccount(&user)
 	return &user, nil
+}
+
+// SendPhoneVerificationCode checks that the phone belongs to an existing
+// account, then requests a login code. The code and phone are never traced.
+func (c *Client) SendPhoneVerificationCode(ctx context.Context, phone string) error {
+	phone = strings.TrimSpace(phone)
+	if !validPhoneNumber(phone) {
+		return errors.New("invalid phone number")
+	}
+	c.resetAuthenticationSession()
+	var check struct {
+		Status json.RawMessage `json:"status"`
+	}
+	if err := c.requestWithStatuses(ctx, http.MethodGet, "/api/accounts/valid_email_and_phone.json", url.Values{"login": {phone}, "type": {"1"}}, nil, "/", &check, anyStatus); err != nil {
+		return phoneAuthenticationRequestError(ctx)
+	}
+	status, err := numericAPIStatus(check.Status)
+	if err != nil {
+		return &LoginError{Code: "INVALID_RESPONSE"}
+	}
+	if status > 0 {
+		return ErrPhoneNotRegistered
+	}
+
+	digest := md5.Sum([]byte(phoneVerificationSalt + phone))
+	var response struct {
+		Status json.RawMessage `json:"status"`
+	}
+	query := url.Values{
+		"login":   {phone},
+		"type":    {"6"},
+		"smscode": {hex.EncodeToString(digest[:])},
+	}
+	if err := c.requestWithStatuses(ctx, http.MethodGet, "/api/accounts/get_verification_code.json", query, nil, "/", &response, anyStatus); err != nil {
+		return phoneAuthenticationRequestError(ctx)
+	}
+	status, err = numericAPIStatus(response.Status)
+	if err != nil {
+		return &LoginError{Code: "INVALID_RESPONSE"}
+	}
+	if status != 0 && status != 1 {
+		return &LoginError{Code: "AUTH_FAILED", UpstreamStatus: status}
+	}
+	return nil
+}
+
+// LoginWithPhone establishes an Educoder session and then verifies its user
+// identity using the same cookie jar before the client can be installed.
+func (c *Client) LoginWithPhone(ctx context.Context, phone, code string) (user *User, err error) {
+	phone = strings.TrimSpace(phone)
+	code = strings.TrimSpace(code)
+	if !validPhoneNumber(phone) || code == "" || len(code) > 128 {
+		return nil, errors.New("invalid phone login input")
+	}
+	c.resetAuthenticationSession()
+	defer func() {
+		if err != nil {
+			c.resetAuthenticationSession()
+		}
+	}()
+	var response struct {
+		Status json.RawMessage `json:"status"`
+	}
+	query := url.Values{"phone": {phone}, "code": {code}}
+	if err := c.requestWithStatuses(ctx, http.MethodGet, "/api/accounts/login_for_phone.json", query, nil, "/", &response, anyStatus); err != nil {
+		return nil, phoneAuthenticationRequestError(ctx)
+	}
+	status, err := numericAPIStatus(response.Status)
+	if err != nil || status != 0 {
+		if err != nil {
+			return nil, &LoginError{Code: "INVALID_RESPONSE"}
+		}
+		switch status {
+		case -4:
+			return nil, ErrLoginBindingRequired
+		case -5:
+			return nil, ErrLoginExamRestricted
+		default:
+			return nil, &LoginError{Code: "AUTH_FAILED", UpstreamStatus: status}
+		}
+	}
+	if !hasEducoderSession(c) {
+		return nil, &LoginError{Code: "SESSION_MISSING"}
+	}
+	user, err = c.authenticationUserInfo(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if user == nil || strings.TrimSpace(user.Login) == "" || user.UserID <= 0 {
+		return nil, &LoginError{Code: "IDENTITY_UNVERIFIED"}
+	}
+	c.LoginName = user.Login
+	c.bindUpstreamAccount(user)
+	return user, nil
+}
+
+func phoneAuthenticationRequestError(ctx context.Context) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return &LoginError{Code: "REQUEST_FAILED"}
+}
+
+// Authentication needs an authoritative positive numeric identity. Ordinary
+// user-info responses omit status, but an explicitly present malformed status
+// must not be mistaken for the successful absence of an envelope.
+func (c *Client) authenticationUserInfo(ctx context.Context) (*User, error) {
+	var response struct {
+		User
+		Status json.RawMessage `json:"status"`
+	}
+	if err := c.request(ctx, http.MethodGet, "/api/users/get_user_info.json", url.Values{"school": {"1"}}, nil, "/", &response); err != nil {
+		return nil, phoneAuthenticationRequestError(ctx)
+	}
+	if len(response.Status) > 0 {
+		status, err := numericAPIStatus(response.Status)
+		if err != nil || status != 0 {
+			return nil, &LoginError{Code: "INVALID_RESPONSE"}
+		}
+	}
+	if strings.TrimSpace(response.Login) == "" || response.UserID <= 0 {
+		return nil, &LoginError{Code: "IDENTITY_UNVERIFIED"}
+	}
+	return &response.User, nil
+}
+
+func validPhoneNumber(phone string) bool {
+	if len(phone) != 11 || phone[0] != '1' {
+		return false
+	}
+	for _, digit := range phone {
+		if digit < '0' || digit > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func numericAPIStatus(raw json.RawMessage) (int, error) {
+	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return 0, errors.New("missing status")
+	}
+	var status int
+	if err := json.Unmarshal(raw, &status); err != nil {
+		return 0, err
+	}
+	return status, nil
+}
+
+func hasEducoderSession(c *Client) bool {
+	if c == nil || c.HTTP == nil || c.HTTP.Jar == nil {
+		return false
+	}
+	u, err := url.Parse(c.BaseURL)
+	if err != nil {
+		return false
+	}
+	for _, cookie := range c.HTTP.Jar.Cookies(u) {
+		if cookie.Name == "_educoder_session" && cookie.Value != "" && cookie.Value != "logout" && cookie.Value != "null" {
+			return true
+		}
+	}
+	return false
 }
 
 // bindUpstreamAccount makes every session of one Educoder account share that
