@@ -28,6 +28,14 @@ func (a *busyAdapter) SelfTest(ctx context.Context, target Target, file problem.
 	return a.fakeAdapter.SelfTest(ctx, target, file, input, expected)
 }
 
+// selfTestingGoodStore holds a bank answer whose formal proof is incomplete,
+// so it still runs its public samples before the formal evaluation.
+func selfTestingGoodStore() *fakeStore {
+	store := verifiedGoodStore()
+	store.candidates[0].Validations[0].Complete = false
+	return store
+}
+
 func fastResourceBackoff(t *testing.T) {
 	t.Helper()
 	old := selfTestResourceBackoff
@@ -40,7 +48,7 @@ func TestSelfTestResourcePressureRetriesSameCandidate(t *testing.T) {
 	adapter := &busyAdapter{fakeAdapter: fakeAdapter{snap: testSnapshot()}, busy: 2, refusal: &educoder.SelfTestRefusedError{Kind: "resource_busy"}}
 	req := recoveryRequest()
 	req.Mode = ModeSubmit
-	r, err := New(verifiedGoodStore(), nil, Config{}).Run(context.Background(), adapter, req)
+	r, err := New(selfTestingGoodStore(), nil, Config{}).Run(context.Background(), adapter, req)
 	if err != nil || r.Status != "passed" || adapter.calls != 3 || adapter.submits != 1 {
 		t.Fatalf("result=%+v err=%v calls=%d submits=%d", r, err, adapter.calls, adapter.submits)
 	}
@@ -60,7 +68,7 @@ func TestPersistentResourcePressureIsUnavailableNotUncertain(t *testing.T) {
 			}}
 			req := recoveryRequest()
 			req.Mode = ModeSubmit
-			r, err := New(verifiedGoodStore(), provider, Config{}).Run(context.Background(), adapter, req)
+			r, err := New(selfTestingGoodStore(), provider, Config{}).Run(context.Background(), adapter, req)
 			var typed *educoder.SelfTestRefusedError
 			if !errors.As(err, &typed) || r.Status != "resource_unavailable" || r.SelfTestStatus != "unavailable" || adapter.submits != 0 || r.ModelCalls != 0 {
 				t.Fatalf("result=%+v err=%v submits=%d", r, err, adapter.submits)

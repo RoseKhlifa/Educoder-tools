@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.144 - 2026-11-20
+
+- Restore the verified-candidate self-test skip: a daytime control showed game_build succeeds without a prior self-test, and the night-time -2 was a platform resource refusal
+
 ## 0.1.143 - 2026-11-20
 
 - Contain panics in parallel homework and concurrent figure goroutines so one faulty homework fails its job as before instead of ending the whole service

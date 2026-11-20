@@ -161,6 +161,14 @@ running_code_status=1 → 304 未更新 → running_code_status=2
 
 `-2` 之后平台关卡显示 `evaluate_count` 加 1、`passed_status=1`，但没有任何测试结果（`game.status=0`，测试结果为空），与“评测未启动”一致。原站的“评测”按钮流程是 `update_file(evaluate=1)` → `game_build`，并不要求先自测；当晚的 `-2` 与同一时段所有自测请求返回的“资源紧张”一致。
 
+同日 11:10 白天复测：平台恢复后，对一个从未自测过的运行实例直接执行 `update_file(evaluate=1)` → `game_build`，结果如下：
+
+- `game_build` 返回 `status:1`，`res.data` 包含 `msg`（评测完成）、`queueCode:0`、`waitNum:0`、`ableToCreate:1`、`costTime`；
+- `game_status` 随后正常完成；
+- 全程 9 秒。
+
+这证实正式评测不依赖先自测，`-2` 来自平台资源拒绝。`waitNum`、`ableToCreate` 与 `queueCode` 同在 `res.data` 中，可作为后续实现排队处理时的字段依据。
+
 ## 选择题链路（独立题型）
 
 随后对同一课程中的 `客观题测试-第5章树和二叉树` 实测确认：选择题不属于代码题的文件编辑协议。任务详情响应使用 `st=1`、`challenge.st=1`，并提供非空 `chooses` 数组；本次一关含 10 道题。每项包含 1-based `position`、`subject`、`question_type`、`category` 和 `challenge_question` 选项数组；选项保存 0-based `position` 与 `option_name`。`category=1` 表示单选，前端提交一个字母；其他已观察 category 使用排序去重后的多字母字符串。
