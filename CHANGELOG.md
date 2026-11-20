@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.159 - 2026-11-20
+
+- Polish live progress: say where a stopped job stands, keep keyboard focus and scroll across live repaints, unstick the pointer guard, show one admin switch on mobile, refresh admin pages while idle without freezing a closed job, and pause Educoder-bound course revalidation for an idle tab
+
 ## 0.1.158 - 2026-11-20
 
 - Show the model provider balance on the admin overview, read at most every five minutes, with a top warning below about one heavy day of spend so an unattended service is topped up before generation fails

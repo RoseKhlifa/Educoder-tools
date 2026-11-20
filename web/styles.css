@@ -1984,10 +1984,50 @@ td { border-color:var(--line); }
 .job-footer > .job-progress { flex: 1 1 260px; min-width: 0; margin-block: 0; }
 .job-footer > .job-live { flex: 1 1 100%; min-width: 0; }
 .job-footer > .job-actions { margin-left: auto; }
-.job-live > span:not(.live-dot) { flex: 1 1 auto; min-width: 0; }
+/* flex-basis 0, not auto: with auto the sentence's max-content width is its
+   base size, so in this wrapping row it pushed itself below the live dot
+   instead of sharing the line with it. */
+.job-live > span:not(.live-dot) { flex: 1 1 0; min-width: 0; }
 .job-live > small { flex: 1 1 100%; }
 @media (max-width: 620px) {
   .job-footer { align-items: flex-start; }
   .job-footer > .job-progress { flex-basis: 100%; }
   .job-footer > .text-button, .job-footer > .job-actions { margin-left: 0; }
+}
+
+/* ---------------------------------------------------------------------------
+   Mobile navigation. The consumer link set already contains the admin entry,
+   so the row only appends a switch on admin pages. Four consumer tabs share
+   the width evenly; the longer admin set still scrolls, but without the
+   scrollbar sitting on top of the content.
+--------------------------------------------------------------------------- */
+.mobile-nav {
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+}
+.mobile-nav::-webkit-scrollbar { display: none; }
+.mobile-nav .nav-item {
+  justify-content: center;
+  white-space: nowrap;
+  scroll-snap-align: start;
+}
+/* Four consumer tabs share the width evenly. The six operator tabs do not fit
+   a phone at a readable size, so they keep their natural width and the row
+   scrolls, with a fading edge as the affordance the hidden bar no longer is. */
+.consumer-app .mobile-nav .nav-item { flex: 1 1 0; min-width: 0; }
+/* The operator row keeps its natural width and scrolls. A mask fades its
+   right edge as the affordance the hidden scrollbar no longer provides; a
+   mask is used rather than an overlay so the shell's own `order:` layout
+   rules keep applying to the nav element itself. */
+.admin-app .mobile-nav .nav-item { flex: 0 0 auto; }
+.admin-app .mobile-nav {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 26px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 26px), transparent);
+}
+@media (max-width: 420px) {
+  .mobile-nav { gap: 2px; padding-inline: 6px; }
+  .mobile-nav .nav-item { padding: 0 7px; gap: 5px; font-size: 12px; }
+  .mobile-nav .nav-item svg { width: 16px; height: 16px; }
 }

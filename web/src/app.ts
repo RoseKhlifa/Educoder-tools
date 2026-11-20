@@ -52,6 +52,10 @@ let pollTimer: ReturnType<typeof setTimeout> | undefined;
 // Detailed single-job responses for the job the user is currently watching.
 // The list projection omits per-level detail, so it is kept separately.
 const jobDetails = new Map<string, AnswerJob>();
+// The operator list projects jobs without their per-level rows, so rebuilding
+// an open dialog from a list row blanked its level chips until the next
+// single-job response. Keep the detailed copy until its replacement arrives.
+const adminJobDetails = new Map<string, AdminJob>();
 let focusTimer: ReturnType<typeof setTimeout> | undefined;
 let adminTimer: ReturnType<typeof setTimeout> | undefined;
 let previousFocus: HTMLElement | null = null;
@@ -61,6 +65,11 @@ let renderedHTML = '';
 // background repaints wait for the pointer to come up.
 let pointerHeld = false;
 let deferredRender = false;
+let pointerHeldAt = 0;
+// A press released outside the window delivers no pointerup, so the guard is
+// also lifted on blur and on hiding, and never holds a repaint for longer
+// than a press plausibly lasts.
+const pointerHoldLimit = 1500;
 type DetailTab = 'homework' | 'common' | 'exercise';
 interface CourseDialog {
   course: Course; homeworks: Homework[] | null; exercises: Exercise[] | null; tab: DetailTab;
@@ -120,11 +129,14 @@ async function readCourseData<T>(read: () => Promise<T>): Promise<T> {
 const isAdmin = (): boolean => state.user?.role === 'admin' || Boolean(state.user?.permissions?.includes('admin'));
 const accessible = (): boolean => state.user?.service_access !== false && state.user?.status !== 'disabled';
 const activeJobs = (): AnswerJob[] => state.jobs.filter(job => serviceJob(job) && pendingJob(job));
-function stopPoll(): void { if (pollTimer !== undefined) clearTimeout(pollTimer); pollTimer = undefined; stopFocusPoll(); stopAdminPoll(); }
+// stopPoll owns the consumer timers only. It is called by scheduleJobs on
+// every cycle, so cancelling the operator refresh here left the admin pages
+// frozen after their first load: nothing re-armed that timer.
+function stopPoll(): void { if (pollTimer !== undefined) clearTimeout(pollTimer); pollTimer = undefined; stopFocusPoll(); }
 function resetSession(message = ''): void {
-  jobActions.clear(); recoveryNoticeID = ''; adminJobActions.clear(); homeworkRetryKeys.clear(); jobDialog = null; adminJobDialog = null; homeworkSync.clear(); homeworkJobObservations.clear(); jobDetails.clear();
+  jobActions.clear(); recoveryNoticeID = ''; adminJobActions.clear(); homeworkRetryKeys.clear(); jobDialog = null; adminJobDialog = null; homeworkSync.clear(); homeworkJobObservations.clear(); jobDetails.clear(); adminJobDetails.clear();
   userTickets = emptyTickets(); adminTickets = emptyTickets(); ticketDialog = null; ticketRetryKeys.clear(); ticketFormDrafts.clear();
-  renderedHTML = ''; generation++; jobsRevision++; coursesRevision++; adminRevision++; modalRevision++; bankRevision++; bankLoadedAt = 0; todayRevision++; todayLoadedAt = 0; todayLoadedDate = ''; guidelinesSource = 'login'; stopPoll(); courseDialog = null; courseCache.clear();
+  renderedHTML = ''; stopAdminPoll(); generation++; jobsRevision++; coursesRevision++; adminRevision++; modalRevision++; bankRevision++; bankLoadedAt = 0; todayRevision++; todayLoadedAt = 0; todayLoadedDate = ''; guidelinesSource = 'login'; stopPoll(); courseDialog = null; courseCache.clear();
   Object.assign(state, { user: null, page: 'courses', courses: [], jobs: [], selected: [], loading: false, signingIn: false, creating: false, notice: '', loginError: message, modal: '', modalKind: '', modalAction: null, search: '', progressHistoryOpen: false, questionBank: null, bankLoading: false, bankUnavailable: false, todaySummary: null, todayLoading: false, todayUnavailable: false, admin: { overview: {}, users: [], jobs: [], audit: [], loading: false, error: false, userSearch: '', userFilter: 'all' } });
   render();
 }
@@ -195,7 +207,7 @@ function renderShell(): string {
   const active = current.filter(pendingJob).length;
   const followUp = current.filter(job => serviceStatus(job) === 'support').length;
   const completed = state.jobs.filter(job => serviceJob(job) && serviceStatus(job) === 'completed').length;
-  return `<div id="view-app" class="app-shell ${admin ? 'admin-app' : 'consumer-app'}"><header class="global-nav topbar ${admin ? 'admin-topbar' : ''}"><div class="top-left"><button class="nav-brand" type="button" data-nav="${admin ? 'admin-overview' : 'courses'}" aria-label="头歌妈妈首页">${brandLogo()}<span class="name">头歌妈妈</span><span class="domain">touge.mom</span></button>${admin ? '<span class="admin-chip">服务管理</span>' : ''}</div><nav class="nav-links" aria-label="${admin ? '管理员导航' : '主导航'}">${links}</nav><div class="nav-user">${avatar()}<span class="user-name">${e(state.user?.name || '同学')}</span><button class="icon-button" data-action="logout" aria-label="退出登录" title="退出登录">${icon('logout')}</button></div></header><div class="mobile-nav">${links}${isAdmin() ? navItem(admin ? 'courses' : 'admin-overview', admin ? '用户端' : '管理后台', admin ? 'courses' : 'overview') : ''}</div><div class="${admin ? 'shell admin-shell' : 'workspace consumer-workspace'}">${admin ? `<aside class="side admin-side" aria-label="管理员导航"><div class="side-label">服务管理</div><nav class="side-nav">${adminSideLinks}</nav><div class="side-foot"><p class="t">服务工作台</p><p>异常与执行记录只在管理端查看，用户端只展示完成进度。</p><button class="btn ghost text-button" data-nav="courses">${icon('courses')}返回用户端</button></div></aside>` : `<aside class="side consumer-side" aria-label="侧栏概况"><div class="side-card"><h3>当前概况</h3><div class="stat-row"><span class="l">我的课程</span><span class="n">${state.courses.length}</span></div><div class="stat-row"><span class="l">已选中</span><span class="n">${selectedCount}</span></div><div class="stat-row"><span class="l">处理中</span><span class="n">${active}</span></div><div class="stat-row"><span class="l">待跟进</span><span class="n">${followUp}</span></div><div class="stat-row"><span class="l">已完成任务</span><span class="n">${completed}</span></div></div>${renderTodaySummary()}<div class="consumer-side-bottom">${renderQuestionBank('sidebar')}</div></aside>`}<main class="main ${admin ? 'admin-main' : 'consumer-main'}">${state.notice ? `<div class="service-notice" role="status">${e(state.notice)}</div>` : ''}${state.page === 'admin-support' ? renderTickets(adminTickets, true) : admin ? renderAdmin(state.page.replace('admin-', '') as AdminPage, state.admin, adminJobActions) : state.page === 'support' ? renderTickets(userTickets, false) : state.page === 'courses' ? renderCourses() : renderProgress()}${admin ? '' : `<div class="bank-mobile"><div class="mobile-service-summary">${renderTodaySummary()}</div>${renderQuestionBank('mobile')}</div>`}<footer class="page-footer">头歌妈妈 · 把任务交给我们${appVersion ? ` · <span class="app-version">v${e(appVersion)}</span>` : ''}</footer></main></div></div>`;
+  return `<div id="view-app" class="app-shell ${admin ? 'admin-app' : 'consumer-app'}"><header class="global-nav topbar ${admin ? 'admin-topbar' : ''}"><div class="top-left"><button class="nav-brand" type="button" data-nav="${admin ? 'admin-overview' : 'courses'}" aria-label="头歌妈妈首页">${brandLogo()}<span class="name">头歌妈妈</span><span class="domain">touge.mom</span></button>${admin ? '<span class="admin-chip">服务管理</span>' : ''}</div><nav class="nav-links" aria-label="${admin ? '管理员导航' : '主导航'}">${links}</nav><div class="nav-user">${avatar()}<span class="user-name">${e(state.user?.name || '同学')}</span><button class="icon-button" data-action="logout" aria-label="退出登录" title="退出登录">${icon('logout')}</button></div></header><nav class="mobile-nav" aria-label="${admin ? '管理员导航' : '主导航'}">${links}${admin && isAdmin() ? navItem('courses', '用户端', 'courses') : ''}</nav><div class="${admin ? 'shell admin-shell' : 'workspace consumer-workspace'}">${admin ? `<aside class="side admin-side" aria-label="管理员导航"><div class="side-label">服务管理</div><nav class="side-nav">${adminSideLinks}</nav><div class="side-foot"><p class="t">服务工作台</p><p>异常与执行记录只在管理端查看，用户端只展示完成进度。</p><button class="btn ghost text-button" data-nav="courses">${icon('courses')}返回用户端</button></div></aside>` : `<aside class="side consumer-side" aria-label="侧栏概况"><div class="side-card"><h3>当前概况</h3><div class="stat-row"><span class="l">我的课程</span><span class="n">${state.courses.length}</span></div><div class="stat-row"><span class="l">已选中</span><span class="n">${selectedCount}</span></div><div class="stat-row"><span class="l">处理中</span><span class="n">${active}</span></div><div class="stat-row"><span class="l">待跟进</span><span class="n">${followUp}</span></div><div class="stat-row"><span class="l">已完成任务</span><span class="n">${completed}</span></div></div>${renderTodaySummary()}<div class="consumer-side-bottom">${renderQuestionBank('sidebar')}</div></aside>`}<main class="main ${admin ? 'admin-main' : 'consumer-main'}">${state.notice ? `<div class="service-notice" role="status">${e(state.notice)}</div>` : ''}${state.page === 'admin-support' ? renderTickets(adminTickets, true) : admin ? renderAdmin(state.page.replace('admin-', '') as AdminPage, state.admin, adminJobActions) : state.page === 'support' ? renderTickets(userTickets, false) : state.page === 'courses' ? renderCourses() : renderProgress()}${admin ? '' : `<div class="bank-mobile"><div class="mobile-service-summary">${renderTodaySummary()}</div>${renderQuestionBank('mobile')}</div>`}<footer class="page-footer">头歌妈妈 · 把任务交给我们${appVersion ? ` · <span class="app-version">v${e(appVersion)}</span>` : ''}</footer></main></div></div>`;
 }
 function matchingCourseJobs(course: string): AnswerJob[] {
   return consumerCurrentJobs().filter(job => job.request.scope !== 'exercise' && (job.request.scope === 'all' || job.request.course === course));
@@ -260,8 +272,25 @@ function prefetchCourseDetails(courses: Course[], force = false): void {
     void courseCache.getExercises(identifier, true).catch(() => {});
   }
 }
+// Revalidating the course lists is the only background polling that reaches
+// Educoder, and it goes out on the same account and address as that user's
+// jobs. A tab left open but abandoned would re-read every course forever, so
+// it pauses once the person has been idle for a while. Job polling is
+// deliberately not touched: someone watching a running job still sees it.
+const idleRevalidateAfter = 15 * 60 * 1000;
+let lastInputAt = Date.now();
+const userIsIdle = (): boolean => Date.now() - lastInputAt >= idleRevalidateAfter;
+/** noteUserInput records activity and refreshes once when idleness ends. */
+function noteUserInput(): void {
+  const resuming = userIsIdle();
+  lastInputAt = Date.now();
+  // The first input after an idle stretch revalidates immediately, exactly as
+  // returning to the tab does.
+  if (resuming) revalidateVisibleCourseWork();
+}
 function revalidateVisibleCourseWork(): void {
   if (!state.user || document.visibilityState === 'hidden' || !['courses', 'progress'].includes(state.page)) return;
+  if (userIsIdle()) return;
   courseCache.revalidateHomeworks(state.courses.map(course => course.identifier));
 }
 
@@ -362,6 +391,65 @@ function renderCourseDetail(dialog: CourseDialog): string {
   const message = dialog.loading[tab] ? (hasData ? '正在更新列表…' : '') : dialog.failed[tab] && hasData ? '暂未更新，继续显示上次结果。' : refreshed ? `更新于 ${refreshed}` : '';
   return `<h2 id="modal-title" class="course-detail-title">${e(course.name)}</h2><button class="icon-button course-detail-refresh ${dialog.loading.homework || dialog.loading.exercise ? 'refreshing' : ''}" type="button" data-action="detail-refresh" aria-label="刷新作业和考试" title="刷新作业和考试" ${dialog.loading.homework || dialog.loading.exercise ? 'disabled' : ''}>${icon('refresh')}</button><p class="detail-sync-message" role="status">${e(message)}</p><div class="detail-tabs" role="tablist"><button class="detail-tab ${tab === 'homework' ? 'selected' : ''}" data-detail-tab="homework" role="tab" aria-selected="${tab === 'homework'}">课程实验</button><button class="detail-tab ${tab === 'common' ? 'selected' : ''}" data-detail-tab="common" role="tab" aria-selected="${tab === 'common'}">图文作业</button><button class="detail-tab ${tab === 'exercise' ? 'selected' : ''}" data-detail-tab="exercise" role="tab" aria-selected="${tab === 'exercise'}">在线考试</button></div>${tab === 'homework' ? homeworkBody : tab === 'common' ? commonBody : examBody}<div class="modal-actions"><button class="button" data-action="close-modal">关闭</button></div>`;
 }
+/**
+ * focusKey identifies a control across a re-render. The page is repainted by
+ * replacing its markup, so the focused node is a different object afterwards;
+ * without a stable key a keyboard user is dropped onto <body> every poll and
+ * cannot hold a button such as "stop" or "retry" on a running job.
+ */
+function focusKey(element: Element | null): string {
+  const el = element as HTMLElement | null;
+  if (!el || el === document.body || !el.tagName) return '';
+  if (el.id) return `id:${el.id}`;
+  const data = el.dataset;
+  if (!data) return '';
+  for (const name of Object.keys(data)) {
+    const value = data[name];
+    if (value !== undefined) return `${el.tagName}:${name}=${value}`;
+  }
+  return '';
+}
+function findByFocusKey(key: string): HTMLElement | null {
+  if (!key) return null;
+  const candidates = document.querySelectorAll<HTMLElement>('button, input, textarea, select, a[href], summary, [tabindex]');
+  for (const el of candidates) {
+    if (focusKey(el) === key) return el;
+  }
+  return null;
+}
+interface FocusSnapshot {
+  key: string;
+  start: number | null;
+  end: number | null;
+  modalScroll: number;
+  pageScroll: number;
+  historyOpen: boolean;
+}
+function captureFocus(): FocusSnapshot {
+  const active = document.activeElement as HTMLInputElement | null;
+  const text = active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA');
+  return {
+    key: focusKey(active),
+    start: text ? active!.selectionStart : null,
+    end: text ? active!.selectionEnd : null,
+    modalScroll: document.querySelector<HTMLElement>('.modal')?.scrollTop ?? 0,
+    pageScroll: typeof window.scrollY === 'number' ? window.scrollY : 0,
+    historyOpen: document.querySelector<HTMLDetailsElement>('[data-service-history]')?.open ?? false,
+  };
+}
+function restoreFocus(snapshot: FocusSnapshot): void {
+  const modal = document.querySelector<HTMLElement>('.modal');
+  if (modal && snapshot.modalScroll) modal.scrollTop = snapshot.modalScroll;
+  if (snapshot.pageScroll && typeof window.scrollTo === 'function') window.scrollTo({ top: snapshot.pageScroll });
+  const history = document.querySelector<HTMLDetailsElement>('[data-service-history]');
+  if (history && snapshot.historyOpen) history.open = true;
+  const target = findByFocusKey(snapshot.key);
+  if (!target || target === document.activeElement || (target as HTMLButtonElement).disabled || typeof target.focus !== 'function') return;
+  target.focus({ preventScroll: true });
+  if (snapshot.start !== null && snapshot.end !== null && typeof (target as HTMLInputElement).setSelectionRange === 'function') {
+    (target as HTMLInputElement).setSelectionRange(snapshot.start, snapshot.end);
+  }
+}
 function render(): void {
   if (jobDialog && state.modalKind === 'job') {
     const job = state.jobs.find(item => item.id === jobDialog?.id);
@@ -386,8 +474,13 @@ function render(): void {
   // markup would drop focus, text selection and in-flight clicks for nothing,
   // so an unchanged render is skipped entirely.
   if (html === renderedHTML && root!.firstChild) return;
+  // Replacing the markup discards the focused node, the caret and both scroll
+  // positions. Carry them across so a live-updating page stays usable with a
+  // keyboard and does not scroll itself back to the top every poll.
+  const focus = captureFocus();
   renderedHTML = html;
   root!.innerHTML = html;
+  restoreFocus(focus);
   if (draft) {
     const account = document.querySelector<HTMLInputElement>('#login');
     const password = document.querySelector<HTMLInputElement>('#password');
@@ -433,8 +526,14 @@ function restoreTicketForm(draft: TicketFormDraft | null): void {
 }
 /** renderLive repaints for background data, never mid-click. */
 function renderLive(): void {
-  if (pointerHeld) { deferredRender = true; return; }
+  if (pointerHeld && Date.now() - pointerHeldAt < pointerHoldLimit) { deferredRender = true; return; }
+  pointerHeld = false;
+  deferredRender = false;
   render();
+}
+function releasePointer(): void {
+  pointerHeld = false;
+  if (deferredRender) { deferredRender = false; render(); }
 }
 function showModal(content: string, action: (() => Promise<void> | void) | null = null, kind: '' | 'guidelines' | 'ticket' | 'job' | 'admin-job' | 'course' = ''): void {
   if (kind !== 'course') courseDialog = null;
@@ -448,7 +547,7 @@ function showModal(content: string, action: (() => Promise<void> | void) | null 
 function closeModal(): void {
   const guidelines = state.modalKind === 'guidelines';
   const closedTicket = ticketDialog?.id;
-  state.modal = ''; state.modalKind = ''; state.modalAction = null; modalRevision++; courseDialog = null; ticketDialog = null; jobDialog = null; adminJobDialog = null; render();
+  state.modal = ''; state.modalKind = ''; state.modalAction = null; modalRevision++; courseDialog = null; ticketDialog = null; jobDialog = null; adminJobDialog = null; adminJobDetails.clear(); render();
   scheduleFocusedJob();
   if (guidelines) document.querySelector<HTMLButtonElement>(`[data-guidelines-source="${guidelinesSource}"]`)?.focus();
   else if (closedTicket) [...document.querySelectorAll<HTMLButtonElement>('[data-ticket-open]')].find(button => button.dataset.ticketOpen === closedTicket)?.focus();
@@ -965,6 +1064,8 @@ async function loadAdminJobDetail(id: string): Promise<void> {
   try {
     const job = await api.adminJob(id);
     if (session !== generation || !job || job.id !== id) return;
+    adminJobDetails.set(id, job);
+    for (const key of [...adminJobDetails.keys()]) if (key !== id) adminJobDetails.delete(key);
     state.admin.jobs = state.admin.jobs.map(item => item.id === id ? job : item);
     if (adminJobDialog && state.modalKind === 'admin-job' && adminJobDialog.id === id) {
       state.modal = adminJobDetailContent(job, adminJobDialog.historical);
@@ -985,13 +1086,15 @@ function stopAdminPoll(): void { if (adminTimer !== undefined) clearTimeout(admi
 function scheduleAdmin(): void {
   stopAdminPoll();
   if (!state.user || !isAdmin() || !state.page.startsWith('admin-') || state.page === 'admin-support') return;
+  // Running jobs refresh every 6 s. An idle page still refreshes every 20 s so
+  // a job a user has just started shows up without a manual refresh; these
+  // reads stay on this server and never reach Educoder.
   const active = state.admin.jobs.some(job => ['queued', 'running'].includes(job.status));
-  if (!active) return;
   adminTimer = setTimeout(() => {
     adminTimer = undefined;
     if (document.visibilityState === 'hidden') { scheduleAdmin(); return; }
     void loadAdmin(true);
-  }, 6000);
+  }, active ? 6000 : 20000);
 }
 async function loadAdmin(background = false): Promise<void> {
   if (!isAdmin()) return; const session = generation; const revision = ++adminRevision;
@@ -1002,7 +1105,11 @@ async function loadAdmin(background = false): Promise<void> {
   try {
     const [overview, users, jobs, audit] = await Promise.all([api.adminOverview(), api.adminUsers(), api.adminJobs(), api.adminAudit()]);
     if (session !== generation || revision !== adminRevision) return;
-    Object.assign(state.admin, { overview, users, jobs, audit, loading: false, error: false });
+    // Substitute the detailed copy of the job being watched before anything
+    // renders from this list; its replacement is requested right after.
+    // Only while its dialog is open: once closed, the list row is the fresher
+    // record, and a kept copy would freeze that job in the list.
+    Object.assign(state.admin, { overview, users, jobs: jobs.map(job => adminJobDialog?.id === job.id ? adminJobDetails.get(job.id) ?? job : job), audit, loading: false, error: false });
     if (adminJobDialog) void loadAdminJobDetail(adminJobDialog.id);
     if (adminJobDialog && state.modalKind === 'admin-job') {
       const job = state.admin.jobs.find(item => item.id === adminJobDialog?.id);
@@ -1029,18 +1136,21 @@ function navigate(page: string): void {
 
 function resumeVisibleCourseWork(): void {
   if (!state.user || document.visibilityState === 'hidden') return;
+  lastInputAt = Date.now();
   revalidateVisibleCourseWork();
   stopPoll(); void loadJobs(); void loadQuestionBank(); void loadTodaySummary();
   if (state.page.startsWith('admin-')) void loadAdmin(true);
 }
-document.addEventListener('pointerdown', () => { pointerHeld = true; }, true);
-for (const event of ['pointerup', 'pointercancel']) {
-  document.addEventListener(event, () => {
-    pointerHeld = false;
-    if (deferredRender) { deferredRender = false; render(); }
-  }, true);
-}
-document.addEventListener('visibilitychange', resumeVisibleCourseWork);
+document.addEventListener('pointerdown', () => { pointerHeld = true; pointerHeldAt = Date.now(); noteUserInput(); }, true);
+for (const event of ['wheel', 'touchstart']) document.addEventListener(event, noteUserInput, { capture: true, passive: true });
+for (const event of ['pointerup', 'pointercancel']) document.addEventListener(event, releasePointer, true);
+window.addEventListener('blur', releasePointer);
+// One handler per event: hiding the page releases a press that will never
+// deliver its pointerup, and showing it again resumes the visible work.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') { releasePointer(); return; }
+  resumeVisibleCourseWork();
+});
 window.addEventListener?.('focus', resumeVisibleCourseWork);
 function bindEvents(): void {
   document.querySelector<HTMLFormElement>('#login-form')?.addEventListener('submit', event => { void login(event); });
@@ -1177,6 +1287,7 @@ async function adminAction(action: () => Promise<void>): Promise<void> {
   catch (error) { if (session !== generation || handleError(error)) return; state.notice = '管理操作暂未完成，请刷新数据确认状态。'; render(); }
 }
 document.addEventListener('keydown', event => {
+  noteUserInput();
   if (event.key === 'Escape' && state.modal) closeModal();
   if (event.key === 'Tab' && state.modal) {
     const items = [...document.querySelectorAll<HTMLElement>('.modal button, .modal input, .modal textarea, .modal select, .modal a[href]')].filter(item => !(item as HTMLButtonElement).disabled);

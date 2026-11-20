@@ -197,6 +197,24 @@ await test('consumer course service and administrator boundary',async t=>{
     assert.equal(page.requests.filter(item=>item.url==='/api/admin/jobs/admin-recovery/recover').length,1);
     assert.equal(page.requests.some(item=>item.url==='/api/jobs/admin-recovery/recover'),false);
   });
+  await t.test('a closed operator job dialog never freezes that job in the list, and an idle operator page keeps refreshing', async () => {
+    const context={user:{name:'示例同学'},course:{name:'示例课堂'},homework:{name:'示例作业'}};
+    let rows=[job({id:'admin-live',status:'running',phase:'evaluating',owner_id:'platform:synthetic',context})];
+    const page=await app({'/api/auth/me':()=>ok({user,platform:{role:'admin',status:'active'}}),'/api/admin/jobs':()=>ok({items:rows}),'/api/admin/jobs/admin-live':()=>ok(rows[0])});
+    page.get('[data-nav="admin-overview"]').dispatch('click');await settle();
+    assert.match(page.html(),/data-admin-cancel="admin-live"/);
+    page.get('[data-admin-job-detail="admin-live"]').dispatch('click');await settle();
+    assert.ok(page.requests.some(item=>item.url==='/api/admin/jobs/admin-live'));
+    page.get('[data-action="close-modal"]').dispatch('click');
+    rows=[job({id:'admin-live',status:'succeeded',phase:'completed',owner_id:'platform:synthetic',context,result:{service_status:'completed',total_homeworks:2,completed_homeworks:2}})];
+    page.get('[data-action="admin-refresh"]').dispatch('click');await settle();
+    assert.doesNotMatch(page.html(),/data-admin-cancel="admin-live"/);
+    // Nothing runs now, yet the page keeps refreshing so new jobs appear.
+    assert.equal([...page.timers.values()].filter(item=>item.delay===20000).length,1);
+    const before=page.requests.filter(item=>item.url==='/api/admin/jobs').length;
+    await page.tick();
+    assert.ok(page.requests.filter(item=>item.url==='/api/admin/jobs').length>before);
+  });
   await t.test('admin retry confirms readable target, serializes each task action and reloads the server child', async () => {
     const context={user:{name:'示例同学'},course:{name:'示例课堂'},homework:{name:'示例作业'}};
     const source=job({id:'admin-source',status:'failed',can_retry:true,can_recover:false,owner_id:'platform:synthetic',context});
@@ -685,6 +703,29 @@ await test('consumer course service and administrator boundary',async t=>{
       now += 120_001; page.windowListeners.get('focus')(); await settle();
       assert.equal(page.requests.filter(item => item.url.endsWith('/homeworks')).length, 6);
       assert.equal(page.requests.filter(item => item.url.endsWith('/exercises')).length, 2);
+      assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
+    } finally { Date.now = actualNow; }
+  });
+  await t.test('an abandoned tab stops re-reading course lists until the person returns', async () => {
+    const actualNow = Date.now; let now = actualNow(); Date.now = () => now;
+    try {
+      const page = await app({ '/api/courses/COURSE_A/homeworks': () => ok([]), '/api/courses/COURSE_B/homeworks': () => ok([]) });
+      const courseReads = () => page.requests.filter(item => item.url.endsWith('/homeworks')).length;
+      const initial = courseReads();
+      // Course revalidation is the only background polling that reaches the
+      // upstream platform. After a long stretch without input it must stop,
+      // while job polling continues so a running job still updates.
+      now += 15 * 60_000 + 1;
+      const beforeIdle = page.requests.length;
+      await page.tick();
+      assert.equal(courseReads(), initial, 'an idle tab kept re-reading the course lists');
+      assert.ok(page.requests.length > beforeIdle, 'job polling must not be paused by idleness');
+      // The first input after that stretch refreshes once, as returning does.
+      page.document.listeners.get('keydown')({ key: 'a' }); await settle();
+      assert.equal(courseReads(), initial + 2, 'the first input after idling did not refresh');
+      // And normal revalidation resumes afterwards.
+      now += 120_001; await page.tick();
+      assert.equal(courseReads(), initial + 4);
       assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
     } finally { Date.now = actualNow; }
   });
