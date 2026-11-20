@@ -145,21 +145,23 @@ func TestHomeworkUpstreamRequestBudget(t *testing.T) {
 	}
 	t.Logf("upstream requests (%d): %s", counter.total(), counter)
 	// Measured budget for one skipped level plus one model-generated level with
-	// one public sample (v0.1.132 baseline: 31). Every remaining read is a
-	// safety check: post-lock reload, first-write editor guard, formal
-	// read-backs and the independent progress verifications.
+	// one public sample (v0.1.132 baseline: 31; v0.1.133: 26; v0.1.152: 24,
+	// the solver locks first with the run instance the task service already
+	// read and loads once). Every remaining read is a safety check: the locked
+	// load, first-write editor guard, formal read-backs and the independent
+	// progress verifications.
 	counts := counter.snapshot()
 	for key, limit := range map[string]int{
 		"GET /api/courses/C/homework_commons.json":                2, // was 4: per-level admission reuses the batch's homework
 		"GET /api/homework_commons/44/shixun_challenge_data.json": 4, // was 5: no informational solver progress read
-		"GET /api/tasks/G2.json":                                  5, // was 6: self-test reuses the fresh bound task
-		"GET /api/tasks/G2/rep_content.json":                      6, // was 7: no guard read right after our own read-back
+		"GET /api/tasks/G2.json":                                  4, // was 6: self-test reuses the fresh bound task; no pre-lock load
+		"GET /api/tasks/G2/rep_content.json":                      5, // was 7: no guard read right after our own read-back; no pre-lock load
 	} {
 		if counts[key] > limit {
 			t.Errorf("%s=%d exceeds budget %d (%s)", key, counts[key], limit, counter)
 		}
 	}
-	if total := counter.total(); total > 26 {
-		t.Errorf("homework used %d upstream requests, budget 26: %s", total, counter)
+	if total := counter.total(); total > 24 {
+		t.Errorf("homework used %d upstream requests, budget 24: %s", total, counter)
 	}
 }

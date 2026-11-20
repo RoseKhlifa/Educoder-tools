@@ -206,11 +206,13 @@ func TestBankHitLevelUpstreamSequence(t *testing.T) {
 			}
 		}
 	}
-	// Per-level budget measured at v0.1.149: one preflight task read plus the
-	// 12 execution requests of a verified candidate — 5 task detail reads
-	// (admission, two loads, submit), 5 editor file reads (two loads, the
-	// first-write guard, the save read-back, the post-evaluation read-back),
-	// one save, one game_build and one game_status. The homework also reads the
+	// Per-level budget measured at v0.1.152: one preflight task read plus the
+	// 10 execution requests of a verified candidate — 4 task detail reads
+	// (admission, the locked load, submit... ), 4 editor file reads (the locked
+	// load, the first-write guard, the save read-back, the post-evaluation
+	// read-back), one save, one game_build and one game_status. The solver no
+	// longer loads before taking its runtime lock: the task service passes the
+	// run instance it already read as the lock key. The homework also reads the
 	// assignment progress five times (roster, preflight, after each level, and
 	// the final reconciliation) and its assignment list once (two pages).
 	perLevel := map[string]int{}
@@ -220,11 +222,11 @@ func TestBankHitLevelUpstreamSequence(t *testing.T) {
 		}
 	}
 	for level, count := range perLevel {
-		if count > 13 {
-			t.Errorf("%s used %d level-scoped requests, budget 13:\n  %s", level, count, strings.Join(sequence, "\n  "))
+		if count > 11 {
+			t.Errorf("%s used %d level-scoped requests, budget 11:\n  %s", level, count, strings.Join(sequence, "\n  "))
 		}
 	}
-	if len(sequence) > 35 {
-		t.Errorf("bank-hit homework used %d upstream requests, budget 35:\n  %s", len(sequence), strings.Join(sequence, "\n  "))
+	if len(sequence) > 31 {
+		t.Errorf("bank-hit homework used %d upstream requests, budget 31:\n  %s", len(sequence), strings.Join(sequence, "\n  "))
 	}
 }

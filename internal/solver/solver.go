@@ -48,6 +48,11 @@ type Request struct {
 	// SkipProgressRead omits the informational classroom-progress read after a
 	// pass when the caller immediately re-reads the authoritative progress.
 	SkipProgressRead bool `json:"-"`
+	// RuntimeKeyHint is the runtime lock key (the run instance id) the caller
+	// already read for this target. With it the run locks first and loads once
+	// inside the lock; a load whose key differs fails closed. Without it the
+	// run loads, locks and reloads, as before.
+	RuntimeKeyHint string `json:"-"`
 }
 
 // Stage reports a public lifecycle event to server and CLI callers.
@@ -481,6 +486,9 @@ func (s *Service) Run(ctx context.Context, adapter Adapter, req Request) (*Resul
 	ctx, cancel := context.WithTimeout(ctx, req.Timeout)
 	defer cancel()
 	stage(req, "loading", "正在读取题目和编辑器文件")
+	if req.RuntimeKeyHint != "" {
+		return s.runLockedFirst(ctx, adapter, req)
+	}
 	loaded, err := adapter.Load(ctx, Target{req.Course, req.HomeworkID, req.Game})
 	if err != nil {
 		return nil, err
@@ -1958,4 +1966,54 @@ func formallyVerifiedForSnapshot(c *questionbank.Candidate, ref questionbank.Ref
 		}
 	}
 	return false
+}
+
+// runLockedFirst serves callers that already know the runtime lock key. The
+// lock is held before the only load, so the snapshot that drives generation
+// and the editor baseline for every write is read under the lock, exactly as
+// the post-lock reload of the default sequence. A loaded key that differs
+// from the hint means the lock may not cover this runtime: nothing is written
+// and the run stops.
+func (s *Service) runLockedFirst(ctx context.Context, adapter Adapter, req Request) (*Result, error) {
+	unlock, err := s.lock(ctx, req.RuntimeKeyHint)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	target := Target{req.Course, req.HomeworkID, req.Game}
+	locked, err := adapter.Load(ctx, target)
+	if err != nil {
+		return nil, err
+	}
+	if locked.Key != req.RuntimeKeyHint {
+		return nil, errors.New("task runtime changed before acquiring execution lock")
+	}
+	snap, err := problem.Prepare(locked.Snapshot)
+	if err != nil {
+		return nil, fmt.Errorf("prepare problem: %w", err)
+	}
+	ref, err := s.store.UpsertSnapshot(ctx, snap)
+	if err != nil {
+		return nil, err
+	}
+	runID := newRunID()
+	result := &Result{RunID: runID, Status: "running"}
+	state := runState{Result: *result, Mode: req.Mode, Target: target, Owner: ownerKey(req.Owner), IdempotencyKey: req.IdempotencyKey, SnapshotRef: ref, Limits: runLimits{req.MaxModelCalls, req.MaxEvaluations, req.BudgetMicroUSD}}
+	created := time.Now().UTC()
+	if err := s.store.PutRun(ctx, questionbank.RunRecord{ID: runID, Owner: ownerKey(req.Owner), IdempotencyKey: req.IdempotencyKey, Status: "running", Data: mustJSON(state), CreatedAt: created, UpdatedAt: created}); err != nil {
+		return nil, err
+	}
+	if err := s.bindExternalCandidates(ctx, ref, locked); err != nil {
+		result.Status = "load_failed"
+		if ctx.Err() != nil {
+			result.Status = "canceled"
+		}
+		state.Result = *result
+		_ = s.persist(ctx, runID, state, result.Status, created)
+		return result, err
+	}
+	if binder, ok := adapter.(snapshotBinder); ok {
+		binder.bindSnapshot(locked)
+	}
+	return s.execute(ctx, adapter, req, snap, ref, state, result, created)
 }

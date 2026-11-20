@@ -281,7 +281,10 @@ func (s *Service) Run(ctx context.Context, client *educoder.Client, req Request,
 		solverReq := solver.Request{Owner: req.Owner, Course: req.Course, HomeworkID: req.HomeworkID, Game: req.Game, Mode: req.Mode, IdempotencyKey: req.IdempotencyKey, BudgetMicroUSD: req.BudgetMicroUSD, MaxModelCalls: s.cfg.MaxModelCalls, MaxEvaluations: s.cfg.MaxEvaluations, OnProgress: func(st solver.Stage) { emit(st.Phase, "programming", st.Message) },
 			// A homework batch re-reads the authoritative progress right after
 			// each level, so the solver's own informational read is redundant.
-			SkipProgressRead: req.Homework != nil}
+			SkipProgressRead: req.Homework != nil,
+			// The task was just read for its kind; its run instance is the
+			// solver's lock key, so the solver can lock first and load once.
+			RuntimeKeyHint: fmt.Sprint(task.MyShixun.ID)}
 		if solverReq.BudgetMicroUSD <= 0 {
 			solverReq.BudgetMicroUSD = s.cfg.BudgetMicroUSD
 		}

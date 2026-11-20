@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.152 - 2026-11-20
+
+- Lock first and load once when the task service already knows the run instance, dropping the pre-lock task and editor reads from every level
+
 ## 0.1.151 - 2026-11-20
 
 - Wait for queued graphic evaluations through the platform queue before polling them, instead of letting the poll deadline expire while still queued
