@@ -453,3 +453,73 @@ func TestGraphicResourcePressureIsTypedAndCancellable(t *testing.T) {
 		t.Fatalf("resource pressure was not classified or cancellable: %v", err)
 	}
 }
+
+// A queued graphic evaluation is waited for through the platform queue before
+// game_status is polled.
+func TestGraphicQueuedEvaluationWaitsForStartBeforePolling(t *testing.T) {
+	fastQueue(t, time.Minute)
+	task := graphicTaskFixture(t)
+	var events []string
+	built, ranks := false, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		events = append(events, r.Method+" "+r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/tasks/GRAPHIC1.json":
+			clone := *task
+			if built {
+				clone.Game.Status = 2
+			}
+			_ = json.NewEncoder(w).Encode(clone)
+		case "/api/myshixuns/MY1/start.json":
+			ioJSON(w, `{"status":0,"data":{"ssh_address":"ssh.educoder.net","port":"2222","username":"headless","password":"ephemeral-password","myshixun_id":80}}`)
+		case "/api/myshixuns/MY1/update_file.json":
+			ioJSON(w, `{"content":{"commitID":""},"resubmit":"fixture-resubmit","sec_key":"prepared-key","content_modified":7}`)
+		case "/api/tasks/GRAPHIC1/game_build.json":
+			built = true
+			ioJSON(w, `{"status":1,"port":55,"res":{"data":{"queueCode":1,"waitNum":2}}}`)
+		case "/api/game_queues/get_rank.json":
+			ranks++
+			if ranks < 3 {
+				ioJSON(w, `{"status":0,"data":{"status":1,"rank":2}}`)
+			} else {
+				ioJSON(w, `{"status":0,"data":{"status":2}}`)
+			}
+		case "/api/tasks/GRAPHIC1/game_status.json":
+			if !built || ranks < 3 {
+				ioJSON(w, `{"status":0}`)
+				break
+			}
+			ioJSON(w, `{"status":2,"test_sets_count":1,"sets_error_count":0,"test_sets":[{"result":true,"output":"matched"}]}`)
+		case "/api/myshixuns/MY1/exit_delete_pod.json":
+			ioJSON(w, `{"status":0,"message":"success"}`)
+		default:
+			t.Errorf("unexpected endpoint %s", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	protocol := NewGraphicProtocol(New(server.URL), &fakeGraphicTransport{session: &fakeGraphicSession{}})
+	doc, err := protocol.Read(context.Background(), task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := protocol.Submit(context.Background(), task, doc, graphicProject, PollOptions{Interval: time.Millisecond, Timeout: 5 * time.Second})
+	if err != nil || result.Evaluation == nil || !result.Evaluation.Passed {
+		t.Fatalf("queued graphic evaluation: result=%+v err=%v", result, err)
+	}
+	build, firstRank, firstPoll := -1, -1, -1
+	for i, e := range events {
+		switch {
+		case strings.HasSuffix(e, "/game_build.json") && build < 0:
+			build = i
+		case strings.HasSuffix(e, "/get_rank.json") && firstRank < 0:
+			firstRank = i
+		case strings.HasSuffix(e, "/game_status.json") && build >= 0 && firstPoll < 0:
+			firstPoll = i
+		}
+	}
+	if ranks != 3 || !(build < firstRank && firstRank < firstPoll) {
+		t.Fatalf("queue not waited before polling: ranks=%d events=%v", ranks, events)
+	}
+}

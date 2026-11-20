@@ -598,7 +598,7 @@ func (p *GraphicProtocol) evaluateWorkspace(ctx context.Context, current, t *Tas
 	extras["commitID"] = result.CommitID
 	body := map[string]any{"sec_key": preparation.SecKey, "resubmit": preparation.Resubmit, "first": 1,
 		"content_modified": preparation.ContentModified, "shixun_environment_id": env.EnvironmentID, "tab_type": env.TabType, "extras": extras}
-	var build BuildResult
+	var build buildResponse
 	result.SubmissionAttempted = true
 	result.Stage = GraphicStageBuildSent
 	if evidence != nil {
@@ -608,7 +608,7 @@ func (p *GraphicProtocol) evaluateWorkspace(ctx context.Context, current, t *Tas
 	if err = p.Client.requestWithStatuses(ctx, http.MethodPost, "/api/tasks/"+t.Game.Identifier+"/game_build.json", nil, body, taskRef(t), &build, 1); err != nil {
 		return result, err
 	}
-	if build.Status != 1 {
+	if build.Status == nil || *build.Status != 1 {
 		return result, errors.New("图形评测没有返回明确启动状态")
 	}
 	if evidence != nil {
@@ -617,6 +617,15 @@ func (p *GraphicProtocol) evaluateWorkspace(ctx context.Context, current, t *Tas
 	}
 	result.Submitted = true
 	result.Stage = GraphicStageBuildAccepted
+	if build.queued() {
+		// Graphic builds join the same evaluation queue as code builds. Wait
+		// for the platform to start the evaluation before polling it, instead
+		// of letting the poll deadline expire while it is still queued. Any
+		// queue outcome other than a start stays unknown here, as before.
+		if err = p.Client.waitEvaluationQueue(ctx, t); err != nil {
+			return result, err
+		}
+	}
 	query := url.Values{"resubmit": {preparation.Resubmit}, "time_out": {"false"}, "port": {strconv.Itoa(build.Port)}, "sec_key": {preparation.SecKey}, "challenge_id": {strconv.FormatInt(t.Challenge.ID, 10)}, "subject_id": {""}, "homework_common_id": {strconv.FormatInt(t.HomeworkID, 10)}}
 	result.Evaluation, err = p.wait(ctx, current, query, baseline, options)
 	if result.Evaluation != nil && evidence != nil {

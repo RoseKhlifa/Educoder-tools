@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.151 - 2026-11-20
+
+- Wait for queued graphic evaluations through the platform queue before polling them, instead of letting the poll deadline expire while still queued
+
 ## 0.1.150 - 2026-11-20
 
 - Bind terminal tasks to their environment identity, not the runtime is_start flag, so the submission after a passing terminal self-test is no longer refused as a changed task
