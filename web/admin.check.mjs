@@ -386,3 +386,17 @@ await test('a low model balance is a top-of-overview warning with the amount, ne
   screen.overview = {};
   assert.ok(!visible(renderAdmin('overview', screen)).includes('需要充值'));
 });
+
+await test('a history record states what happened per assignment without repeating the live record instructions', () => {
+  const rows = [
+    { title: '示例作业甲', status: 'support', reason: 'needs_review', completed_levels: 0, total_levels: 4 },
+    { title: '示例作业乙', status: 'support', reason: 'platform_busy', completed_levels: 1, total_levels: 2 },
+    { title: '示例作业丙', status: 'support', reason: 'brand_new_code', completed_levels: 0, total_levels: 1 },
+  ];
+  const record = { id: 'cccccccccccccccccccccccccccccccc', status: 'failed', request: { scope: 'all', mode: 'submit' }, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:10:00Z', result: { service_status: 'support', total_homeworks: 3, completed_homeworks: 0, homeworks: rows } };
+  const history = visible(renderServiceDetail(record, [], true));
+  assert.ok(history.includes('当时提交结果尚未确认') && history.includes('当时头歌平台资源紧张') && history.includes('当时需要人工跟进'), history);
+  assert.doesNotMatch(history, /请使用|可稍后重新执行|brand_new_code/);
+  const live = visible(renderServiceDetail(record, [], false));
+  assert.ok(live.includes('上次提交结果尚未确认，请使用“复核并继续”') && live.includes('头歌平台资源紧张，可稍后重新执行'));
+});

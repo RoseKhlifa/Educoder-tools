@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.161 - 2026-11-20
+
+- Let a history record say what happened to each assignment instead of repeating the live record instructions, and keep question bank counts on one line in the desktop sidebar
+
 ## 0.1.160 - 2026-11-20
 
 - Record the capacity decisions in the plan: memory-served active jobs, per-second progress writes, the idle-tab pause, 16 job workers behind the upstream limiter, and the triggers for a terminal-list cache, scan skipping and a SQLite read pool

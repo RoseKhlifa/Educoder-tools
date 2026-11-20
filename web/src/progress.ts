@@ -46,6 +46,28 @@ export const progressReasons: Record<string, string> = {
   interrupted: '处理被中断，需要先核对已完成结果',
 };
 
+// historyReasons describe a settled earlier run. The live wording ends with an
+// instruction ("请使用复核并继续", "可稍后重新执行") that applies only to the
+// current record; a history view has no such action, so it states what
+// happened instead.
+const historyReasons: Record<string, string> = {
+  service_followup: '当时需要人工跟进',
+  platform_busy: '当时头歌平台资源紧张',
+  platform_unavailable: '当时头歌平台暂时读取不到内容',
+  needs_review: '当时提交结果尚未确认',
+  retry_later: '当时提交尚未发出',
+  answer_unavailable: '当时没能生成通过的答案',
+  quota_reached: '当时已达到本次处理上限',
+  paused_cooldown: '当时没有新进展，已暂停重复尝试',
+  stopped: '当时已按请求停止',
+  interrupted: '当时处理被中断',
+};
+function historyReasonText(reason?: string): string {
+  const code = String(reason ?? '').trim().toLowerCase();
+  if (!code) return '';
+  return historyReasons[code] ?? progressReasons[code] ?? historyReasons.service_followup;
+}
+
 // internalReasonLabels are the operator vocabulary: exact execution codes
 // with their Chinese explanations. Only the admin views use them.
 export const internalReasonLabels: Record<string, string> = {
@@ -178,7 +200,7 @@ export function renderProgressTree(items: ProgressItem[], options: ProgressTreeO
   }
   return `<ol class="progress-tree">${items.slice(0, 100).map((item, index) => {
     const tone = settledTone(item.status, parentActive);
-    const reason = tone === 'completed' && item.reason !== 'already_passed' && item.reason !== 'no_required_levels' ? '' : reasonText(item.reason, admin);
+    const reason = tone === 'completed' && item.reason !== 'already_passed' && item.reason !== 'no_required_levels' ? '' : historical && !admin ? historyReasonText(item.reason) : reasonText(item.reason, admin);
     const counts = levelCountText(item);
     const current = tone === 'processing' ? currentLevelText(item) : '';
     const started = clockTime(item.started_at);
