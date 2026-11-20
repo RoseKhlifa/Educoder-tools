@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.165 - 2026-11-20
+
+- Scale the workbench up on wide 2K and 4K screens so it uses the width, turn the login page into a landing that shows the product at work with a password reveal, let a few course cards fill the row, and say the courses are syncing while they load
+
 ## 0.1.164 - 2026-11-20
 
 - Document current phone-code and WeChat login protocols with evidence and validation limits

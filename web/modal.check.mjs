@@ -31,7 +31,11 @@ const modalRules = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
 for (const declaration of ['display:flex', 'flex-direction:column', 'overflow:hidden']) {
   assert.ok(modalRules.replace(/\s/g, '').includes(declaration), `missing fixed dialog chrome ${declaration}`);
 }
-assert.match(modalRules, /100dvh/, 'a phone sheet must be bounded by the visual viewport');
+// The sheet is bounded by the visual viewport. Wide screens scale the page
+// with zoom, which does not scale viewport units, so the bound is expressed in
+// the same zoomed coordinate space as the rest of the layout.
+assert.match(modalRules, /var\(--screen-dh\)/, 'a phone sheet must be bounded by the visual viewport');
+assert.match(css, /--screen-dh:\s*calc\(100dvh\s*\/\s*var\(--zoom\)\)/, 'the viewport bound must track the page zoom');
 const content = lastRule('.modal > .modal-content');
 assert.match(content, /min-height:\s*0/);
 assert.match(content, /overflow-y:\s*auto/);

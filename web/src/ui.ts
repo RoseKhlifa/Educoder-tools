@@ -70,6 +70,10 @@ const paths: Record<string, string> = {
   grid: '<rect x="4" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.6"/>',
   out: '<path d="M14 4.5h4.5v15H14"/><path d="M10 16l-4-4 4-4M6 12h10"/>',
   teacher: '<path d="m2.5 8.5 9.5-4.5 9.5 4.5-9.5 4.5z"/><path d="M6.5 10.5v5c3 2.6 8 2.6 11 0v-5M21.5 8.5v7"/>',
+  user: '<circle cx="12" cy="8" r="3.6"/><path d="M5 20a7 7 0 0 1 14 0"/>',
+  lock: '<rect x="4.5" y="10.5" width="15" height="9.5" rx="2.2"/><path d="M8 10.5V8a4 4 0 0 1 8 0v2.5"/>',
+  eye: '<path d="M2.5 12S6 6.5 12 6.5 21.5 12 21.5 12 18 17.5 12 17.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/>',
+  'eye-off': '<path d="M4 4.5 20 20M9.6 9.7A2.8 2.8 0 0 0 12 14.8M6.2 7.4C3.9 9 2.5 12 2.5 12S6 17.5 12 17.5c1.5 0 2.9-.35 4.1-.9M18.4 15A13 13 0 0 0 21.5 12S18 6.5 12 6.5c-.7 0-1.3.08-1.9.2"/>',
 };
 export const icon = (name: string): string =>
   `<svg class="i" viewBox="0 0 24 24" aria-hidden="true">${paths[name] ?? paths.book}</svg>`;

@@ -61,6 +61,10 @@ let focusTimer: ReturnType<typeof setTimeout> | undefined;
 let adminTimer: ReturnType<typeof setTimeout> | undefined;
 let previousFocus: HTMLElement | null = null;
 let renderedHTML = '';
+// Whether the password field is revealed. It lives here, not in the DOM, so a
+// repaint (a login error, or the sign-in state) does not silently re-hide what
+// the user asked to see.
+let passwordVisible = false;
 // Tracks whether a dialog was already on screen, so only the paint that opens
 // one carries its entry animation.
 let modalWasOpen = false;
@@ -140,7 +144,7 @@ function stopPoll(): void { if (pollTimer !== undefined) clearTimeout(pollTimer)
 function resetSession(message = ''): void {
   jobActions.clear(); recoveryNoticeID = ''; adminJobActions.clear(); homeworkRetryKeys.clear(); jobDialog = null; adminJobDialog = null; homeworkSync.clear(); homeworkJobObservations.clear(); jobDetails.clear(); adminJobDetails.clear();
   userTickets = emptyTickets(); adminTickets = emptyTickets(); ticketDialog = null; ticketRetryKeys.clear(); ticketFormDrafts.clear();
-  renderedHTML = ''; stopAdminPoll(); generation++; jobsRevision++; coursesRevision++; adminRevision++; modalRevision++; bankRevision++; bankLoadedAt = 0; todayRevision++; todayLoadedAt = 0; todayLoadedDate = ''; guidelinesSource = 'login'; stopPoll(); courseDialog = null; courseCache.clear();
+  renderedHTML = ''; stopAdminPoll(); generation++; jobsRevision++; coursesRevision++; adminRevision++; modalRevision++; bankRevision++; bankLoadedAt = 0; todayRevision++; todayLoadedAt = 0; todayLoadedDate = ''; guidelinesSource = 'login'; passwordVisible = false; stopPoll(); courseDialog = null; courseCache.clear();
   Object.assign(state, { user: null, page: 'courses', courses: [], jobs: [], selected: [], loading: false, signingIn: false, creating: false, notice: '', loginError: message, modal: '', modalKind: '', modalAction: null, search: '', progressHistoryOpen: false, questionBank: null, bankLoading: false, bankUnavailable: false, todaySummary: null, todayLoading: false, todayUnavailable: false, admin: { overview: {}, users: [], jobs: [], audit: [], loading: false, error: false, userSearch: '', userFilter: 'all' } });
   render();
 }
@@ -165,25 +169,65 @@ function avatar(): string {
 function questionBankCredit(): string {
   return '题库来源 <a href="https://github.com/ppxxforever/fuck-educoder" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">ppxxforever/fuck-educoder</a>';
 }
+/**
+ * renderLoginHero draws the product at work out of the same components the
+ * signed-in pages use: a stack of exercise sheets, red-pen ticks in the
+ * margin, a 田字格 strip and the square seal. It is decorative and its content
+ * is sample material, never anybody's data, so it is hidden from assistive
+ * technology rather than read out.
+ */
+function renderLoginHero(): string {
+  const rows: Array<[string, string, 'done' | 'run']> = [
+    ['顺序表与链表', '3 / 3 关', 'done'],
+    ['栈与队列应用', '6 / 6 关', 'done'],
+    ['图的遍历', '2 / 4 关', 'run'],
+  ];
+  const cells = ['done', 'done', 'done', 'done', 'run', ''];
+  return `<div class="login-hero" aria-hidden="true">
+    <div class="hero-stack">
+      <div class="hero-sheet hero-back"></div>
+      <div class="hero-sheet hero-mid"></div>
+      <article class="hero-sheet hero-front">
+        <p class="hero-eyebrow">完成进度</p>
+        <h3 class="hero-title">数据结构 · 第 6 章</h3>
+        <ul class="hero-rows">${rows.map(([name, count, state]) => `<li><span class="${state === 'done' ? 'tick' : 'hero-run'}">${state === 'done' ? icon('tick') : '<span class="pulse"></span>'}</span><span class="hero-name">${name}</span><span class="hero-count num">${count}</span></li>`).join('')}</ul>
+        <ol class="tzg hero-grid">${cells.map((state, index) => `<li class="${state}"><span class="n num">${index + 1}</span></li>`).join('')}</ol>
+        <span class="seal square hero-seal"><span>全</span><span>部</span><span>完</span><span>成</span></span>
+      </article>
+      <div class="hero-note">16:04 自动重试<br><small>做好的关卡不会重做</small></div>
+    </div>
+  </div>`;
+}
 function renderLogin(): string {
-  const steps = ['选课程，或者一次做完全部', '后台接着跑，关掉页面也不断', '每份作业、每个关卡都看得到'];
+  const steps: Array<[string, string, string]> = [
+    ['book', '选课程', '挑一门，或者一次做完全部。'],
+    ['tasks', '后台完成', '关掉页面也不会中断。'],
+    ['grid', '看每一关', '每份作业、每个关卡都看得到。'],
+  ];
+  const trust = ['头歌账号直接登录，不用注册', '成绩以头歌为准', '做题数据用于题目与答案复用'];
+  const reveal = passwordVisible;
   return `<main id="view-login" class="login">
-    <aside class="login-brand">
+    <header class="login-top">
       <div class="brand login-brand-mark"><img class="brand-logo" src="/assets/brand-logo.png?v=0.1.50" alt="" width="64" height="64" decoding="async"><span class="brand-name">头歌妈妈</span><span class="brand-domain">touge.mom</span></div>
       <h1>选好课程，<br>剩下交给我们。</h1>
-      <p class="lead">用头歌账号登录，挑出没做完的作业。进度随时回来看。</p>
-      <ul class="login-steps">${steps.map(step => `<li><span class="tick">${icon('tick')}</span><span>${step}</span></li>`).join('')}</ul>
-      <p class="login-foot">独立服务，成绩以头歌为准。</p>
-    </aside>
+      <p class="lead">用头歌账号登录，挑出没做完的作业。每份作业、每个关卡的进度，回来就能看见。</p>
+    </header>
+    ${renderLoginHero()}
+    <ol class="login-steps">${steps.map(([name, title, text], index) => `<li><span class="step-no num">${index + 1}</span><span class="step-mark">${icon(name)}</span><div><b>${title}</b><span>${text}</span></div></li>`).join('')}</ol>
+    <ul class="login-trust">${trust.map(item => `<li><span class="tick">${icon('tick')}</span>${item}</li>`).join('')}</ul>
     <section class="login-panel"><form class="login-card" id="login-form">
+      <span class="washi" aria-hidden="true"></span>
       <h2>登录</h2>
       <p class="sub">头歌账号就是这里的账号，不用另外注册。</p>
-      <div class="field"><label for="login">头歌账号</label><input id="login" name="login" autocomplete="username" placeholder="手机号 / 邮箱 / 学号" required maxlength="120"></div>
-      <div class="field"><label for="password">头歌密码</label><input id="password" name="password" type="password" autocomplete="current-password" placeholder="输入头歌密码" required maxlength="512"></div>
+      <div class="field"><label for="login">头歌账号</label>
+        <span class="input-wrap">${icon('user')}<input id="login" name="login" autocomplete="username" placeholder="手机号 / 邮箱 / 学号" required maxlength="120"></span></div>
+      <div class="field"><label for="password">头歌密码</label>
+        <span class="input-wrap">${icon('lock')}<input id="password" name="password" type="${reveal ? 'text' : 'password'}" autocomplete="current-password" placeholder="输入头歌密码" required maxlength="512"><button class="reveal" type="button" data-action="toggle-password" aria-pressed="${reveal}" aria-label="${reveal ? '隐藏密码' : '显示密码'}" title="${reveal ? '隐藏密码' : '显示密码'}">${icon(reveal ? 'eye-off' : 'eye')}</button></span></div>
       ${state.loginError ? `<div class="form-feedback" role="alert">${e(state.loginError)}</div>` : ''}
       <button class="btn red full" type="submit" ${state.signingIn ? 'disabled' : ''}>${state.signingIn ? '正在登录…' : '登录'}</button>
       <p class="fine">登录前请看<button class="link" type="button" data-action="user-guidelines" data-guidelines-source="login">《用户准则》</button>。平台会收集做题数据，用于题目与答案复用。</p>
-    </form></section></main>`;
+    </form>
+    <p class="login-aside">独立服务，成绩以头歌为准。<br>遇到问题，登录后可以提交反馈。</p></section></main>`;
 }
 function navItem(page: Page, label: string, name: string, badge = 0): string {
   const on = state.page === page;
@@ -515,7 +559,7 @@ function renderCourses(): string {
   const selectable = state.courses.filter(course => courseSelectable(course.identifier));
   const selectedAll = selectable.length > 0 && selectable.every(course => state.selected.includes(course.identifier));
   const work = pendingHomeworkTotal();
-  const lead = !state.courses.length ? '加入头歌课堂后，刷新这里就能同步。'
+  const lead = !state.courses.length ? (state.loading ? '正在同步你的课程…' : '加入头歌课堂后，刷新这里就能同步。')
     : !work.known ? '正在核对每门课还剩多少作业…'
       : work.total ? `还有 <mark>${work.total} 份</mark>必做作业没完成，在 ${work.courses} 门课程里。`
         : '必做作业都完成了。';
@@ -1638,6 +1682,24 @@ function bindEvents(): void {
         render(); break;
       }
       case 'select-clear': state.selected = []; render(); break;
+      case 'toggle-password': {
+        // Flip the field in place: a re-render here would drop the caret in
+        // the middle of typing a password.
+        passwordVisible = !passwordVisible;
+        const field = document.querySelector<HTMLInputElement>('#password');
+        const label = passwordVisible ? '隐藏密码' : '显示密码';
+        if (field) {
+          const start = field.selectionStart, end = field.selectionEnd;
+          field.type = passwordVisible ? 'text' : 'password';
+          field.focus();
+          if (start !== null && end !== null && typeof field.setSelectionRange === 'function') field.setSelectionRange(start, end);
+        }
+        button.setAttribute('aria-pressed', String(passwordVisible));
+        button.setAttribute('aria-label', label);
+        button.setAttribute('title', label);
+        button.innerHTML = icon(passwordVisible ? 'eye-off' : 'eye');
+        break;
+      }
       case 'close-modal': closeModal(); break;
       case 'modal-confirm': { const action = state.modalAction; state.modalAction = null; if (action) void action(); break; }
       case 'asset-update-refresh': reloadForAssetUpdate(); break;

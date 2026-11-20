@@ -6,9 +6,11 @@ class Element {
   constructor(tag, attributes, document) {
     this.tag = tag; this.attributes = attributes; this.document = document; this.id = attributes.id || ''; this.value = attributes.value ?? ''; this.checked = 'checked' in attributes; this.required = 'required' in attributes; this.open = 'open' in attributes; this.isConnected = true; this.disabled = 'disabled' in attributes;
     this.dataset = Object.fromEntries(Object.entries(attributes).filter(([key]) => key.startsWith('data-')).map(([key,value]) => [key.slice(5).replace(/-([a-z])/g, (_, letter) => letter.toUpperCase()), value]));
-    this.listeners = new Map(); this.controls = []; this.elements = { namedItem: name => this.controls.find(item => item.attributes.name === name) ?? null };
+    this.type = attributes.type ?? ''; this.listeners = new Map(); this.controls = []; this.elements = { namedItem: name => this.controls.find(item => item.attributes.name === name) ?? null };
   }
   addEventListener(name, handler) { this.listeners.set(name, [...this.listeners.get(name) ?? [], handler]); }
+  setAttribute(name, value) { this.attributes[name] = String(value); if (name === 'type') this.type = String(value); }
+  getAttribute(name) { return name in this.attributes ? this.attributes[name] : null; }
   dispatch(name) { if ('disabled' in this.attributes) return; for (const handler of this.listeners.get(name) ?? []) handler({currentTarget:this,target:this,preventDefault(){}}); }
   reset() { for (const item of this.controls) if (['input','textarea','select'].includes(item.tag)) item.value = item.initialValue ?? ''; }
   focus() { this.document.activeElement = this; }
@@ -76,6 +78,13 @@ async function app(overrides={}, options={}) {
   return {requests,timers,document,windowListeners,html:()=>document.html,reloads:()=>reloadCount,get(selector){const element=document.querySelector(selector);assert.ok(element,`Missing ${selector}`);return element;},async tick(){const tasks=[...timers.entries()];for(const[id,timer]of tasks){timers.delete(id);timer.handler();}await settle();}};
 }
 await test('consumer course service and administrator boundary',async t=>{
+  await t.test('the greeting says the courses are syncing while the first course list is still loading', async () => {
+    const pending=deferred();
+    const page=await app({'/api/courses':()=>pending.promise});
+    assert.match(page.html(),/正在同步你的课程/);assert.doesNotMatch(page.html(),/<p class="lead">加入头歌课堂后/);
+    pending.resolve(ok([]));await settle();
+    assert.match(page.html(),/<p class="lead">加入头歌课堂后，刷新这里就能同步。/);
+  });
   await t.test('footer shows the page release for consumers and administrators without a version request', async () => {
     const page = await app({'/api/auth/me':()=>ok({user,platform:{role:'admin',status:'active'}})}, {appVersion:' 0.1.234 '});
     const footer = '<footer class="page-footer">头歌妈妈 · 把任务交给我们 · <span class="app-version">v0.1.234</span></footer>';
@@ -1333,6 +1342,38 @@ await test('consumer course service and administrator boundary',async t=>{
     assert.match(doneCard, /全部完成 · 1 份/);
     assert.doesNotMatch(openCard, /seal/);
     assert.match(openCard, /还差 1 份/);
+  });
+  await t.test('the login page shows the password only while the reader asks, and never serializes it', async () => {
+    const page = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', '请先登录'), '/api/auth/login': () => failure(401, 'AUTH_FAILED', 'wrong') });
+    const field = () => page.get('#password');
+    assert.equal(field().type, 'password');
+    page.get('#password').value = 'test-only-password';
+    page.get('[data-action="toggle-password"]').dispatch('click');
+    assert.equal(field().type, 'text', 'the field itself is flipped, without a repaint');
+    assert.equal(field().value, 'test-only-password', 'revealing must not clear what was typed');
+    assert.doesNotMatch(page.html(), /test-only-password/, 'a draft password is never written into markup');
+    // A repaint (a failed sign-in) keeps the reader's choice.
+    page.get('#login').value = 'demo';
+    page.get('#login-form').dispatch('submit'); await settle();
+    assert.match(page.html(), /type="text"/, 'a repaint keeps the field revealed');
+    // Asking again hides it.
+    page.get('[data-action="toggle-password"]').dispatch('click');
+    assert.equal(field().type, 'password');
+  });
+  await t.test('the login hero is decorative sample material, not anybody real', async () => {
+    const page = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', '请先登录') });
+    const html = page.html();
+    const hero = html.slice(html.indexOf('class="login-hero"'), html.indexOf('class="login-steps"'));
+    assert.match(hero, /aria-hidden="true"/, 'the illustration is not read out');
+    assert.match(hero, /数据结构 · 第 6 章/);
+    assert.match(hero, /class="tzg hero-grid"/);
+    assert.match(hero, /class="seal square hero-seal"/);
+    // Only statements the guidelines and platform notes support.
+    assert.match(html, /头歌账号直接登录，不用注册/);
+    assert.match(html, /成绩以头歌为准/);
+    assert.match(html, /做题数据用于题目与答案复用/);
+    assert.match(html, /关掉页面也不会中断/);
+    assert.equal(page.requests.some(item => item.options.method === 'POST'), false, 'the landing page asks the server for nothing');
   });
   await t.test('no consumer page carries the 当次 bookkeeping prefix', async () => {
     const settled = job({ id: 'settled-record', status: 'support', result: { service_status: 'support', total_homeworks: 3, completed_homeworks: 1, homeworks: [{ title: '停下来的作业', status: 'needs_service', reason: 'platform_busy' }] } });

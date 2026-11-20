@@ -39,6 +39,12 @@
   --shadow-sheet: -20px 0 44px -16px rgba(80, 50, 20, .35);
   --scrim: rgba(43, 30, 20, .3);
   --font: "LXGW WenKai", "霞鹜文楷", "KaiTi", "STKaiti", "PingFang SC", "Microsoft YaHei", serif;
+  --zoom: 1;
+  --screen-h: calc(100vh / var(--zoom));
+  --screen-dh: calc(100dvh / var(--zoom));
+  --shell-max: 1320px;
+  --main-max: 1040px;
+  --admin-max: 1320px;
   --grain: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 .42 0 0 0 0 .3 0 0 0 0 .16 0 0 0 .075 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
   --check-red: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path d='M4 13.4c1.7 1.2 3.3 2.9 4.7 5.2.4.6 1.1.6 1.5 0 2.6-5.6 6.2-10.1 11.2-14.2' fill='none' stroke='%23d0141c' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
   /* The attention mark is drawn, not typeset: at 19px the WenKai "!" glyph
@@ -629,7 +635,7 @@ mark {
   right: 0;
   bottom: 0;
   width: min(580px, 100%);
-  max-height: 100dvh;
+  max-height: var(--screen-dh);
   background: var(--sheet) var(--grain);
   box-shadow: var(--shadow-sheet);
   display: flex;
@@ -902,7 +908,7 @@ mark {
 }
 
 /* =========================== consumer =========================== */
-.app-shell { min-height: 100vh; display: flex; flex-direction: column; }
+.app-shell { min-height: var(--screen-h); display: flex; flex-direction: column; }
 
 .topbar {
   flex: none;
@@ -910,7 +916,7 @@ mark {
   display: flex;
   align-items: center;
   gap: 26px;
-  padding-inline: max(24px, calc((100% - 1320px) / 2));
+  padding-inline: max(24px, calc((100% - var(--shell-max)) / 2));
   background: var(--sheet);
   border-bottom: 3px double var(--rule-strong);
 }
@@ -977,10 +983,10 @@ mark {
 
 /* The main column comes first in the DOM so a phone reads the work before the
    summary cards; explicit placement keeps the sidebar on the left on desktop. */
-.shell { flex: 1; min-height: 0; width: 100%; max-width: 1320px; margin-inline: auto; display: grid; grid-template-columns: 262px minmax(0, 1fr); align-items: start; }
+.shell { flex: 1; min-height: 0; width: 100%; max-width: var(--shell-max); margin-inline: auto; display: grid; grid-template-columns: 262px minmax(0, 1fr); align-items: start; }
 .side { grid-column: 1; grid-row: 1; padding: 22px 16px 22px 24px; display: flex; flex-direction: column; gap: 14px; }
 .main { grid-column: 2; grid-row: 1; padding: 26px 28px 64px 12px; min-width: 0; }
-.main-in { max-width: 1040px; min-width: 0; display: flex; flex-direction: column; gap: 20px; }
+.main-in { max-width: var(--main-max); min-width: 0; display: flex; flex-direction: column; gap: 20px; }
 .main-in > * { min-width: 0; }
 .side-foot { margin-top: auto; padding: 4px 4px 0; font-size: 12.5px; line-height: 1.8; color: var(--ink-3); }
 .side-foot a, .side-foot .link { color: var(--ink-2); font-size: 12.5px; }
@@ -1020,7 +1026,10 @@ mark {
 .live > .btn { justify-self: end; }
 
 /* Exercise-book course cards. */
-.books { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 14px; }
+.books { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 14px; }
+/* A few courses fill the row on a wide screen; a single course keeps a card's
+   proportions instead of stretching across the whole column. */
+.books:has(> .book:only-child) { grid-template-columns: minmax(290px, 560px); }
 .book {
   position: relative;
   padding: 16px 18px 12px;
@@ -1104,40 +1113,162 @@ mark {
   flex-wrap: wrap;
   font-variant-numeric: tabular-nums;
 }
-
-/* Login: the brand column is a notebook page, the form a sheet laid on it. */
-.login { min-height: 100vh; display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); }
-.login-brand {
-  background: var(--sheet) var(--grain);
-  border-right: 3px double var(--rule-strong);
-  padding: 7vh 5vw 5vh;
-  display: flex;
-  flex-direction: column;
-  gap: 24px;
-  justify-content: center;
+/* Login: a desk with a squared-paper page on the left and the form on a sheet
+   laid over it. The hero is drawn from the same components the signed-in
+   pages use, so the landing shows the real product rather than a picture. */
+.login {
+  position: relative;
+  min-height: var(--screen-h);
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(0, .92fr);
+  grid-template-areas:
+    "top   panel"
+    "hero  panel"
+    "steps panel"
+    "trust panel";
+  grid-template-rows: auto;
+  align-content: center;
+  gap: 20px 40px;
+  padding: 34px clamp(24px, 4vw, 72px);
+  background: var(--board) var(--grain);
 }
+/* Squared paper under the left column only; the desk tone stays around the
+   form sheet. */
+.login::before {
+  content: "";
+  position: absolute;
+  inset: 0 42% 0 0;
+  background:
+    linear-gradient(var(--grid) 1px, transparent 1px) 0 0 / 30px 30px,
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px) 0 0 / 30px 30px,
+    var(--paper);
+  border-right: 3px double var(--rule-strong);
+  pointer-events: none;
+}
+.login > * { position: relative; }
+.login-top { grid-area: top; }
+.login-hero { grid-area: hero; }
+.login-steps { grid-area: steps; }
+.login-trust { grid-area: trust; }
+.login-panel { grid-area: panel; }
+
 .login-brand-mark { gap: 14px; }
 .login-brand-mark .brand-logo { width: 64px; height: 64px; }
 .login-brand-mark .brand-name { font-size: 28px; }
-.login-brand h1 { margin: 0; font-size: clamp(30px, 3.2vw, 44px); line-height: 1.45; letter-spacing: 1px; }
-.login-brand .lead { max-width: 34ch; font-size: 17px; }
-.login-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; max-width: 34ch; }
-.login-steps li {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 16px;
-  color: var(--ink-2);
-  padding-bottom: 12px;
-  border-bottom: 1px dashed var(--rule-strong);
+.login-top h1 { margin: 14px 0 0; font-size: clamp(30px, 3vw, 46px); line-height: 1.4; letter-spacing: 1px; }
+.login-top .lead { margin: 10px 0 0; max-width: 32ch; font-size: 16.5px; }
+
+/* Hero: a stack of exercise sheets, the top one checked by the red pen. */
+.login-hero { display: grid; place-items: center; }
+.hero-stack { position: relative; width: min(430px, 100%); padding: 18px 0 58px; }
+.hero-sheet {
+  background: var(--sheet) var(--grain);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lift);
 }
-.login-steps li:last-child { border-bottom: 0; padding-bottom: 0; }
-.login-steps .tick svg { width: 22px; height: 22px; }
-.login-foot { margin: 0; font-size: 13px; line-height: 1.8; color: var(--ink-3); }
-.login-panel { display: grid; place-items: center; padding: 40px 24px; }
+.hero-back, .hero-mid { position: absolute; inset: 0; }
+.hero-back { transform: rotate(-4.5deg) translate(-10px, 6px); }
+.hero-mid { transform: rotate(2.6deg) translate(8px, 2px); }
+.hero-front { position: relative; padding: 18px 18px 18px 46px; }
+/* The red margin rule, as on every record sheet. */
+.hero-front::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 30px;
+  width: 1.5px;
+  background: var(--margin);
+}
+.hero-eyebrow { margin: 0; font-size: 12.5px; color: var(--ink-3); letter-spacing: .5px; }
+.hero-title { margin: 2px 0 12px; font-size: 18px; letter-spacing: .5px; }
+.hero-rows { list-style: none; margin: 0; padding: 0; }
+.hero-rows li {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--rule);
+  font-size: 14.5px;
+}
+.hero-rows .tick svg { width: 20px; height: 20px; }
+.hero-run { display: grid; place-items: center; }
+.hero-name { font-weight: 700; }
+.hero-count { font-size: 13px; color: var(--ink-3); }
+.hero-grid { margin-top: 14px; grid-template-columns: repeat(6, 32px); }
+.hero-grid li { width: 32px; height: 32px; }
+.hero-seal { position: absolute; right: 16px; bottom: -22px; }
+.hero-note {
+  position: absolute;
+  left: -14px;
+  bottom: 0;
+  max-width: 150px;
+  background: var(--note);
+  border: 1px solid var(--note-line);
+  border-radius: 4px 4px 4px 14px;
+  padding: 8px 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--orange-ink);
+  box-shadow: var(--shadow);
+  transform: rotate(-3deg);
+}
+.hero-note small { color: var(--ink-3); font-size: 11.5px; }
+
+/* How it works, and what is true about the service. */
+.login-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.login-steps li {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 12px 12px 12px 14px;
+  box-shadow: var(--shadow);
+}
+.login-steps .step-no {
+  position: absolute;
+  top: -9px;
+  left: -9px;
+  width: 22px;
+  height: 22px;
+  border: 1.5px solid var(--margin);
+  border-radius: 50%;
+  background: var(--sheet);
+  color: var(--red);
+  font-size: 12.5px;
+  font-weight: 700;
+  display: grid;
+  place-items: center;
+}
+.login-steps .step-mark { color: var(--red); margin-top: 2px; }
+.login-steps .step-mark svg { width: 20px; height: 20px; }
+.login-steps div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.login-steps b { font-size: 15px; }
+.login-steps span { font-size: 13px; color: var(--ink-3); line-height: 1.6; }
+.login-trust {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  font-size: 13.5px;
+  color: var(--ink-2);
+}
+.login-trust li { display: flex; align-items: center; gap: 6px; }
+.login-trust .tick svg { width: 16px; height: 16px; }
+
+/* The form sheet, taped to the desk. */
+.login-panel { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; }
+.login-aside { margin: 0; text-align: center; font-size: 12.5px; line-height: 1.9; color: var(--ink-3); }
 .login-card {
   position: relative;
-  width: min(392px, 100%);
+  width: min(420px, 100%);
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -1145,7 +1276,7 @@ mark {
   border: 1px solid var(--rule);
   border-radius: 12px;
   box-shadow: var(--shadow-lift);
-  padding: 28px 28px 24px 40px;
+  padding: 34px 30px 26px 44px;
 }
 /* The same red margin rule the record sheets use. */
 .login-card::before {
@@ -1153,15 +1284,49 @@ mark {
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 24px;
+  left: 26px;
   width: 1.5px;
   background: var(--margin);
   pointer-events: none;
 }
-.login-card h2 { margin: 0; font-size: 25px; letter-spacing: .5px; }
-.login-card .sub { margin: -6px 0 2px; font-size: 14.5px; color: var(--ink-2); }
-.login-card .fine { margin: 2px 0 0; font-size: 13px; line-height: 1.8; color: var(--ink-3); }
+.login-card .washi {
+  position: absolute;
+  top: -11px;
+  left: 50%;
+  width: 118px;
+  height: 22px;
+  transform: translateX(-50%) rotate(-1.6deg);
+  background: repeating-linear-gradient(135deg, var(--marker) 0 7px, var(--marker-soft) 7px 14px);
+  border-left: 1px solid var(--note-line);
+  border-right: 1px solid var(--note-line);
+  opacity: .85;
+}
+.login-card h2 { margin: 0; font-size: 30px; letter-spacing: 1px; }
+.login-card .sub { margin: -8px 0 2px; font-size: 14.5px; color: var(--ink-2); }
+.login-card .fine { margin: 4px 0 0; font-size: 13px; line-height: 1.8; color: var(--ink-3); }
 .login-card .fine .link { font-size: 13px; }
+.login-card .btn.red { height: 44px; font-size: 16px; }
+
+.input-wrap { position: relative; display: block; }
+.input-wrap > svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--ink-3); pointer-events: none; }
+.input-wrap input { padding-left: 38px; }
+.input-wrap:has(.reveal) input { padding-right: 44px; }
+.reveal {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--ink-3);
+  cursor: pointer;
+}
+.reveal:hover { background: var(--hover); color: var(--ink); }
 
 /* Phone bottom tab bar is set up in the responsive section. */
 .bottom-nav { display: none; }
@@ -1226,7 +1391,7 @@ mark {
 .admin-app .main { padding: 26px 28px 64px 26px; }
 /* Operator tables carry seven columns, so the page is wider than the reading
    width the consumer pages keep. */
-.admin-main-in { max-width: 1320px; }
+.admin-main-in { max-width: var(--admin-max); margin-inline: auto; }
 
 .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .kpi { padding: 14px 16px; }
@@ -1303,11 +1468,22 @@ mark {
   .records li { grid-template-columns: 120px minmax(0, 1fr) 160px 18px; }
   .records .row { grid-template-columns: 120px minmax(0, 1fr) 160px 18px; }
   .records .took { display: none; }
-  .login { grid-template-columns: 1fr; }
-  .login-brand { border-right: 0; border-bottom: 3px double var(--rule-strong); padding: 32px 28px 26px; gap: 18px; }
-  .login-brand h1 { font-size: 31px; }
-  .login-brand-mark .brand-logo { width: 48px; height: 48px; }
-  .login-panel { padding: 30px 24px 44px; }
+  /* One column: the form follows the headline, the explanation below it. */
+  .login {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "top" "panel" "hero" "steps" "trust";
+    grid-template-rows: auto;
+    gap: 22px;
+    padding: 36px clamp(20px, 5vw, 48px) 48px;
+  }
+  .login::before { inset: 0; border-right: 0; border-bottom: 3px double var(--rule-strong); }
+  .login-top { text-align: center; }
+  .login-top h1 { font-size: 32px; }
+  .login-top .lead, .login-brand-mark { margin-inline: auto; }
+  .login-top .lead { max-width: 44ch; }
+  .login-panel { justify-items: center; }
+  .login-hero { padding: 4px 0 18px; }
+  .login-trust { justify-content: center; }
 }
 
 @media (max-width: 680px) {
@@ -1376,6 +1552,19 @@ mark {
   .modal.dialog { height: auto; max-height: calc(100% - 32px); border-radius: 14px; }
   .modal.dialog.enter { animation-name: dialog-in; }
   .modal-backdrop.centered { padding: 16px; }
+
+  /* Login on a phone: brand, headline, form. The hero is decorative, so it
+     steps aside rather than squeezing the form below the fold. */
+  .login { padding: 28px 16px 40px; gap: 18px; }
+  .login-brand-mark .brand-logo { width: 48px; height: 48px; }
+  .login-brand-mark .brand-name { font-size: 24px; }
+  .login-top h1 { font-size: 27px; }
+  .login-top .lead { font-size: 15px; }
+  .login-hero { display: none; }
+  .login-steps { grid-template-columns: 1fr; }
+  .login-card { padding: 30px 20px 22px 34px; }
+  .login-card::before { left: 18px; }
+  .login-card h2 { font-size: 26px; }
 
   /* Bottom tab bar with a highlighter on the active item. */
   .bottom-nav {
@@ -1449,4 +1638,38 @@ mark {
   .panel-head { padding: 12px 14px; }
   .ledger-table th, .ledger-table td { padding-inline: 14px; }
   .run-row, .reason { padding-inline: 14px; }
+}
+
+/* A short desktop viewport (a 1280x800 laptop, say) would otherwise push the
+   trust row below the fold. The illustration gives up its height first. */
+@media (min-width: 1061px) and (max-height: 880px) {
+  .login { padding-block: 26px; gap: 16px 40px; }
+  .login-top h1 { font-size: clamp(28px, 2.6vw, 38px); }
+  .hero-stack { width: min(380px, 100%); padding: 14px 0 48px; }
+  .hero-grid { margin-top: 10px; }
+}
+
+/* ========================== wide screens ========================= */
+/* The design is drawn in px, so a 2K or scaled-4K display would otherwise show
+   it as a small island of 13px text in the middle of an empty page. Rather
+   than convert every length to rem, the page scales as a whole and the width
+   budgets grow with it, so a wide screen reads like the 1440 design seen
+   closer up.
+
+   Media queries are evaluated against the unzoomed viewport, so the layout
+   breakpoints above keep their meaning: the narrowest zoomed layout here is
+   2400 / 1.34 ≈ 1791px, far above the 1060px and 680px switches. Widths are in
+   the zoomed coordinate space; each budget below leaves room for a scrollbar
+   and a margin, so no width introduces a horizontal scroll. */
+@media (min-width: 1680px) {
+  :root { zoom: 1.08; --zoom: 1.08; --shell-max: 1420px; --main-max: 1120px; --admin-max: 1400px; }
+}
+@media (min-width: 1920px) {
+  :root { zoom: 1.18; --zoom: 1.18; --shell-max: 1520px; --main-max: 1220px; --admin-max: 1500px; }
+  .hero-stack { width: min(470px, 100%); }
+}
+@media (min-width: 2400px) {
+  :root { zoom: 1.34; --zoom: 1.34; --shell-max: 1700px; --main-max: 1400px; --admin-max: 1640px; }
+  .hero-stack { width: min(500px, 100%); }
+  .login { gap: 24px 56px; }
 }
