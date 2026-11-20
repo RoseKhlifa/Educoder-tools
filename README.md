@@ -181,8 +181,11 @@ go run ./cmd/web
 
 可选 `cmd/educoder` 和 `cmd/coursebatch` 继续用于维护、协议验证和显式批次调试；它们复用 Go 协议与求解模块，用户端不依赖这些命令。凭据仅通过进程环境、标准输入或本地忽略配置提供，不能写进源码或命令示例的真实值。
 
+目前应用登录只实现账号密码方式。官方手机验证码与微信扫码的接口、回调、会话关联和待验证项见 [登录协议](docs/login-protocol.md)；该文档记录协议研究，不表示这两种登录已接入本站。
+
 `cmd/bankimport` 用于把固定 Git commit 的公开外部题库导入应用题库。它只写入来源清单和未验证候选绑定，不会把外部声明直接当作正确答案；完整流程、固定 commit 和 544/271/273 的实测报告见 [外部题库导入](docs/external-answer-bank.md)。绘图题的 SSH/SFTP 与 `game_build` 协议见 [绘图题协议](docs/graphic-protocol.md)。
 
+- [登录协议](docs/login-protocol.md)：手机验证码、微信二维码/OAuth 回调、账号绑定和登录态流转。
 - [代码题协议](docs/programming-protocol.md)：题目、代码读取、自测、提交和进度协议。
 - [Linux 终端协议](docs/terminal-protocol.md)：独立命令行关卡的脚本执行、单次回执、正式评测与满分复核。
 - [绘图题协议](docs/graphic-protocol.md)：StarUML `.mdj` 文件的运行环境、SSH/SFTP、提交和复核链路。

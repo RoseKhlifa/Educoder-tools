@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.164 - 2026-11-20
+
+- Document current phone-code and WeChat login protocols with evidence and validation limits
+
 ## 0.1.163 - 2026-11-20
 
 - Mark a level as needing attention only when it has its own reason, so an assignment stopped early no longer flags every untouched level, and state the run time once on a task record
