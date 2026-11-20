@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.168 - 2026-11-21
+
+- Meter phone-code and WeChat login per student behind Cloudflare and the proxy with campus-sized budgets, long-poll WeChat properly, cap SMS service-wide, recover hung QR polls; skip repeat login scans for a day, re-read course lists every ten minutes, and serve a 14 KB logo instead of 1.2 MB
+
 ## 0.1.167 - 2026-11-21
 
 - Preserve real names across password, phone-code and WeChat login by resolving realName and real_name before nicknames or login, and store the same verified display name for platform users

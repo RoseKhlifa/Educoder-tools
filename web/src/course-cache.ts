@@ -85,7 +85,11 @@ export class CourseDetailsCache {
 
   constructor(private readonly loaders: CourseDetailsLoaders, options: CourseDetailsCacheOptions = {}) {
     this.clock = options.clock ?? Date.now;
-    this.ttlMs = Math.max(0, options.ttlMs ?? 120_000);
+    // Background revalidation is the only polling that reaches Educoder, on
+    // the student's own account. A course's homework list rarely changes, a
+    // finished job refreshes its course at once, and the refresh button stays,
+    // so ten minutes keeps lists current at a fifth of the upstream reads.
+    this.ttlMs = Math.max(0, options.ttlMs ?? 600_000);
     this.onChange = options.onChange;
   }
 

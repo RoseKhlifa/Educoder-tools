@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -27,7 +28,73 @@ func loadPlatformConfig(cfg *Config) error {
 			cfg.PlatformAdminUserIDs = append(cfg.PlatformAdminUserIDs, id)
 		}
 	}
+	if value, ok := os.LookupEnv("TRUSTED_PROXY_CIDRS"); ok && strings.TrimSpace(value) != "" {
+		// An empty value keeps the defaults so an unset deployment variable
+		// cannot silently collapse every student into one limiter bucket.
+		if strings.EqualFold(strings.TrimSpace(value), "none") {
+			cfg.TrustedProxies = []netip.Prefix{}
+			return nil
+		}
+		proxies, err := parseTrustedProxies(value)
+		if err != nil {
+			return err
+		}
+		cfg.TrustedProxies = proxies
+	}
 	return nil
+}
+
+// The service publishes one port to a reverse proxy that terminates TLS on the
+// same host, so the connecting address of a real user is the proxy, never the
+// student. Peers inside these ranges may state the client address they are
+// forwarding; TRUSTED_PROXY_CIDRS overrides the list and "none" disables it.
+// touge.mom is served through Cloudflare, so the hop in front of OpenResty is
+// a Cloudflare edge. Trusting Cloudflare's published ranges
+// (www.cloudflare.com/ips, checked 2026-11-21) lets the walk reach the
+// student's own address that Cloudflare put in X-Forwarded-For; without it
+// every student in one region would share an edge address and one budget.
+var defaultTrustedProxyCIDRs = []string{"127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10",
+	"173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22", "141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+	"197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13", "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22",
+	"2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32", "2405:8100::/32", "2a06:98c0::/29", "2c0f:f248::/32"}
+
+// Per-address budgets are sized for a campus NAT: one classroom or one
+// carrier gateway can put a hundred students behind a single address. Brute
+// force is stopped per account and per phone number, SMS breadth by the
+// service-wide budget; the per-address budget only slows one noisy client.
+const (
+	loginSourceBudget  = 600
+	smsSourceBudget    = 200
+	wechatSourceBudget = 300
+)
+
+func defaultTrustedProxies() []netip.Prefix {
+	proxies, err := parseTrustedProxies(strings.Join(defaultTrustedProxyCIDRs, ","))
+	if err != nil {
+		return []netip.Prefix{}
+	}
+	return proxies
+}
+
+func parseTrustedProxies(value string) ([]netip.Prefix, error) {
+	proxies := []netip.Prefix{}
+	for _, raw := range strings.Split(value, ",") {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		if prefix, err := netip.ParsePrefix(raw); err == nil {
+			proxies = append(proxies, prefix.Masked())
+			continue
+		}
+		addr, err := netip.ParseAddr(raw)
+		if err != nil {
+			return nil, errors.New("invalid TRUSTED_PROXY_CIDRS: use IP addresses or CIDR ranges, or none")
+		}
+		addr = normalizeAddr(addr)
+		proxies = append(proxies, netip.PrefixFrom(addr, addr.BitLen()))
+	}
+	return proxies, nil
 }
 
 func (s *Server) AttachPlatform(store *platform.Store) { s.platform = store }
@@ -121,12 +188,82 @@ func loginAccountKey(value string) string {
 	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(value))))
 	return "account:" + hex.EncodeToString(sum[:])
 }
-func loginSource(r *http.Request) string {
+
+func normalizeAddr(addr netip.Addr) netip.Addr { return addr.Unmap().WithZone("") }
+
+func requestPeer(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil {
-		return host
+	if err != nil {
+		host = r.RemoteAddr
 	}
-	return r.RemoteAddr
+	host = strings.Trim(host, "[]")
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return normalizeAddr(addr).String()
+	}
+	return host
+}
+
+func (s *Server) trustedProxy(value string) bool {
+	addr, err := netip.ParseAddr(value)
+	if err != nil {
+		return false
+	}
+	addr = normalizeAddr(addr)
+	for _, prefix := range s.config.TrustedProxies {
+		if prefix.Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+// forwardedClients lists the addresses a proxy chain claims, nearest hop first.
+// An entry that is not an address ends the chain: nothing further left can be
+// attributed to a trusted hop, so it is ignored rather than trusted.
+func forwardedClients(r *http.Request) []string {
+	headers := r.Header.Values("X-Forwarded-For")
+	if len(headers) == 0 {
+		headers = r.Header.Values("X-Real-IP")
+	}
+	var fields []string
+	for _, header := range headers {
+		fields = append(fields, strings.Split(header, ",")...)
+	}
+	if len(fields) > 16 {
+		fields = fields[len(fields)-16:]
+	}
+	clients := make([]string, 0, len(fields))
+	for i := len(fields) - 1; i >= 0; i-- {
+		value := strings.TrimSpace(fields[i])
+		if host, _, err := net.SplitHostPort(value); err == nil {
+			value = host
+		}
+		addr, err := netip.ParseAddr(strings.Trim(value, "[]"))
+		if err != nil {
+			break
+		}
+		clients = append(clients, normalizeAddr(addr).String())
+	}
+	return clients
+}
+
+// loginSource identifies one client for the per-source login budgets. Behind
+// the deployment's reverse proxy every student connects from the same address,
+// which would make one shared bucket both useless against a single abuser and
+// an outage for everyone else, so a forwarded address is believed when - and
+// only when - the peer is a trusted proxy. A direct caller's headers are
+// ignored, so nobody can choose their own bucket.
+func (s *Server) loginSource(r *http.Request) string {
+	peer := requestPeer(r)
+	if !s.trustedProxy(peer) {
+		return peer
+	}
+	for _, client := range forwardedClients(r) {
+		if !s.trustedProxy(client) {
+			return client
+		}
+	}
+	return peer
 }
 func (s *Server) loginRateError(w http.ResponseWriter, requestID string) {
 	w.Header().Set("Retry-After", "300")
@@ -139,7 +276,7 @@ type phoneAuthClient interface {
 }
 
 func (s *Server) handleSendPhoneCode(w http.ResponseWriter, r *http.Request, requestID string) {
-	if !s.loginLimits.allow("sms-source:"+loginSource(r), 120) {
+	if !s.loginLimits.allow("sms-source:"+s.loginSource(r), smsSourceBudget) {
 		s.loginRateError(w, requestID)
 		return
 	}
@@ -163,6 +300,14 @@ func (s *Server) handleSendPhoneCode(w http.ResponseWriter, r *http.Request, req
 		s.loginRateError(w, requestID)
 		return
 	}
+	// Per-phone limits protect one victim; this bounds how many different
+	// numbers the whole service can text in a window, so a caller that rotates
+	// numbers cannot turn the login page into an SMS cannon. It is consumed
+	// only once a request is about to reach the upstream sender.
+	if !s.loginLimits.allow("sms-global", 300) {
+		s.loginRateError(w, requestID)
+		return
+	}
 	client, ok := s.factory(s.config.APIBaseURL).(phoneAuthClient)
 	if !ok {
 		s.writeError(w, requestID, http.StatusServiceUnavailable, "SMS_LOGIN_UNAVAILABLE", "手机验证码登录暂不可用")
@@ -180,7 +325,7 @@ func (s *Server) handleSendPhoneCode(w http.ResponseWriter, r *http.Request, req
 }
 
 func (s *Server) handlePhoneLogin(w http.ResponseWriter, r *http.Request, requestID string) {
-	if !s.loginLimits.allow("source:"+loginSource(r), 120) {
+	if !s.loginLimits.allow("source:"+s.loginSource(r), loginSourceBudget) {
 		s.loginRateError(w, requestID)
 		return
 	}
@@ -255,7 +400,7 @@ func (s *Server) completeLogin(w http.ResponseWriter, r *http.Request, requestID
 	s.setSessionCookie(w, sessionID)
 	response := map[string]any{"status": "succeeded", "user": toUserDTO(*user), "platform": principalDTO(principal)}
 	if s.jobs != nil && s.jobs.collect != nil {
-		s.enqueueCollection(ctx, client, sessionJobOwner(Session{User: *user, Principal: principal}), "")
+		s.enqueueLoginCollection(ctx, client, sessionJobOwner(Session{User: *user, Principal: principal}))
 	}
 	s.writeJSON(w, requestID, http.StatusOK, response)
 	return sessionID

@@ -27,6 +27,7 @@ type wechatLoginAttempt struct {
 	mu        sync.Mutex
 	client    EducoderClient
 	auth      wechatAuthClient
+	source    string
 	uuid      string
 	image     []byte
 	status    string
@@ -49,7 +50,7 @@ func newWeChatLoginStore() *wechatLoginStore {
 	return &wechatLoginStore{attempts: make(map[string]*wechatLoginAttempt), now: time.Now}
 }
 
-func (s *wechatLoginStore) create(client EducoderClient, auth wechatAuthClient) (string, *wechatLoginAttempt, error) {
+func (s *wechatLoginStore) create(source string, client EducoderClient, auth wechatAuthClient) (string, *wechatLoginAttempt, error) {
 	var token [32]byte
 	if _, err := rand.Read(token[:]); err != nil {
 		return "", nil, err
@@ -58,22 +59,38 @@ func (s *wechatLoginStore) create(client EducoderClient, auth wechatAuthClient) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.now()
+	live := 0
 	for key, attempt := range s.attempts {
 		if !attempt.expires.After(now) {
 			attempt.cancel()
 			delete(s.attempts, key)
+			continue
+		}
+		if attempt.source == source {
+			live++
 		}
 	}
 	// Bound image storage and in-flight QR creation, including requests that
 	// have not yet received a cookie. Each attempt also has a fixed deadline.
-	if len(s.attempts) >= 128 {
+	// A transaction exists before its browser can prove anything, so one
+	// caller discarding its cookie must not be able to hold every slot and
+	// make WeChat login unavailable for the whole campus.
+	if len(s.attempts) >= wechatAttemptCapacity || live >= wechatAttemptsPerSource {
 		return "", nil, errors.New("login transaction capacity reached")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), wechatAttemptTTL)
-	attempt := &wechatLoginAttempt{client: client, auth: auth, status: "waiting", expires: now.Add(wechatAttemptTTL), ctx: ctx, cancel: cancel}
+	attempt := &wechatLoginAttempt{client: client, auth: auth, source: source, status: "waiting", expires: now.Add(wechatAttemptTTL), ctx: ctx, cancel: cancel}
 	s.attempts[id] = attempt
 	return id, attempt, nil
 }
+
+// A real QR image is about 30 KB and is capped at 256 KB, so 512 live attempts
+// hold at most 128 MB and typically a few MB. One address may hold 64: enough
+// for a classroom behind one NAT, while no single client can take the store.
+const (
+	wechatAttemptCapacity   = 512
+	wechatAttemptsPerSource = 64
+)
 
 func (s *wechatLoginStore) get(id string) *wechatLoginAttempt {
 	s.mu.Lock()
@@ -136,7 +153,8 @@ func (s *Server) handleWeChatLogin(w http.ResponseWriter, r *http.Request, reque
 		return
 	}
 	if action == "image" {
-		if r.Method != http.MethodGet {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
 			s.methodError(w, requestID)
 			return
 		}
@@ -165,7 +183,8 @@ func (s *Server) handleWeChatLogin(w http.ResponseWriter, r *http.Request, reque
 }
 
 func (s *Server) startWeChatLogin(w http.ResponseWriter, r *http.Request, requestID string) {
-	if !s.loginLimits.allow("wechat-source:"+loginSource(r), 120) {
+	source := s.loginSource(r)
+	if !s.loginLimits.allow("wechat-source:"+source, wechatSourceBudget) {
 		s.loginRateError(w, requestID)
 		return
 	}
@@ -176,7 +195,7 @@ func (s *Server) startWeChatLogin(w http.ResponseWriter, r *http.Request, reques
 		s.wechatLoginError(w, requestID, "WECHAT_LOGIN_UNAVAILABLE")
 		return
 	}
-	id, attempt, err := s.wechatLogins.create(client, auth)
+	id, attempt, err := s.wechatLogins.create(source, client, auth)
 	if err != nil {
 		s.wechatLoginError(w, requestID, "WECHAT_LOGIN_UNAVAILABLE")
 		return
@@ -292,8 +311,12 @@ func (s *Server) pollWeChatLogin(w http.ResponseWriter, r *http.Request, request
 	switch result.Status {
 	case "waiting", "scanned", "canceled", "expired":
 		attempt.status = result.Status
-		if result.Status == "scanned" {
-			attempt.last = "scanned"
+		// Report the state already observed so the next request long-polls
+		// instead of returning at once. Without it every poll completes
+		// immediately and one waiting QR costs hundreds of upstream requests
+		// instead of a handful.
+		if result.Status == "waiting" || result.Status == "scanned" {
+			attempt.last = result.Status
 		}
 		s.writeJSON(w, requestID, http.StatusOK, map[string]any{"status": attempt.status})
 	case "confirmed":
@@ -317,6 +340,8 @@ func (s *Server) pollWeChatLogin(w http.ResponseWriter, r *http.Request, request
 		if attempt.sessionID != "" {
 			attempt.code = ""
 			attempt.status = "succeeded"
+			// A consumed QR is never shown again, so stop retaining it.
+			attempt.image = nil
 		}
 	default:
 		attempt.code = "WECHAT_LOGIN_FAILED"

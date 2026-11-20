@@ -59,6 +59,7 @@ let wechatStatus: WechatStatus = 'idle';
 let wechatRevision = 0, wechatImageVersion = 0, wechatExpiresAt = 0;
 let wechatPollTimer: ReturnType<typeof setTimeout> | undefined;
 let wechatPollController: AbortController | undefined;
+const wechatPollTimeoutMs = 70_000;
 let wechatStartTask: Promise<void> | undefined;
 let wechatCancelTask: Promise<void> | undefined;
 let wechatAttemptActive = false, wechatNeedsCancel = false;
@@ -1189,6 +1190,11 @@ async function pollWechatLogin(): Promise<void> {
   if (Date.now() >= wechatExpiresAt) { wechatStatus = 'expired'; render(); return; }
   const revision = wechatRevision, session = generation, controller = new AbortController();
   wechatPollController = controller;
+  // A poll can hang on a dead connection after a network change; give up on it
+  // and poll again. One poll lasts at most ~55 s on the server (35 s long poll
+  // plus 20 s to finish a confirmed login), and an abandoned poll never cancels
+  // a login that already started: the next poll returns the same session.
+  const watchdog = setTimeout(() => controller.abort(), wechatPollTimeoutMs);
   try {
     const result = await api.pollWechatLogin(controller.signal);
     if (controller.signal.aborted || !wechatCurrent(revision, session)) return;
@@ -1199,6 +1205,7 @@ async function pollWechatLogin(): Promise<void> {
     wechatStatus = error instanceof ApiRequestError && error.code === 'WECHAT_LOGIN_EXPIRED' ? 'expired' : 'failed';
     state.loginError = wechatError(error); render();
   } finally {
+    clearTimeout(watchdog);
     if (wechatPollController === controller) wechatPollController = undefined;
     if (wechatCurrent(revision, session)) scheduleWechatPoll();
   }
@@ -1235,8 +1242,9 @@ async function login(event: Event): Promise<void> {
   const mode = loginMode;
   const password = mode === 'password' ? value('password') : '';
   const code = mode === 'sms' ? value('code').trim() : '';
-  if (!account || loginMode === 'password' && !password) { state.loginError = '请输入头歌账号和密码。'; render(); return; }
-  if (loginMode === 'sms' && (!/^1\d{10}$/.test(account) || !code)) { state.loginError = '请输入手机号和短信验证码。'; render(); return; }
+  if (mode === 'sms' ? !/^1\d{10}$/.test(account) || !code : !account || !password) {
+    state.loginError = mode === 'sms' ? '请输入手机号和短信验证码。' : '请输入头歌账号和密码。'; render(); return;
+  }
   if (loginMode === 'password') form.reset();
   else { const codeInput = form.elements.namedItem('code') as HTMLInputElement | null; if (codeInput) codeInput.value = ''; }
   const session = ++generation, revision = ++loginRevision; courseCache.clear(); state.signingIn = true; state.loginError = ''; state.loginNotice = ''; render();
@@ -1270,7 +1278,7 @@ async function sendPhoneCode(): Promise<void> {
     const code = error instanceof ApiRequestError ? error.code : '';
     const uncertain = '验证码发送结果未确认，请先查看短信，稍后再试。';
     const messages: Record<string, string> = { LOGIN_RATE_LIMITED: '获取验证码太频繁，请稍后再试。', PHONE_NOT_REGISTERED: '该手机号尚未关联头歌账号。', SMS_SEND_FAILED: uncertain };
-    if (code !== 'LOGIN_RATE_LIMITED' && code !== 'PHONE_NOT_REGISTERED') smsCooldownUntil = Date.now() + 60_000;
+    if (code !== 'PHONE_NOT_REGISTERED') smsCooldownUntil = Date.now() + 60_000;
     state.loginError = messages[code || ''] || uncertain;
   }
   state.sendingCode = false;

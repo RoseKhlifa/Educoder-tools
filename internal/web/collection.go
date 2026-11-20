@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"educoder-cli/internal/educoder"
 	"educoder-cli/internal/jobs"
@@ -28,6 +29,63 @@ func (s *Server) enqueueCollection(ctx context.Context, client EducoderClient, o
 		return map[string]any{"queued": false, "error_code": jobs.Code(err)}
 	}
 	return map[string]any{"queued": true, "job_id": job.ID, "status": job.Status, "reused": reused}
+}
+
+// A login re-reads every passed level of the account. Measured in production
+// on 2026-11-21: a repeat scan within a day read 237–626 Educoder pages over
+// 5–7 minutes and collected 0–2 new answers, and one account was scanned five
+// times in a day. For a free campus service those repeats would be the largest
+// source of Educoder traffic and fill the two collection workers, so a login
+// skips the scan while the account's last scan is recent. An explicit POST
+// /api/collection still always runs.
+const (
+	loginCollectionCooldown           = 24 * time.Hour
+	loginIncompleteCollectionCooldown = 2 * time.Hour
+)
+
+var collectionNow = time.Now
+
+func (s *Server) enqueueLoginCollection(ctx context.Context, client EducoderClient, owner string) map[string]any {
+	if recentCollection(ctx, s.jobs.manager, owner) {
+		return map[string]any{"queued": false, "skipped": "recent_scan"}
+	}
+	return s.enqueueCollection(ctx, client, owner, "")
+}
+
+// recentCollection reports whether the owner's newest collection finished
+// successfully inside its cooldown. A queued or running scan, a failed or
+// stopped one, or a read error never suppresses the next scan: the active one
+// is reused by Submit and the others deserve a retry.
+func recentCollection(ctx context.Context, m *jobs.Manager, owner string) bool {
+	list, err := m.List(ctx, owner, 100)
+	if err != nil {
+		return false
+	}
+	for _, j := range list {
+		if j.Request.Mode != "collect_verified" {
+			continue
+		}
+		if j.Status != jobs.Succeeded || j.FinishedAt == nil {
+			return false
+		}
+		age := collectionNow().Sub(*j.FinishedAt)
+		if collectionScanComplete(j.Result) {
+			return age < loginCollectionCooldown
+		}
+		return age < loginIncompleteCollectionCooldown
+	}
+	return false
+}
+
+func collectionScanComplete(raw json.RawMessage) bool {
+	var result struct {
+		ScanComplete bool `json:"scan_complete"`
+	}
+	if json.Unmarshal(raw, &result) == nil {
+		return result.ScanComplete
+	}
+	var nested string
+	return json.Unmarshal(raw, &nested) == nil && json.Unmarshal([]byte(nested), &result) == nil && result.ScanComplete
 }
 
 // Existing /api/jobs/{id} and /cancel provide owner-scoped status/events and

@@ -74,7 +74,7 @@ func (c *Client) StartWeChatLogin(ctx context.Context) (*WeChatLoginQR, error) {
 			return nil, errors.New("WeChat QR response has conflicting images")
 		}
 	}
-	imageBytes, err := c.weChatLoginGET(ctx, "https://open.weixin.qq.com/connect/qrcode/"+uuid, 1<<20)
+	imageBytes, err := c.weChatLoginGET(ctx, "https://open.weixin.qq.com/connect/qrcode/"+uuid, 256<<10)
 	if err != nil {
 		return nil, err
 	}

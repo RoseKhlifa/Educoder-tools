@@ -159,6 +159,7 @@ go run ./cmd/web
 | `WEB_COOKIE_SECURE` | 本地 HTTP 为 `false`，线上 HTTPS 为 `true` |
 | `WEB_ORIGIN` | 可选精确来源；生产可设 `https://touge.mom` |
 | `PLATFORM_ADMIN_USER_IDS` | 经核验的头歌数字用户 ID，逗号分隔，默认无引导管理员 |
+| `TRUSTED_PROXY_CIDRS` | 允许声明转发客户端地址的连接方，逗号分隔的 IP/CIDR；留空使用回环、私有网段与 Cloudflare 地址段默认值，`none` 表示只按连接地址限速 |
 | `JOB_WORKERS` / `JOB_QUEUE_SIZE` | `16` / `256` |
 | `JOB_PER_ACCOUNT_PENDING` / `JOB_PER_ACCOUNT_RUNNING` | `16` / `4` |
 | `JOB_TIMEOUT` | `2h` |

@@ -311,14 +311,14 @@ await test('course details cache keeps course reads within the current browser s
     assert.equal((await refresh)[0].name, 'after');
   });
 
-  await t.test('default lifetime expires after two minutes and simultaneous clicked lists can run together', async () => {
+  await t.test('default lifetime expires after ten minutes and simultaneous clicked lists can run together', async () => {
     let now = 100;
     const h = harness({ clock: () => now });
     const tasks = h.cache.getHomeworks('A'), exams = h.cache.getExercises('A');
     await tick(); assert.equal(h.active, 2);
     h.calls[0].resolve([]); h.calls[1].resolve([]); await Promise.all([tasks, exams]);
-    now = 120_099; assert.equal(h.cache.peekHomeworks('A').stale, false);
-    now = 120_100; assert.equal(h.cache.peekHomeworks('A').stale, true);
+    now = 600_099; assert.equal(h.cache.peekHomeworks('A').stale, false);
+    now = 600_100; assert.equal(h.cache.peekHomeworks('A').stale, true);
   });
 
   await t.test('background rejections are handled, leave no false empty cache and permit retry after cooldown', async () => {

@@ -682,7 +682,7 @@ await test('consumer course service and administrator boundary',async t=>{
       assert.equal(page.get('[data-select-course="COURSE_A"]').disabled, true);
       await page.tick();
       assert.equal(page.requests.filter(item => item.url.endsWith('/homeworks')).length, 2, 'fresh homework lists are reused');
-      now += 120_001; await page.tick();
+      now += 600_001; await page.tick();
       const row = page.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/article>/)?.[0] || '';
       assert.match(row, /data-pending="0"/); assert.match(row, /无需处理|全部完成/); assert.doesNotMatch(row, /stale|>已完成</);
       assert.equal(page.get('[data-select-course="COURSE_A"]').disabled, true); assert.equal(page.get('[data-action="start-all"]').disabled, true);
@@ -696,7 +696,7 @@ await test('consumer course service and administrator boundary',async t=>{
     const refresh = deferred(); let reads = 0;
     try {
       const page = await app({ '/api/courses/COURSE_A/homeworks': () => ++reads === 1 ? ok([]) : reads === 2 ? refresh.promise : ok([]), '/api/courses/COURSE_B/homeworks': () => ok([]) });
-      now += 120_001; await page.tick();
+      now += 600_001; await page.tick();
       const row = () => page.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/article>/)?.[0] || '';
       assert.equal(reads, 2); assert.match(row(), /正在核对|正在更新/); assert.match(row(), /data-pending="0"[^>]*data-stale="true"|data-stale="true"[^>]*data-pending="0"/);
       assert.doesNotMatch(row(), /badge completed|>暂无待办<|>已完成</);
@@ -713,7 +713,7 @@ await test('consumer course service and administrator boundary',async t=>{
     const actualNow = Date.now; let now = actualNow(); Date.now = () => now;
     try {
       const page = await app({ '/api/courses/COURSE_A/homeworks': () => ok([]), '/api/courses/COURSE_B/homeworks': () => ok([]) });
-      page.document.visibilityState = 'hidden'; now += 120_001;
+      page.document.visibilityState = 'hidden'; now += 600_001;
       const beforeHidden = page.requests.length; await page.tick();
       assert.equal(page.requests.length, beforeHidden, 'a hidden tab must not poll APIs');
       page.document.listeners.get('visibilitychange')(); await settle();
@@ -722,7 +722,7 @@ await test('consumer course service and administrator boundary',async t=>{
       assert.equal(page.requests.filter(item => item.url.endsWith('/homeworks')).length, 4);
       assert.equal(page.requests.filter(item => item.url.endsWith('/exercises')).length, 2);
       assert.match(page.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/article>/)?.[0] || '', /无需处理|全部完成/);
-      now += 120_001; page.windowListeners.get('focus')(); await settle();
+      now += 600_001; page.windowListeners.get('focus')(); await settle();
       assert.equal(page.requests.filter(item => item.url.endsWith('/homeworks')).length, 6);
       assert.equal(page.requests.filter(item => item.url.endsWith('/exercises')).length, 2);
       assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
@@ -746,7 +746,7 @@ await test('consumer course service and administrator boundary',async t=>{
       page.document.listeners.get('keydown')({ key: 'a' }); await settle();
       assert.equal(courseReads(), initial + 2, 'the first input after idling did not refresh');
       // And normal revalidation resumes afterwards.
-      now += 120_001; await page.tick();
+      now += 600_001; await page.tick();
       assert.equal(courseReads(), initial + 4);
       assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
     } finally { Date.now = actualNow; }
@@ -916,6 +916,18 @@ await test('consumer course service and administrator boundary',async t=>{
     poll.resolve(ok({ status: 'waiting' })); await settle();
     assert.equal(page.timers.size, 1); assert.equal([...page.timers.values()][0].delay, 1000);
   });
+  await t.test('a WeChat poll that hangs after a network change is abandoned and polled again without an error', async () => {
+    let polls = 0;
+    const hang = options => { polls++; return new Promise((_, reject) => options.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))); };
+    const page = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x'), '/api/auth/wechat/poll': hang });
+    page.get('[data-auth-mode="wechat"]').dispatch('click'); await settle(); await page.tick();
+    assert.equal(polls, 1);
+    assert.ok([...page.timers.values()].some(item => item.delay === 70000), 'a pending poll has a watchdog');
+    await page.tick(); await settle();
+    await page.tick(); await settle();
+    assert.equal(polls, 2, 'the hung poll was abandoned and a new one started');
+    assert.doesNotMatch(page.html(), /微信登录暂未完成/);
+  });
   await t.test('switching away cancels a scan and waits for server cleanup before password authentication', async () => {
     const poll = deferred(), cancel = deferred();
     const page = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x'), '/api/auth/wechat/poll': () => poll.promise, '/api/auth/wechat/cancel': () => cancel.promise });
@@ -1036,6 +1048,26 @@ await test('consumer course service and administrator boundary',async t=>{
     page.get('#sms-code').value = 'private-draft'; await page.tick();
     assert.equal(page.get('#login').value, '13000000000'); assert.equal(page.get('#sms-code').value, 'private-draft');
     page.document.visibilityState = 'hidden'; page.document.listeners.get('visibilitychange')(); assert.equal(page.timers.size, 0);
+  });
+  await t.test('an incomplete phone-code form asks for the code it needs, not for a password', async () => {
+    const page = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x') });
+    page.get('[data-auth-mode="sms"]').dispatch('click');
+    page.get('#login-form').dispatch('submit'); await settle();
+    assert.match(page.html(), /请输入手机号和短信验证码/); assert.doesNotMatch(page.html(), /请输入头歌账号和密码/);
+    page.get('#login').value = '13000000000';
+    page.get('#login-form').dispatch('submit'); await settle();
+    assert.match(page.html(), /请输入手机号和短信验证码/);
+    assert.equal(page.requests.some(item => item.url === '/api/auth/sms/login'), false);
+  });
+  await t.test('a refused code request keeps the resend button disabled instead of inviting clicks that cannot succeed', async () => {
+    const page = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x'), '/api/auth/sms/send': () => failure(429, 'LOGIN_RATE_LIMITED', 'private-rate-details') });
+    page.get('[data-auth-mode="sms"]').dispatch('click'); page.get('#login').value = '13000000000';
+    page.get('[data-action="send-phone-code"]').dispatch('click'); await settle();
+    assert.match(page.html(), /获取验证码太频繁，请稍后再试/); assert.doesNotMatch(page.html(), /private-rate-details/);
+    assert.match(page.html(), /60 秒后重发/);
+    assert.equal(page.get('[data-action="send-phone-code"]').disabled, true);
+    page.get('[data-action="send-phone-code"]').dispatch('click'); await settle();
+    assert.equal(page.requests.filter(item => item.url === '/api/auth/sms/send').length, 1);
   });
   await t.test('SMS binding and restricted errors describe the required official action without exposing backend text', async () => {
     for (const [code, copy] of [['SMS_BINDING_REQUIRED', /官网完成账号绑定/], ['SMS_RESTRICTED', /官网处理登录限制/]]) {

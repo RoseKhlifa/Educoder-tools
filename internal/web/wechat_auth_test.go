@@ -5,7 +5,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -22,6 +24,14 @@ type wechatFakeClient struct {
 	err         error
 	onPoll      func(context.Context) (*educoder.WeChatLoginPoll, error)
 	onComplete  func(context.Context) (*educoder.User, error)
+	lastMu      sync.Mutex
+	lasts       []string
+}
+
+func (f *wechatFakeClient) recordedLasts() []string {
+	f.lastMu.Lock()
+	defer f.lastMu.Unlock()
+	return append([]string(nil), f.lasts...)
 }
 
 func (f *wechatFakeClient) StartWeChatLogin(context.Context) (*educoder.WeChatLoginQR, error) {
@@ -30,6 +40,9 @@ func (f *wechatFakeClient) StartWeChatLogin(context.Context) (*educoder.WeChatLo
 }
 func (f *wechatFakeClient) PollWeChatLogin(ctx context.Context, uuid, last string) (*educoder.WeChatLoginPoll, error) {
 	f.polls.Add(1)
+	f.lastMu.Lock()
+	f.lasts = append(f.lasts, last)
+	f.lastMu.Unlock()
 	if f.onPoll != nil {
 		return f.onPoll(ctx)
 	}
@@ -265,5 +278,87 @@ func TestWeChatConfirmationFinishesAfterBrowserDisconnectAndCanBeRecovered(t *te
 	recovered := wechatRequest(app, "poll", cookie)
 	if recovered.Code != http.StatusOK || !strings.Contains(recovered.Body.String(), `"status":"succeeded"`) || fake.completions.Load() != 1 {
 		t.Fatal("completed transaction could not be recovered without repeating code")
+	}
+}
+
+// A poll must tell the upstream endpoint the state it already saw, otherwise
+// every long poll returns at once and one waiting QR turns the browser's
+// one-second retry into hundreds of upstream requests per scan.
+func TestWeChatPollContinuesFromTheObservedStateAndDropsAConsumedQR(t *testing.T) {
+	status := "waiting"
+	fake := &wechatFakeClient{}
+	fake.onPoll = func(context.Context) (*educoder.WeChatLoginPoll, error) {
+		if status == "confirmed" {
+			return &educoder.WeChatLoginPoll{Status: "confirmed", Code: "private-oauth-canary"}, nil
+		}
+		return &educoder.WeChatLoginPoll{Status: status}, nil
+	}
+	app := NewServerWithFactory(DefaultConfig(), func(string) EducoderClient { return fake })
+	cookie := startFakeWeChat(t, app)
+	// The upstream reply of each poll becomes the next poll's starting point.
+	for _, upstream := range []string{"waiting", "waiting", "scanned", "scanned"} {
+		status = upstream
+		if w := wechatRequest(app, "poll", cookie); w.Code != http.StatusOK {
+			t.Fatalf("poll=%d %s", w.Code, w.Body.String())
+		}
+	}
+	if got := fake.recordedLasts(); !slices.Equal(got, []string{"", "waiting", "waiting", "scanned"}) {
+		t.Fatalf("upstream long poll restarted from scratch every time: %q", got)
+	}
+	if w := wechatRequest(app, "image", cookie); w.Code != http.StatusOK {
+		t.Fatalf("pending QR unavailable: %d", w.Code)
+	}
+	if w := wechatRequest(app, "head-image", cookie); w.Code != http.StatusNotFound {
+		t.Fatalf("unknown action = %d", w.Code)
+	}
+	head := httptest.NewRequest(http.MethodHead, "/api/auth/wechat/image", nil)
+	head.AddCookie(cookie)
+	hw := httptest.NewRecorder()
+	app.ServeHTTP(hw, head)
+	if hw.Code != http.StatusOK || hw.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("HEAD on the QR image = %d %q", hw.Code, hw.Header().Get("Cache-Control"))
+	}
+	status = "confirmed"
+	if w := wechatRequest(app, "poll", cookie); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"status":"succeeded"`) {
+		t.Fatalf("confirmed poll = %d %s", w.Code, w.Body.String())
+	}
+	if w := wechatRequest(app, "image", cookie); w.Code != http.StatusGone {
+		t.Fatalf("consumed QR still served: %d", w.Code)
+	}
+}
+
+// start creates a transaction and reaches WeChat twice before the browser
+// holds its cookie, so a caller that throws the cookie away must not be able
+// to hold every slot and make WeChat login unavailable for everyone else.
+func TestWeChatTransactionCapacityIsPerClientNotGlobal(t *testing.T) {
+	fake := &wechatFakeClient{}
+	app := NewServerWithFactory(DefaultConfig(), func(string) EducoderClient { return fake })
+	start := func(peer string) int {
+		r := httptest.NewRequest(http.MethodPost, "/api/auth/wechat/start", strings.NewReader("{}"))
+		r.RemoteAddr = peer
+		w := httptest.NewRecorder()
+		app.ServeHTTP(w, r)
+		return w.Code
+	}
+	abuser := "172.18.0.1:4000"
+	accepted := 0
+	for i := 0; i < wechatAttemptsPerSource+16; i++ {
+		if start(abuser) == http.StatusOK {
+			accepted++
+		}
+	}
+	if accepted != wechatAttemptsPerSource {
+		t.Fatalf("one client held %d transactions", accepted)
+	}
+	for i := 0; i < wechatAttemptsPerSource; i++ {
+		if code := start("172.18.0.2:4000"); code != http.StatusOK {
+			t.Fatalf("other student locked out of WeChat login: %d", code)
+		}
+	}
+	// Capacity returns when the abandoned transactions reach their deadline.
+	now := app.wechatLogins.now()
+	app.wechatLogins.now = func() time.Time { return now.Add(wechatAttemptTTL + time.Second) }
+	if code := start(abuser); code != http.StatusOK {
+		t.Fatalf("expired transactions never released capacity: %d", code)
 	}
 }

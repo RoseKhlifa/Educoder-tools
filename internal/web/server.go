@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -52,10 +53,13 @@ type Config struct {
 	ModelAPIKeyFile      string
 	ModelBaseURL         string
 	PlatformAdminUserIDs []int64
+	// TrustedProxies are the peers allowed to state the client address they
+	// forward, used only for the per-source login budgets.
+	TrustedProxies []netip.Prefix
 }
 
 func DefaultConfig() Config {
-	return Config{HTTPAddr: "0.0.0.0:11454", APIBaseURL: educoder.DefaultBaseURL, SessionTTL: 8 * time.Hour, StaticDir: filepath.FromSlash("web"), DataDir: "data", JobWorkers: 16, JobQueueSize: 256, JobPerOwner: 16, JobPerOwnerRunning: 4, JobTimeout: 2 * time.Hour, ModelConcurrency: 16, ModelTimeout: 4 * time.Minute, UpstreamAccountConcurrency: educoder.DefaultAccountUpstreamConcurrency, UpstreamGlobalConcurrency: educoder.DefaultGlobalUpstreamConcurrency, HomeworkParallelism: 3, CollectionWorkers: 2, ProFreshSolve: true}
+	return Config{HTTPAddr: "0.0.0.0:11454", APIBaseURL: educoder.DefaultBaseURL, SessionTTL: 8 * time.Hour, StaticDir: filepath.FromSlash("web"), DataDir: "data", JobWorkers: 16, JobQueueSize: 256, JobPerOwner: 16, JobPerOwnerRunning: 4, JobTimeout: 2 * time.Hour, ModelConcurrency: 16, ModelTimeout: 4 * time.Minute, UpstreamAccountConcurrency: educoder.DefaultAccountUpstreamConcurrency, UpstreamGlobalConcurrency: educoder.DefaultGlobalUpstreamConcurrency, HomeworkParallelism: 3, CollectionWorkers: 2, ProFreshSolve: true, TrustedProxies: defaultTrustedProxies()}
 }
 
 func LoadConfig() (Config, error) {
@@ -135,6 +139,9 @@ func NewServerWithFactory(config Config, factory ClientFactory) *Server {
 	}
 	if config.StaticDir == "" {
 		config.StaticDir = filepath.FromSlash("web")
+	}
+	if config.TrustedProxies == nil {
+		config.TrustedProxies = defaultTrustedProxies()
 	}
 	if factory == nil {
 		factory = func(baseURL string) EducoderClient { return educoder.New(baseURL) }
@@ -358,7 +365,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request, requestID s
 		Login    string `json:"login"`
 		Password string `json:"password"`
 	}
-	if !s.loginLimits.allow("source:"+loginSource(r), 120) {
+	if !s.loginLimits.allow("source:"+s.loginSource(r), loginSourceBudget) {
 		s.loginRateError(w, requestID)
 		return
 	}
