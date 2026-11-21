@@ -436,13 +436,13 @@ function adminJobRows(jobs: AdminJob[], limited = false, history = false, action
     const label = history && needsAttention(job) ? '当次未完成' : status.label;
     const mark = history ? '' : status.tone === 'completed' ? `<span class="tick">${icon('tick')}</span>` : status.tone === 'support' ? icon('bang') : isPending(job) ? '<span class="pulse"></span>' : '';
     return `<tr class="tap" data-admin-job-detail="${e(job.id)}">
-      <td><div class="cell-strong">${e(context.user)}</div><small class="cell-meta">${e(dateTime(job.created_at))} 创建</small></td>
-      <td><div class="cell-strong">${e(collecting ? '全部已通过任务' : context.course)}</div><small class="cell-meta">${e(scope)}</small></td>
-      <td><div class="cell-strong">${e(work)}</div>${collecting ? '' : level}${stage ? `<small class="cell-meta"><span class="pulse"></span> ${e(stage)}</small>` : ''}${extra}</td>
-      <td><span class="state ${tone}">${mark}${e(label)}</span><small class="cell-meta">${e(progressLabel(job))}</small>${!collecting && count(context.batch.total_levels) && !job.context?.summary?.progress_label?.includes('当前作业') ? `<small class="cell-meta">当前作业 ${count(context.batch.completed_levels)} / ${count(context.batch.total_levels)} 个关卡</small>` : ''}</td>
-      <td>${e(readableReason(job))}${retry ? `<small class="cell-meta">${e(retry)}</small>` : ''}${count(job.context?.summary?.pending_homeworks) ? `<small class="cell-meta">另有 ${count(job.context?.summary?.pending_homeworks)} 份尚未开始</small>` : ''}</td>
-      <td class="nowrap"><div class="mono">${count(data.model_calls)} 次</div><small class="cell-meta">$${(count(data.cost_micro_usd) / 1000000).toFixed(6)}</small>${count(data.model_calls) === 0 && !collecting ? '<small class="cell-meta">未调用模型</small>' : ''}</td>
-      <td class="acts"><button class="link" data-admin-job-detail="${e(job.id)}">详情</button>${adminResumeButton(job, history, actions.get(job.id))}${['queued', 'running'].includes(job.status) ? `<button class="link" data-admin-cancel="${e(job.id)}" ${actions.has(job.id) ? 'disabled' : ''}>${actions.get(job.id) === 'cancel' ? '正在停止…' : '停止'}</button>` : ''}</td>
+      <td data-col="用户"><div class="cell-strong">${e(context.user)}</div><small class="cell-meta">${e(dateTime(job.created_at))} 创建</small></td>
+      <td data-col="课程 / 范围"><div class="cell-strong">${e(collecting ? '全部已通过任务' : context.course)}</div><small class="cell-meta">${e(scope)}</small></td>
+      <td data-col="作业 / 当前关卡"><div class="cell-strong">${e(work)}</div>${collecting ? '' : level}${stage ? `<small class="cell-meta"><span class="pulse"></span> ${e(stage)}</small>` : ''}${extra}</td>
+      <td data-col="状态 / 进度"><span class="state ${tone}">${mark}${e(label)}</span><small class="cell-meta">${e(progressLabel(job))}</small>${!collecting && count(context.batch.total_levels) && !job.context?.summary?.progress_label?.includes('当前作业') ? `<small class="cell-meta">当前作业 ${count(context.batch.completed_levels)} / ${count(context.batch.total_levels)} 个关卡</small>` : ''}</td>
+      <td data-col="原因">${e(readableReason(job))}${retry ? `<small class="cell-meta">${e(retry)}</small>` : ''}${count(job.context?.summary?.pending_homeworks) ? `<small class="cell-meta">另有 ${count(job.context?.summary?.pending_homeworks)} 份尚未开始</small>` : ''}</td>
+      <td class="nowrap" data-col="模型 / 费用"><div class="mono">${count(data.model_calls)} 次</div><small class="cell-meta">$${(count(data.cost_micro_usd) / 1000000).toFixed(6)}</small>${count(data.model_calls) === 0 && !collecting ? '<small class="cell-meta">未调用模型</small>' : ''}</td>
+      <td class="acts" data-col="管理"><button class="link" data-admin-job-detail="${e(job.id)}">详情</button>${adminResumeButton(job, history, actions.get(job.id))}${['queued', 'running'].includes(job.status) ? `<button class="link" data-admin-cancel="${e(job.id)}" ${actions.has(job.id) ? 'disabled' : ''}>${actions.get(job.id) === 'cancel' ? '正在停止…' : '停止'}</button>` : ''}</td>
     </tr>`;
   }).join('');
   if (!body) {
@@ -493,11 +493,11 @@ export function renderAdmin(page: AdminPage, state: AdminState, actions: Readonl
     const filterButton = (value: 'all' | 'active' | 'disabled', label: string): string =>
       `<button class="${userFilter === value ? 'on' : ''}" type="button" data-admin-user-filter="${value}" aria-pressed="${userFilter === value}">${label}</button>`;
     const body = filteredUsers.map(user => `<tr>
-      <td><div class="cell-strong">${e(user.name || user.login || '同学')}</div><small class="cell-meta">头歌 ID ${e(user.upstream_id ?? user.id)}</small></td>
-      <td class="nowrap">${user.role === 'admin' ? '管理员' : '用户'}</td>
-      <td class="nowrap"><span class="state ${user.status === 'disabled' ? '' : 'done'}">${user.status === 'disabled' ? icon('bang') : `<span class="tick">${icon('tick')}</span>`}${e(statusLabels[user.status] ?? '正常')}</span></td>
-      <td class="nowrap muted">${e(dateTime(user.last_login_at ?? user.updated_at))}</td>
-      <td class="acts">${user.role !== 'admin'
+      <td data-col="头歌用户"><div class="cell-strong">${e(user.name || user.login || '同学')}</div><small class="cell-meta">头歌 ID ${e(user.upstream_id ?? user.id)}</small></td>
+      <td class="nowrap" data-col="角色">${user.role === 'admin' ? '管理员' : '用户'}</td>
+      <td class="nowrap" data-col="服务状态"><span class="state ${user.status === 'disabled' ? '' : 'done'}">${user.status === 'disabled' ? icon('bang') : `<span class="tick">${icon('tick')}</span>`}${e(statusLabels[user.status] ?? '正常')}</span></td>
+      <td class="nowrap muted" data-col="最近登录">${e(dateTime(user.last_login_at ?? user.updated_at))}</td>
+      <td class="acts" data-col="操作">${user.role !== 'admin'
         ? `<button class="link" data-user-status="${e(user.id)}" data-next-status="${user.status === 'disabled' ? 'active' : 'disabled'}">${user.status === 'disabled' ? '恢复服务' : '暂停服务'}</button>`
         : '<span class="muted">服务端授权</span>'}</td>
     </tr>`).join('');
@@ -510,11 +510,11 @@ export function renderAdmin(page: AdminPage, state: AdminState, actions: Readonl
   }
   if (page === 'operations') return `${header}${renderOperations(state, actions)}`;
   const audit = state.audit.map(row => `<tr>
-    <td class="nowrap muted">${e(dateTime(row.created_at))}</td>
-    <td class="nowrap">${e(row.actor_id ?? '系统')}</td>
-    <td>${e(row.action || '—')}</td>
-    <td class="mono">${e(row.target_id ?? '—')}</td>
-    <td class="nowrap">${e(row.outcome || '已记录')}</td>
+    <td class="nowrap muted" data-col="时间">${e(dateTime(row.created_at))}</td>
+    <td class="nowrap" data-col="操作人">${e(row.actor_id ?? '系统')}</td>
+    <td data-col="操作">${e(row.action || '—')}</td>
+    <td class="mono" data-col="目标">${e(row.target_id ?? '—')}</td>
+    <td class="nowrap" data-col="结果">${e(row.outcome || '已记录')}</td>
   </tr>`).join('');
   return `${header}<section class="card"><div class="panel-head"><h2>最近管理操作<span>${state.audit.length} 条</span></h2><span class="muted">只有管理员看得到</span></div>
     ${audit ? `<div class="table-wrap"><table class="ledger-table"><thead><tr><th>时间</th><th>操作人</th><th>操作</th><th>目标</th><th>结果</th></tr></thead><tbody>${audit}</tbody></table></div>`

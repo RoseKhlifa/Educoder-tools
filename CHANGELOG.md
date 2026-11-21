@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.169 - 2026-11-21
+
+- Make the phone experience first-class: overview cards only on the courses tab and compact, full-width progress cards, an admin tab and admin bottom bar, operator tables as cards, 44px touch targets, 16px inputs, sheet scroll lock, landscape layout, and WeChat QR hints for phones
+
 ## 0.1.168 - 2026-11-21
 
 - Meter phone-code and WeChat login per student behind Cloudflare and the proxy with campus-sized budgets, long-poll WeChat properly, cap SMS service-wide, recover hung QR polls; skip repeat login scans for a day, re-read course lists every ten minutes, and serve a 14 KB logo instead of 1.2 MB

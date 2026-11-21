@@ -74,6 +74,10 @@ const adminJobDetails = new Map<string, AdminJob>();
 let focusTimer: ReturnType<typeof setTimeout> | undefined;
 let adminTimer: ReturnType<typeof setTimeout> | undefined;
 let previousFocus: HTMLElement | null = null;
+// The page repaints on every poll, which replaces the node a sheet was opened
+// from. Keep its stable key too, so closing the sheet still hands the focus
+// back to the control the person actually pressed.
+let previousFocusKey = '';
 let renderedHTML = '';
 // Whether the password field is revealed. It lives here, not in the DOM, so a
 // repaint (a login error, or the sign-in state) does not silently re-hide what
@@ -195,6 +199,29 @@ function questionBankCredit(): string {
   return '题库来源 <a href="https://github.com/ppxxforever/fuck-educoder" target="_blank" rel="noopener noreferrer" referrerpolicy="no-referrer">ppxxforever/fuck-educoder</a>';
 }
 /**
+ * browserAgent reads the user agent through `window` first, so the shell's own
+ * fake-DOM checks can drive the agent-dependent copy without a real browser.
+ */
+function browserAgent(): string {
+  const agent = (window as unknown as { navigator?: { userAgent?: unknown } }).navigator?.userAgent
+    ?? (typeof navigator === 'undefined' ? '' : navigator.userAgent);
+  return typeof agent === 'string' ? agent : '';
+}
+/** insideWechat is the WeChat in-app browser, on either Android or iOS. */
+const insideWechat = (): boolean => /MicroMessenger/i.test(browserAgent());
+/** onPhone covers the handsets the service is actually read on. */
+const onPhone = (): boolean => /Android|iPhone|iPod|iPad|Mobile|HarmonyOS/i.test(browserAgent());
+/**
+ * wechatScanHint answers "how do I scan a code that is on this very screen?".
+ * Inside WeChat the image itself is the answer — a long press offers 识别图中二维码
+ * — which is why the code stays a plain <img>. On another phone browser the only
+ * route is a screenshot or a second device.
+ */
+function wechatScanHint(): string {
+  if (insideWechat()) return '长按二维码，选择「识别图中二维码」即可登录。';
+  return onPhone() ? '截图后在微信「扫一扫」里从相册选择，或用另一台设备扫码。' : '';
+}
+/**
  * renderLoginHero draws the product at work out of the same components the
  * signed-in pages use: a stack of exercise sheets, red-pen ticks in the
  * margin, a 田字格 strip and the square seal. It is decorative and its content
@@ -243,8 +270,10 @@ function renderLogin(): string {
     expired: ['二维码已过期', '请重新获取二维码后扫码。'],
     failed: ['微信登录暂未完成', '可以重新获取二维码，或选择其他登录方式。'],
   };
+  const scanHint = ['waiting', 'scanned'].includes(wechatStatus) ? wechatScanHint() : '';
   const fields = wechat ? `<div class="wechat-login-status" role="status"><b>${wechatCopy[wechatStatus][0]}</b><p>${wechatCopy[wechatStatus][1]}</p>
       ${['waiting', 'scanned'].includes(wechatStatus) ? `<img class="wechat-qr" data-wechat-image src="/api/auth/wechat/image?v=${wechatImageVersion}" alt="微信登录二维码" width="200" height="200">` : ''}
+      ${scanHint ? `<p class="wechat-scan-hint" data-wechat-hint>${e(scanHint)}</p>` : ''}
       <button class="btn full" type="button" data-action="refresh-wechat" ${wechatStatus === 'starting' ? 'disabled' : ''}>${wechatStatus === 'idle' ? '获取二维码' : wechatStatus === 'starting' ? '正在获取…' : '重新获取二维码'}</button>
       </div>` : sms ? `
       <div class="field"><label for="login">头歌绑定手机号</label>
@@ -253,9 +282,9 @@ function renderLogin(): string {
         <span class="input-wrap">${icon('doc')}<input id="sms-code" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="输入短信验证码" required maxlength="128"></span></div>
         <button class="btn code-send" type="button" data-action="send-phone-code" ${state.sendingCode || state.signingIn || secondsRemaining > 0 ? 'disabled' : ''}>${state.sendingCode ? '正在发送' : secondsRemaining > 0 ? `${secondsRemaining} 秒后重发` : '获取验证码'}</button></div>` : `
       <div class="field"><label for="login">头歌账号</label>
-        <span class="input-wrap">${icon('user')}<input id="login" name="login" autocomplete="username" placeholder="手机号 / 邮箱 / 学号" required maxlength="120"></span></div>
+        <span class="input-wrap">${icon('user')}<input id="login" name="login" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="手机号 / 邮箱 / 学号" required maxlength="120"></span></div>
       <div class="field"><label for="password">头歌密码</label>
-        <span class="input-wrap">${icon('lock')}<input id="password" name="password" type="${reveal ? 'text' : 'password'}" autocomplete="current-password" placeholder="输入头歌密码" required maxlength="512"><button class="reveal" type="button" data-action="toggle-password" aria-pressed="${reveal}" aria-label="${reveal ? '隐藏密码' : '显示密码'}" title="${reveal ? '隐藏密码' : '显示密码'}">${icon(reveal ? 'eye-off' : 'eye')}</button></span></div>`;
+        <span class="input-wrap reveal-wrap">${icon('lock')}<input id="password" name="password" type="${reveal ? 'text' : 'password'}" autocomplete="current-password" placeholder="输入头歌密码" required maxlength="512"><button class="reveal" type="button" data-action="toggle-password" aria-pressed="${reveal}" aria-label="${reveal ? '隐藏密码' : '显示密码'}" title="${reveal ? '隐藏密码' : '显示密码'}">${icon(reveal ? 'eye-off' : 'eye')}</button></span></div>`;
   const submit = wechat ? '' : `<button class="btn red full" type="submit" ${state.signingIn || state.sendingCode ? 'disabled' : ''}>${state.signingIn ? '正在登录…' : '登录'}</button>`;
   return `<main id="view-login" class="login">
     <header class="login-top">
@@ -295,10 +324,18 @@ function sideItem(page: Page, label: string, name: string, badge = 0): string {
   const on = state.page === page;
   return `<button class="side-item ${on ? 'on' : ''}" data-nav="${page}" ${on ? 'aria-current="page"' : ''}>${icon(name)}<span class="lbl">${label}</span>${badge ? `<span class="badge-num num">${badge}</span>` : ''}</button>`;
 }
+/**
+ * statRow is one line of the sidebar ledger. The row carries its own key so a
+ * phone can drop the two figures the greeting and the section heading already
+ * state, and lay the rest out as a strip rather than a third tall card.
+ */
+function statRow(key: string, label: string, value: string, hot = false): string {
+  return `<div data-row="${key}"><dt>${label}</dt><span class="dots"></span><dd class="${hot ? 'hot' : ''}" data-stat="${key}">${value}</dd></div>`;
+}
 function renderQuestionBank(): string {
   const summary = state.questionBank;
-  return `<section class="card note" aria-label="题库">
-    <h3>题库<button class="btn ghost sm square" type="button" data-action="bank-refresh" aria-label="刷新题库" style="width:28px;height:28px" ${state.bankLoading ? 'disabled' : ''}>${icon('refresh')}</button></h3>
+  return `<section class="card note side-bank" aria-label="题库">
+    <h3>题库<button class="btn ghost sm square bank-refresh" type="button" data-action="bank-refresh" aria-label="刷新题库" ${state.bankLoading ? 'disabled' : ''}>${icon('refresh')}</button></h3>
     ${summary ? `<p class="big"><b class="num">${cn(summary.total_questions)}</b>道题目</p>
     <dl class="ledger" style="margin-top:8px">
       <div><dt>客观题</dt><span class="dots"></span><dd>${cn(summary.objective_questions)}</dd></div>
@@ -329,7 +366,7 @@ function todayLine(): string {
 }
 function renderTodaySummary(): string {
   const date = serviceDate(); const summary = state.todaySummary?.date === date ? state.todaySummary : null;
-  return `<section class="card note" aria-label="累计服务">
+  return `<section class="card note side-today" aria-label="累计服务">
     <h3>累计服务<small>自建站以来</small></h3>
     ${summary ? `<p class="big"><b class="num">${cn(summary.total_completed_questions)}</b>道题</p>
     <p class="small">累计 ${cn(summary.total_served_students)} 位同学 · 今天 <b>${cn(summary.completed_students)}</b> 位 · <b>${cn(summary.completed_questions)}</b> 道</p>
@@ -387,7 +424,9 @@ function renderShell(): string {
         </div>
       </aside>
       <main class="main"><div class="main-in admin-main-in">${state.notice ? `<div class="sticky-note" role="status"><div>${e(state.notice)}</div></div>` : ''}${page}${pageFooter()}</div></main>
-    </div></div>`;
+    </div>
+    <nav class="bottom-nav admin-bottom-nav" aria-label="管理导航">${tabItem('admin-overview', '服务概览', 'home')}${tabItem('admin-operations', '任务运营', 'tasks')}${tabItem('admin-support', '反馈工单', 'chat', adminOpen)}${tabItem('courses', '返回用户端', 'back')}</nav>
+    </div>`;
   }
   return `<div id="view-app" class="app-shell consumer-app">
     <header class="topbar">
@@ -399,25 +438,24 @@ function renderShell(): string {
         <button class="btn ghost square" data-action="logout" aria-label="退出登录" title="退出登录">${icon('out')}</button>
       </div>
     </header>
-    <div class="shell">
+    <div class="shell" data-page="${e(state.page)}">
       <main class="main"><div class="main-in">${state.notice ? `<div class="sticky-note" role="status"><div>${e(state.notice)}</div></div>` : ''}${page}${pageFooter()}</div></main>
       <aside class="side" aria-label="概况">
-        <section class="card note">
+        <section class="card note side-overview">
           <h3>当前概况</h3>
           <dl class="ledger">
-            <div><dt>我的课程</dt><span class="dots"></span><dd data-stat="courses">${state.courses.length}</dd></div>
-            <div><dt>待完成作业</dt><span class="dots"></span><dd class="${pendingWork.total ? 'hot' : ''}" data-stat="pending">${pendingWork.known ? pendingWork.total : '—'}</dd></div>
-            <div><dt>正在处理</dt><span class="dots"></span><dd data-stat="running">${active}</dd></div>
-            <div><dt>需要跟进</dt><span class="dots"></span><dd class="${followUp ? 'hot' : ''}" data-stat="followup">${followUp}</dd></div>
-            <div><dt>已完成任务</dt><span class="dots"></span><dd data-stat="completed">${completed}</dd></div>
+            ${statRow('courses', '我的课程', String(state.courses.length))}
+            ${statRow('pending', '待完成作业', pendingWork.known ? String(pendingWork.total) : '—', pendingWork.total > 0)}
+            ${statRow('running', '正在处理', String(active))}
+            ${statRow('followup', '需要跟进', String(followUp), followUp > 0)}
+            ${statRow('completed', '已完成任务', String(completed))}
           </dl>
         </section>
-        ${renderTodaySummary()}
-        ${renderQuestionBank()}
+        <div class="side-notes">${renderTodaySummary()}${renderQuestionBank()}</div>
         <div class="side-foot">独立服务，成绩以头歌为准，不承诺成绩或完成时限。<br><button class="link" type="button" data-action="user-guidelines" data-guidelines-source="sidebar">用户准则与数据说明</button> · ${questionBankCredit()}</div>
       </aside>
     </div>
-    <nav class="bottom-nav" aria-label="主导航">${tabItem('courses', '我的课程', 'book')}${tabItem('progress', '完成进度', 'tasks', active + followUp)}${tabItem('support', '问题反馈', 'chat', openTickets)}</nav>
+    <nav class="bottom-nav" aria-label="主导航">${tabItem('courses', '我的课程', 'book')}${tabItem('progress', '完成进度', 'tasks', active + followUp)}${tabItem('support', '问题反馈', 'chat', openTickets)}${isAdmin() ? tabItem('admin-overview', '管理后台', 'grid') : ''}</nav>
     ${renderSelectionBar()}
   </div>`;
 }
@@ -913,6 +951,11 @@ function render(): void {
   const focus = captureFocus();
   renderedHTML = html;
   root!.innerHTML = html;
+  // A sheet owns the screen on a phone. Mark the page so a drag that starts on
+  // the backdrop, or past the end of the sheet, cannot scroll the list behind
+  // it. The mark is read only by the phone stylesheet; desktop keeps its page
+  // scrollbar, and so its layout, exactly as before.
+  document.body?.classList.toggle('modal-open', Boolean(state.modal));
   restoreFocus(focus);
   if (draft) {
     const account = document.querySelector<HTMLInputElement>('#login');
@@ -975,7 +1018,7 @@ function showModal(content: string, action: (() => Promise<void> | void) | null 
   if (kind !== 'ticket') ticketDialog = null;
   if (kind !== 'job') jobDialog = null;
   if (kind !== 'admin-job') adminJobDialog = null;
-  previousFocus = document.activeElement as HTMLElement | null; modalRevision++;
+  previousFocus = document.activeElement as HTMLElement | null; previousFocusKey = focusKey(previousFocus); modalRevision++;
   state.modal = content; state.modalAction = action; state.modalKind = kind; render();
   document.querySelector<HTMLButtonElement>('[data-action="close-modal"]')?.focus();
 }
@@ -987,6 +1030,7 @@ function closeModal(): void {
   if (guidelines) document.querySelector<HTMLButtonElement>(`[data-guidelines-source="${guidelinesSource}"]`)?.focus();
   else if (closedTicket) [...document.querySelectorAll<HTMLButtonElement>('[data-ticket-open]')].find(button => button.dataset.ticketOpen === closedTicket)?.focus();
   else if (previousFocus?.isConnected) previousFocus.focus();
+  else findByFocusKey(previousFocusKey)?.focus();
 }
 function scheduleJobs(): void {
   stopPoll(); if (!state.user) return;

@@ -57,7 +57,7 @@ const fillSupport=(page,subject='测试问题',body='测试反馈内容',categor
 let version=0;
 async function app(overrides={}, options={}) {
   const document=new Document(),requests=[],timers=new Map(),windowListeners=new Map();let timerId=0,reloadCount=0;document.assetRevision=options.assetRevision||'';document.appVersion=options.appVersion||'';
-  globalThis.HTMLInputElement=Input;globalThis.document=document;globalThis.window={location:{reload(){reloadCount++;}},addEventListener(name,handler){windowListeners.set(name,handler);}};
+  globalThis.HTMLInputElement=Input;globalThis.document=document;globalThis.window={location:{reload(){reloadCount++;}},addEventListener(name,handler){windowListeners.set(name,handler);},...(options.userAgent?{navigator:{userAgent:options.userAgent}}:{})};
   globalThis.setTimeout=(handler,delay)=>{const id=++timerId;timers.set(id,{handler,delay});return id;};globalThis.clearTimeout=id=>timers.delete(id);
   globalThis.localStorage=globalThis.sessionStorage={setItem(){throw new Error('no browser persistence');}};
   globalThis.fetch=async(url,options)=>{
@@ -104,6 +104,43 @@ await test('consumer course service and administrator boundary',async t=>{
     page.get('[data-nav="courses"]').dispatch('click');await settle();
     assert.ok(page.html().includes(footer));
     assert.equal(page.requests.some(({url})=>url==='/version'),false);
+  });
+  await t.test('an administrator reaches and leaves the operator pages from a phone tab bar, a user never sees it', async () => {
+    const tabs = html => html.match(/<nav class="bottom-nav[^"]*"[^>]*>[\s\S]*?<\/nav>/)[0];
+    const consumer = await app();
+    assert.equal(/data-nav="admin-/.test(tabs(consumer.html())), false);
+    assert.equal(tabs(consumer.html()).match(/data-nav="/g).length, 3);
+
+    const operator = await app({'/api/auth/me':()=>ok({user,platform:{role:'admin',status:'active'}})});
+    assert.match(tabs(operator.html()), /data-nav="admin-overview"[\s\S]*?管理后台/);
+    assert.equal(tabs(operator.html()).match(/data-nav="/g).length, 4);
+    operator.get('[data-nav="admin-overview"]').dispatch('click'); await settle();
+    assert.match(operator.html(), /admin-app/);
+    // The operator shell keeps its own tab bar so the way back is one thumb
+    // reach rather than a sideways scroll of the heading row.
+    assert.match(operator.html(), /<nav class="bottom-nav admin-bottom-nav"[\s\S]*?data-nav="courses"[\s\S]*?返回用户端[\s\S]*?<\/nav>/);
+    const back = operator.document.querySelectorAll('[data-nav="courses"]');
+    assert.ok(back.length >= 2, 'the operator pages keep both the heading row and the tab bar route back');
+    back.at(-1).dispatch('click'); await settle();
+    assert.match(operator.html(), /consumer-app/);
+    assert.match(tabs(operator.html()), /data-nav="admin-overview"/);
+  });
+  await t.test('the summary sidebar is marked by page so a phone can keep it on the course list alone', async () => {
+    const page = await app();
+    assert.match(page.html(), /<div class="shell" data-page="courses">/);
+    assert.equal(page.html().match(/<aside class="side"/g).length, 1);
+    // The two reference cards are grouped so a phone can set them side by side
+    // instead of stacking two more tall cards.
+    assert.match(page.html(), /<div class="side-notes"><section class="card note side-today"[\s\S]*?<section class="card note side-bank"[\s\S]*?<\/section><\/div>/);
+    // Every ledger row carries its key, so the phone strip can drop exactly the
+    // two figures the greeting and the section heading already state.
+    for (const key of ['courses', 'pending', 'running', 'followup', 'completed']) {
+      assert.match(page.html(), new RegExp(`<div data-row="${key}"><dt>`));
+    }
+    for (const [nav, marker] of [['progress', 'progress'], ['support', 'support'], ['courses', 'courses']]) {
+      page.get(`[data-nav="${nav}"]`).dispatch('click'); await settle();
+      assert.match(page.html(), new RegExp(`<div class="shell" data-page="${marker}">`));
+    }
   });
   await t.test('footer keeps its original text when release metadata is absent or blank', async () => {
     for (const appVersion of ['', '   ']) {
@@ -894,6 +931,32 @@ await test('consumer course service and administrator boundary',async t=>{
     page.get('[data-auth-mode="wechat"]').dispatch('click'); await settle();
     const starts = page.requests.filter(item => item.url === '/api/auth/wechat/start');
     assert.equal(starts.length, 1); assert.equal(starts[0].options.body, '{}');
+  });
+  await t.test('the WeChat sheet tells a phone how to read a code that is on its own screen', async () => {
+    const wechatBrowser = 'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/122.0.0.0 Mobile Safari/537.36 MMWEBID/1 MicroMessenger/8.0.44.2480(0x28002C35) WeChat/arm64';
+    const androidBrowser = 'Mozilla/5.0 (Linux; Android 13; SM-S901B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36';
+    const desktopBrowser = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+    const open = async userAgent => {
+      const page = await app({ '/api/auth/me': () => failure(401, 'AUTH_REQUIRED', 'x') }, { userAgent });
+      page.get('[data-auth-mode="wechat"]').dispatch('click'); await settle();
+      return page;
+    };
+    const inWechat = await open(wechatBrowser);
+    assert.match(inWechat.html(), /长按二维码，选择「识别图中二维码」/);
+    assert.doesNotMatch(inWechat.html(), /截图后在微信/);
+    const onAndroid = await open(androidBrowser);
+    assert.match(onAndroid.html(), /截图后在微信「扫一扫」里从相册选择，或用另一台设备扫码/);
+    assert.doesNotMatch(onAndroid.html(), /长按二维码/);
+    const onDesktop = await open(desktopBrowser);
+    assert.equal(onDesktop.document.querySelector('[data-wechat-hint]'), null);
+    // Long-press recognition only works on a real image, so the code must stay
+    // a plain <img> the browser can offer to the WeChat scanner.
+    for (const page of [inWechat, onAndroid, onDesktop]) {
+      assert.match(page.html(), /<img class="wechat-qr" data-wechat-image src="\/api\/auth\/wechat\/image\?v=1"/);
+      assert.doesNotMatch(page.html(), /background-image[^;]*wechat|<canvas/);
+    }
+    // The hint is copy, not a second attempt: no extra transaction is started.
+    assert.equal(inWechat.requests.filter(item => item.url === '/api/auth/wechat/start').length, 1);
   });
   await t.test('WeChat moves from waiting through scanned to a verified platform session', async () => {
     let status = 'scanned';

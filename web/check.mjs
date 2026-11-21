@@ -33,6 +33,19 @@ assert.equal(/localStorage|sessionStorage|console\.(log|debug|info)\s*\(/.test(`
 assert.equal(/error_code|job\.message|model_calls|cost_micro_usd|diagnostics|attempts|budget/.test(jobs), false, 'consumer task renderer contains technical details');
 assert.match(css, /@media \(max-width: 680px\)/);
 assert.match(css, /\.topbar/);
+// Phone layout contract. A column flex container reads align-items on the
+// inline axis, so the stacked shell must be told to stretch; inherited from
+// the desktop grid it was `start`, which sized the main column and the sidebar
+// to their own text and made the task cards narrower than the page.
+const phoneCSS = css.slice(css.indexOf('@media (max-width: 680px)'));
+assert.match(phoneCSS, /\.shell \{[^}]*align-items: stretch/, 'the stacked phone shell must stretch its columns to the page');
+assert.match(phoneCSS, /\.consumer-app \.shell:not\(\[data-page="courses"\]\) \.side \{ display: none; \}/, 'summary cards belong to the course list on a phone, not to every tab');
+assert.match(phoneCSS, /\.field input, \.field textarea, \.field select, \.search input \{ font-size: 16px; \}/, 'phone fields keep 16px type so iOS and WeChat do not zoom on focus');
+assert.match(phoneCSS, /body\.modal-open \{ overflow: hidden; \}/, 'a phone sheet locks the page behind it');
+assert.match(phoneCSS, /\.ledger-table thead \{ display: none; \}/, 'operator tables stack as records on a phone instead of scrolling sideways');
+assert.match(phoneCSS, /\.table-wrap \{ overflow-x: visible; \}/, 'nothing scrolls sideways on a phone');
+assert.match(phoneCSS, /\.pick \{ width: 44px; height: 44px;/, 'the course tick box keeps a 44px touch target');
+assert.match(css, /@media \(hover: none\)/, 'touch screens must not keep a hover state after a tap');
 // The shell must not fetch anything from a third party: users are in mainland
 // China and the fonts are vendored. Inline data: URIs and same-origin paths are
 // the only permitted sources, and the stylesheet must not serialize an extra

@@ -53,6 +53,14 @@
   color-scheme: light;
 }
 
+/* A phone's address bar collapses, so 100vh is taller than what is actually on
+   screen. The small-viewport unit never grows past the visible area, which
+   keeps a short page from inventing a scroll; browsers without it keep the
+   100vh value declared above. */
+@supports (height: 100svh) {
+  :root { --screen-h: calc(100svh / var(--zoom)); }
+}
+
 /* ============================= base ============================= */
 * { box-sizing: border-box; }
 
@@ -69,6 +77,11 @@ body {
 #app { min-height: 100%; }
 
 button, input, textarea, select { font: inherit; color: inherit; }
+
+/* Touch: a tap acts at once and never zooms the page. Without this a phone
+   waits ~300ms for a possible second tap, and a double tap on a card zooms
+   the whole layout instead of opening it. */
+button, a, label, summary, input, select, textarea, [data-nav], [role="tab"] { touch-action: manipulation; }
 
 a { color: var(--ink-2); }
 a:hover { color: var(--red); }
@@ -146,6 +159,7 @@ mark {
 .btn.sm { height: 32px; padding: 0 12px; font-size: 14px; border-radius: 8px; }
 .btn.square { width: 38px; padding: 0; }
 .btn.sm.square { width: 32px; }
+.bank-refresh.btn.sm.square { width: 28px; height: 28px; }
 .btn.stop { color: var(--red); }
 .btn.full { width: 100%; }
 .btn:disabled { opacity: .45; cursor: default; }
@@ -985,6 +999,9 @@ mark {
    summary cards; explicit placement keeps the sidebar on the left on desktop. */
 .shell { flex: 1; min-height: 0; width: 100%; max-width: var(--shell-max); margin-inline: auto; display: grid; grid-template-columns: 262px minmax(0, 1fr); align-items: start; }
 .side { grid-column: 1; grid-row: 1; padding: 22px 16px 22px 24px; display: flex; flex-direction: column; gap: 14px; }
+/* The two reference cards are grouped so a phone can set them side by side.
+   On a desktop the group is transparent: the cards stay sidebar children. */
+.side-notes { display: contents; }
 .main { grid-column: 2; grid-row: 1; padding: 26px 28px 64px 12px; min-width: 0; }
 .main-in { max-width: var(--main-max); min-width: 0; display: flex; flex-direction: column; gap: 20px; }
 .main-in > * { min-width: 0; }
@@ -1318,11 +1335,16 @@ mark {
 .wechat-login-status p { margin: 6px 0 0; color: var(--ink-2); font-size: 13px; line-height: 1.7; }
 .wechat-login-status .btn { margin-top: 14px; }
 .wechat-qr { display: block; width: min(200px, 100%); height: auto; aspect-ratio: 1; margin: 14px auto 0; padding: 8px; box-sizing: content-box; max-width: calc(100% - 16px); background: white; border: 1px solid var(--rule); border-radius: 5px; }
+/* A student cannot scan a code that is on the same screen, so the sheet says
+   how to read it where they are. */
+.wechat-scan-hint { margin: 10px 0 0; font-size: 13px; line-height: 1.7; color: var(--orange-ink); }
 
 .input-wrap { position: relative; display: block; }
 .input-wrap > svg { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--ink-3); pointer-events: none; }
 .input-wrap input { padding-left: 38px; }
-.input-wrap:has(.reveal) input { padding-right: 44px; }
+/* The reveal control is marked on the wrapper, not inferred with :has(), so the
+   password text still clears it on a browser without relational selectors. */
+.reveal-wrap input, .input-wrap:has(.reveal) input { padding-right: 44px; }
 .reveal {
   position: absolute;
   right: 4px;
@@ -1498,19 +1520,52 @@ mark {
   .login-trust { justify-content: center; }
 }
 
-@media (max-width: 680px) {
+/* Phones, including a phone turned sideways: a handset in landscape is around
+   844x390, which is wider than the 680px switch but far too short for the
+   desktop two-column shell — its heading row wrapped every tab onto two lines.
+   The second query is bounded so no desktop window reaches it. */
+@media (max-width: 680px), (max-width: 926px) and (max-height: 480px) {
   .topbar { height: 56px; padding: 0 14px; gap: 10px; }
   .brand-domain, .nav, .me .nm, .top-end .admin-link { display: none; }
-  .shell { display: flex; flex-direction: column; }
+  /* The desktop shell is a grid, where align-items governs the block axis. As
+     a column flex container it governs the inline axis instead, so `start`
+     made the main column and the sidebar shrink to fit their own text: a
+     progress page whose history was collapsed drew its task cards narrower
+     than the page, and widened them again when the history opened. */
+  .shell { display: flex; flex-direction: column; align-items: stretch; padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px)); }
   /* Flex children default to min-width:auto, which would let a wide operator
      table push the whole page sideways instead of scrolling inside its wrap. */
   .main, .side { min-width: 0; max-width: 100%; }
   .main { order: 1; grid-column: auto; grid-row: auto; padding: 18px 16px 12px; }
-  .side { order: 2; grid-column: auto; grid-row: auto; padding: 0 16px calc(92px + env(safe-area-inset-bottom, 0px)); }
-  .side-foot { margin-top: 4px; }
+  .side { order: 2; grid-column: auto; grid-row: auto; padding: 0 16px 8px; gap: 10px; }
+  .side-foot { margin-top: 4px; font-size: 13px; }
+  .side-foot a, .side-foot .link { font-size: 13px; }
   .head h1 { font-size: 25px; }
   .actions { width: 100%; }
   .actions .btn.red { flex: 1; }
+
+  /* The summary cards are reference material, not the work. On a phone they
+     belong at the end of the course list and nowhere else: repeating three
+     tall cards under every tab buried the progress and feedback pages. */
+  .consumer-app .shell:not([data-page="courses"]) .side { display: none; }
+  /* The sidebar closes the course page, so the main footer would be a second
+     ending printed above it. */
+  .consumer-app .shell[data-page="courses"] .page-footer { display: none; }
+  .side .note { padding: 12px 13px 11px; }
+  .side-overview h3 { margin-bottom: 6px; }
+  /* A strip of figures rather than a ruled ledger: the greeting already says
+     how much work is left, and the section heading already counts the
+     courses, so those two rows are dropped instead of repeated. */
+  .side-overview .ledger { flex-direction: row; gap: 6px; }
+  .side-overview .ledger div { flex: 1; min-width: 0; display: block; text-align: center; }
+  .side-overview .ledger .dots { display: none; }
+  .side-overview .ledger dt { font-size: 12.5px; line-height: 1.5; }
+  .side-overview .ledger dd { font-size: 21px; line-height: 1.3; }
+  .side-overview .ledger [data-row="courses"], .side-overview .ledger [data-row="pending"] { display: none; }
+  .side-notes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: stretch; }
+  .side-notes .note h3 { font-size: 14.5px; }
+  .side-notes .big b { font-size: 25px; }
+  .side-today .small + .small, .side-bank .ledger { display: none; }
   .books { grid-template-columns: 1fr; }
   .search input { width: 100%; }
   .section-head { gap: 10px; }
@@ -1641,15 +1696,124 @@ mark {
      they follow the page items at the end of the same row. */
   .admin-side .brand, .admin-side .side-me, .side-item svg { display: none; }
   .admin-side .foot { flex-direction: row; gap: 4px; margin: 0 0 0 6px; padding: 0 18px 0 6px; border-top: 0; border-left: 1px dashed var(--rule-strong); }
-  .side-item { white-space: nowrap; height: 36px; font-size: 14.5px; width: auto; }
-  .admin-app .main { padding: 16px 14px 40px; }
+  .side-item { white-space: nowrap; height: 44px; font-size: 14.5px; width: auto; }
+  .admin-app .main { padding: 16px 14px 24px; }
   .run-row { grid-template-columns: minmax(0, 1fr) auto; }
   .run-row .bar-cell { grid-column: 1 / -1; }
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .kpi .v { font-size: 28px; }
   .panel-head { padding: 12px 14px; }
-  .ledger-table th, .ledger-table td { padding-inline: 14px; }
   .run-row, .reason { padding-inline: 14px; }
+
+  /* Operator tables become stacked records. Seven columns inside a sideways
+     scroller cannot be read or operated on a phone, so each row becomes a
+     card carrying the same cells, the same labels and the same controls. The
+     table markup, and every data- hook bound to it, is untouched. */
+  .table-wrap { overflow-x: visible; }
+  .ledger-table, .ledger-table.wide { display: block; min-width: 0; }
+  .ledger-table thead { display: none; }
+  .ledger-table tbody { display: block; }
+  .ledger-table tr {
+    display: block;
+    margin: 10px 14px;
+    padding: 10px 12px;
+    background: var(--sheet-2);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+  }
+  .ledger-table td { display: block; border: 0; padding: 3px 0; }
+  .ledger-table td, .ledger-table td.nowrap, .ledger-table td.acts { white-space: normal; }
+  .ledger-table td[data-col]::before {
+    content: attr(data-col);
+    display: block;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--ink-3);
+  }
+  .ledger-table tr > td:first-child::before { display: none; }
+  .ledger-table tr > td:first-child .cell-strong { font-size: 16px; }
+  .ledger-table td.acts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0 18px;
+    margin-top: 6px;
+    padding-top: 4px;
+    border-top: 1px dashed var(--rule);
+  }
+  .ledger-table td.acts::before { flex: 1 0 100%; }
+  .ledger-table td.acts .link + .link { margin-left: 0; }
+
+  /* Touch: every control a thumb has to hit keeps a 44px target, and every
+     field keeps 16px type so iOS Safari and the WeChat browser do not zoom
+     the page when it takes focus. */
+  .btn { height: 44px; }
+  .btn.square { width: 44px; }
+  .btn.sm { height: 44px; font-size: 14.5px; }
+  .btn.sm.square, .bank-refresh.btn.sm.square { width: 44px; height: 44px; }
+  .selbar .btn { height: 44px; }
+  .topbar .brand { min-height: 44px; }
+  .field input, .field textarea, .field select, .search input { font-size: 16px; }
+  .field input, .field select { height: 46px; }
+  .search input { height: 44px; }
+  /* Keep a focused field clear of the on-screen keyboard and the tab bar when
+     the browser scrolls it into view. */
+  input, textarea, select { scroll-margin-bottom: 120px; }
+  .seg button { height: 44px; }
+  .folder-tab { min-height: 44px; }
+  .reveal { width: 44px; height: 44px; }
+  .reveal-wrap input, .input-wrap:has(.reveal) input { padding-right: 50px; }
+  .code-send { height: 46px; }
+  .book-foot .link, .pick-all, .folder-sync .link, .run-acts .link, .names .link,
+  .panel-head .link, .ledger-table td.acts .link, .ledger-table td.acts .muted, .row-act .link { min-height: 44px; }
+  .run-acts .link, .ledger-table td.acts .link { min-width: 44px; justify-content: center; }
+  /* The tick box keeps its drawn size; the label around it carries the target. */
+  .pick { width: 44px; height: 44px; margin: -8px -11px 0 0; }
+  .pick .box { inset: 11px; }
+  /* 田字格 cells read as squares on a sheet, so they grow with the touch scale. */
+  .tzg { grid-template-columns: repeat(auto-fill, 44px); gap: 7px; }
+  .tzg li { width: 44px; height: 44px; }
+  .tzg .n { font-size: 11px; }
+  .tzg .run::after { inset: 13px; }
+
+  /* Empty and loading states are answers, not footnotes. */
+  .empty p, .loading, .book-note { font-size: 15px; }
+  .empty h3 { font-size: 18px; }
+
+  /* A sheet owns the screen: the page behind it must not scroll under a drag
+     that starts on the backdrop or past the end of the sheet, and the tab bar
+     and selection bar below it are inert while it is open. */
+  body.modal-open { overflow: hidden; }
+  body.modal-open .bottom-nav, body.modal-open .selbar { display: none; }
+}
+
+/* A touch screen has no hover, so a hover style only sticks after a tap and
+   reads as a selection that is not there. Each rule restores the control's
+   own resting appearance rather than inheriting one. */
+@media (hover: none) {
+  .btn:hover { background: var(--sheet); border-color: var(--rule-strong); }
+  .btn.red:hover { background: var(--red); border-color: var(--red-ink); }
+  .btn.ghost:hover { background: none; color: var(--ink-2); }
+  .link:hover { color: var(--ink-2); }
+  .link.muted:hover { color: var(--ink-3); }
+  .nav-item:hover, .side-item:hover, .folder-tab:hover, .seg button:hover { color: var(--ink-2); background: none; }
+  .nav-item.on:hover, .side-item.on:hover, .folder-tab.on:hover, .seg button.on:hover { color: var(--ink); }
+  .folder-tab.on:hover { background: var(--sheet); }
+  .book:hover { transform: none; box-shadow: var(--shadow); }
+  .records .row:hover, .ledger-table tbody tr.tap:hover td { background: none; }
+  .hw-row:hover .hw-name { text-decoration: none; }
+  .reveal:hover { background: none; color: var(--ink-3); }
+  a:hover { color: var(--ink-2); }
+}
+
+/* A phone turned sideways keeps the phone chrome but has the width for two
+   columns and a shorter reading line than a full-bleed row. */
+@media (min-width: 681px) and (max-width: 926px) and (max-height: 480px) {
+  .main-in { max-width: 740px; }
+  .books, .side-notes { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .actions { width: auto; }
+  .actions .btn.red { flex: 0 1 auto; }
+  .modal { width: min(580px, 100%); }
 }
 
 /* A short desktop viewport (a 1280x800 laptop, say) would otherwise push the
