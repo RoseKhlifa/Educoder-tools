@@ -93,6 +93,7 @@ func (a *EducoderAdapter) Load(ctx context.Context, target Target) (LoadedProble
 			readOnly = append(readOnly, problem.ReadOnlyFile{Path: file.Path, Language: file.Language, Content: file.Content})
 		}
 	}
+	files, readOnly = splitReferenceFiles(files, readOnly)
 	public := make([]problem.PublicTest, 0)
 	for _, test := range t.TestSets {
 		// A hidden/custom-checker task can expose a public placeholder with

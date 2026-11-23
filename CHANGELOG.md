@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.170 - 2026-11-23
+
+- Keep only the answer files writable when an editor mixes languages, and give the model the other files, such as the saved page a scraping level parses, as read-only reference instead of making it rewrite them
+
 ## 0.1.169 - 2026-11-21
 
 - Make the phone experience first-class: overview cards only on the courses tab and compact, full-width progress cards, an admin tab and admin bottom bar, operator tables as cards, 44px touch targets, 16px inputs, sheet scroll lock, landscape layout, and WeChat QR hints for phones

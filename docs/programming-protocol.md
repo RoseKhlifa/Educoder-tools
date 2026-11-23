@@ -43,6 +43,8 @@ header 核对的题目 ID、标题、位置与题型；执行到这一必做关�
 | `shixun_environments[]` | 运行环境 `shixun_environment_id` 与 `tab_type` |
 | `user.user_id` | 保存与正式评测的 `extras.currentUserId` |
 
+`challenge.path` 里的文件不一定都要作答：例如爬虫关卡会把被解析的网页（`test.html`）也放进编辑器。当可编辑文件混用了语言、且其中至少一个带有 `***** Begin *****` / `***** End *****` 作答区标记时，只有带标记的文件保留为可编辑，其余文件作为只读参考交给模型（单个 64 KB、总计 128 KB 以内，超出则不放入上下文），模型不再重复输出这些文件，也不再因 Python 与 HTML 混用而触发 `mixed_language_contract`。2026-11-21 有两关因为被迫重写 17 KB 的网页而在输出上限处截断，正是这个原因。
+
 作业只有两关，任务响应 `game_count=2`；整个实训 `shixun.challenges_count=12`，两关原始 `challenge.position=3/4`。展示与遍历本作业时应使用作业关卡数据和 `next_game`，不能将整个实训数量或原始 position 当作本作业的关卡数量/序号。
 
 ## 已观察的请求顺序
