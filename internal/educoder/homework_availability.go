@@ -31,7 +31,7 @@ func (h Homework) IsClosed(now time.Time) bool {
 	}
 
 	ordinary, ordinaryOK := firstHomeworkTime(h.Deadline, h.EndTime, h.EndDate)
-	if h.AllowLate {
+	if h.lateAllowed() {
 		if late, ok := firstHomeworkTime(h.LateEndTime, h.LateTime); ok {
 			return !now.Before(late)
 		}
@@ -40,6 +40,41 @@ func (h Homework) IsClosed(now time.Time) bool {
 		return false
 	}
 	return ordinaryOK && !now.Before(ordinary)
+}
+
+// LateSubmissionOpen reports an assignment whose ordinary deadline has passed
+// but whose teacher reopened it for late submission. Educoder marks these with
+// allow_late, the status 补交中 and a late_time still ahead (observed
+// 2026-11-27: end_time 2026-11-22 23:59, late_time 2026-12-06 23:59).
+func (h Homework) LateSubmissionOpen(now time.Time) bool {
+	if !h.lateAllowed() || h.IsClosed(now) {
+		return false
+	}
+	if homeworkStatusLate(h.Status) {
+		return true
+	}
+	ordinary, ok := firstHomeworkTime(h.Deadline, h.EndTime, h.EndDate)
+	return ok && !now.Before(ordinary)
+}
+
+// LateDeadline is the late-submission deadline when Educoder supplies one.
+func (h Homework) LateDeadline() (time.Time, bool) {
+	return firstHomeworkTime(h.LateEndTime, h.LateTime)
+}
+
+// lateAllowed trusts either explicit upstream signal: the allow_late flag or a
+// 补交 status.
+func (h Homework) lateAllowed() bool {
+	return h.AllowLate || homeworkStatusLate(h.Status)
+}
+
+func homeworkStatusLate(statuses []string) bool {
+	for _, status := range statuses {
+		if strings.Contains(status, "补交") {
+			return true
+		}
+	}
+	return false
 }
 
 // OpenHomeworks is the user-service view. Protocol callers that need history,

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.179 - 2026-11-27
+
+- Show assignments a teacher reopened for late submission as 补交中 with their late deadline instead of past their deadline, and keep them runnable on their own until the late deadline
+
 ## 0.1.178 - 2026-11-27
 
 - Show a finished job on the course page at once: job results name each assignment, the page marks the assignments the job verified as complete immediately, and a re-read in flight no longer replaces known progress with a checking label

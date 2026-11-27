@@ -95,7 +95,10 @@ type homeworkDTO struct {
 	RequiredCount      *int     `json:"requiredChallengeCount,omitempty"`
 	FinishedRequired   *int     `json:"finishedRequiredChallengeCount,omitempty"`
 	RequiredKnown      bool     `json:"requiredProgressKnown"`
-	Deadline           string   `json:"deadline,omitempty"`
+	// Deadline is the deadline that applies now: for an assignment reopened
+	// for late submission (LateSubmission) it is the late deadline.
+	Deadline       string `json:"deadline,omitempty"`
+	LateSubmission bool   `json:"lateSubmission,omitempty"`
 }
 
 func toHomeworkDTO(homework educoder.Homework) homeworkDTO {
@@ -109,6 +112,12 @@ func toHomeworkDTO(homework educoder.Homework) homeworkDTO {
 	if kind == "common" {
 		result.SubmissionStatus = homework.CommonSubmissionStatus()
 	}
+	if homework.LateSubmissionOpen(time.Now()) {
+		result.LateSubmission = true
+		if late := firstDeadline(homework.LateEndTime, homework.LateTime); late != "" {
+			result.Deadline = late
+		}
+	}
 	return result
 }
 
@@ -116,7 +125,11 @@ func toHomeworkDTO(homework educoder.Homework) homeworkDTO {
 // classroom response. Numeric values are interpreted as Unix seconds or
 // milliseconds and emitted as RFC3339 for the browser's local date formatter.
 func homeworkDeadline(homework educoder.Homework) string {
-	for _, value := range []any{homework.Deadline, homework.EndTime, homework.EndDate} {
+	return firstDeadline(homework.Deadline, homework.EndTime, homework.EndDate)
+}
+
+func firstDeadline(values ...any) string {
+	for _, value := range values {
 		if result := normalizeDeadline(value); result != "" {
 			return result
 		}

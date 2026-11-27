@@ -1271,6 +1271,22 @@ await test('consumer course service and administrator boundary',async t=>{
     page.get('[data-detail-tab="common"]').dispatch('click'); await settle(); assert.equal(page.document.querySelectorAll('[data-homework-submit]').length,0);
     assert.equal(page.requests.some(item=>item.url==='/api/jobs'&&item.options.method==='POST'),false);
   });
+  await t.test('an assignment reopened for late submission reads 补交中 with its late deadline and stays runnable', async () => {
+    const base={homeworkKind:'shixun',automaticSupported:true,requiredProgressKnown:true,requiredChallengeCount:3,finishedRequiredChallengeCount:1};
+    const page=await app({'/api/courses/COURSE_A/homeworks':()=>ok([
+      {id:21,name:'补交实验',...base,status:['补交中'],lateSubmission:true,deadline:'2099-12-06 23:59'},
+      {id:22,name:'仅状态补交',...base,status:['补交中'],deadline:'2099-12-06 23:59'},
+      {id:23,name:'补交图文',homeworkKind:'common',automaticSupported:false,submissionStatus:'not_submitted',status:['补交中'],lateSubmission:true,deadline:'2099-12-06 23:59'},
+    ])});
+    page.get('[data-course-detail="COURSE_A"]').dispatch('click'); await settle();
+    const html=page.html();
+    assert.equal((html.match(/<span class="state">补交中<\/span>/g)||[]).length,2);
+    assert.match(html,/12月6日 23:59 补交截止/);
+    assert.doesNotMatch(html,/已截止/);
+    assert.deepEqual(page.document.querySelectorAll('[data-homework-submit]').map(button=>button.dataset.homeworkSubmit),['21','22']);
+    page.get('[data-detail-tab="common"]').dispatch('click'); await settle();
+    assert.match(page.html(),/补交中 · 12月6日 23:59 补交截止/);
+  });
   await t.test('active course or exact homework tasks prevent duplicate single homework dispatch', async () => {
     for (const request of [{scope:'course',course:'COURSE_A',mode:'submit'},{scope:'all',mode:'submit'},{scope:'homework',course:'COURSE_A',homework_id:1,mode:'submit'}]) {
       const page=await app({'/api/jobs':()=>ok({jobs:[job({status:'running',request})]})});

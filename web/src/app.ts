@@ -806,6 +806,7 @@ function renderCourseDetail(dialog: CourseDialog): string {
       const complete = homeworkComplete(homework);
       const running = homeworkPending(course.identifier, homework.id);
       const past = !complete && homeworkPastDeadline(homework);
+      const late = !complete && !past && homework.lateSubmission === true;
       const mark = complete ? `<span class="mark done">${icon('tick')}</span>`
         : running ? '<span class="mark"><span class="pulse"></span></span>'
           : past ? '<span class="mark todo"></span>' : `<span class="mark todo">${icon('ring')}</span>`;
@@ -815,10 +816,11 @@ function renderCourseDetail(dialog: CourseDialog): string {
       // belongs to the right-hand column, so the meta line never repeats it.
       const levels = known ? `${count(homework.finishedRequiredChallengeCount)} / ${count(homework.requiredChallengeCount)} 关` : '';
       const due = deadline(homework.deadline);
-      const meta = [levels, due ? `${e(due)} ${past ? '已截止' : '截止'}` : ''].filter(Boolean).join(' · ');
+      const meta = [levels, due ? `${e(due)} ${past ? '已截止' : late ? '补交截止' : '截止'}` : ''].filter(Boolean).join(' · ');
       const label = complete ? '<span class="state done">已完成</span>'
         : running ? '<span class="state run">正在处理</span>'
-          : past ? '<span class="state muted">已截止</span>' : known ? '<span class="state">待完成</span>' : '<span class="state">关卡待核验</span>';
+          : past ? '<span class="state muted">已截止</span>' : late ? '<span class="state">补交中</span>'
+            : known ? '<span class="state">待完成</span>' : '<span class="state">关卡待核验</span>';
       const action = homeworkManualEligible(course, homework)
         ? `<button class="btn sm" data-homework-submit="${homework.id}" ${running || state.creating || !accessible() ? 'disabled' : ''}>${running ? '处理中' : '只做这份'}</button>` : '';
       return row(mark, e(homework.name), meta, `${label}${action}`, past ? 'past' : '');
@@ -828,7 +830,7 @@ function renderCourseDetail(dialog: CourseDialog): string {
       const submitted = homework.submissionStatus === 'submitted';
       const mark = submitted ? `<span class="mark done">${icon('tick')}</span>` : `<span class="mark todo">${icon('ring')}</span>`;
       const due = deadline(homework.deadline);
-      const meta = [homework.status ? e(homework.status) : '', due ? `${e(due)} 截止` : ''].filter(Boolean).join(' · ');
+      const meta = [homework.status ? e(homework.status) : '', due ? `${e(due)} ${homework.lateSubmission ? '补交截止' : '截止'}` : ''].filter(Boolean).join(' · ');
       const label = submitted ? '<span class="state done">已提交</span>' : homework.submissionStatus === 'not_submitted' ? '<span class="state">待提交</span>' : '<span class="state muted">状态待确认</span>';
       return row(mark, e(homework.name), meta, `${label}${commonHomeworkLink(course, homework)}`);
     }).join('')}</ul>` : '<div class="empty"><h3>没有图文作业</h3><p>这门课现在没有图文作业。</p></div>';

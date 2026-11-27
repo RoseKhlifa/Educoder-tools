@@ -91,7 +91,10 @@ export interface Homework {
   requiredChallengeCount?: number;
   finishedRequiredChallengeCount?: number;
   requiredProgressKnown?: boolean;
+  /** The deadline that applies now; for a 补交 assignment, the late deadline. */
   deadline?: string;
+  /** Past its ordinary deadline but reopened for late submission (补交中). */
+  lateSubmission?: boolean;
   canEnter?: boolean;
 }
 
