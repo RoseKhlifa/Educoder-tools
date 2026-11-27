@@ -93,40 +93,45 @@ func TestFailedOperatorProposalKeepsRejectionAndRepairsNormally(t *testing.T) {
 	}
 }
 
-func TestUnmarkedAndFailedOperatorCandidatesAreNotSelected(t *testing.T) {
+// Any stored answer is tried once before the model, whatever its source; only
+// one that failed on its own code is left out.
+func TestStoredAnswersAreTriedFirstUnlessTheyFailedOnTheirCode(t *testing.T) {
 	for _, tc := range []struct {
 		name, source, validation string
+		tried                    bool
 	}{
-		{"model", "model", ""},
-		{"partial model", "model_error", ""},
-		{"unmarked", "", ""},
-		{"similar label", "manual_public_statement ", ""},
-		{"rejected", "manual_public_statement", "failed"},
-		{"unknown", "manual_public_statement", "unknown"},
-		{"provider error", "manual_public_statement", "error"},
+		{"model", "model", "", true},
+		{"partial model", "model_error", "", true},
+		{"unmarked", "", "", true},
+		{"similar label", "manual_public_statement ", "", true},
+		{"rejected", "manual_public_statement", "failed", false},
+		{"unknown", "manual_public_statement", "unknown", true},
+		{"provider error", "manual_public_statement", "error", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bank, c := operatorFixture(t, tc.source, "bad")
+			want := 0
 			if tc.validation != "" {
 				v := operatorValidation(c, "selftest", tc.validation)
 				v.PassedCount = 0
 				if err := bank.RecordValidation(context.Background(), v); err != nil {
 					t.Fatal(err)
 				}
+				want = 1
+			}
+			wantTests := 1
+			if tc.tried {
+				wantTests, want = 2, want+1
 			}
 			provider := &fakeProvider{candidates: []answer.Candidate{candidate("good")}}
 			adapter := &importedAdapter{fakeAdapter: fakeAdapter{snap: testSnapshot()}}
 			r, err := New(bank, provider, Config{}).Run(context.Background(), adapter, recoveryRequest())
-			if err != nil || r.Status != "selftest_passed" || r.ModelCalls != 1 || adapter.selfTests != 1 || adapter.submits != 0 || r.CandidateID == c.ID {
-				t.Fatalf("ineligible source was selected or replayed: result=%+v err=%v tests=%d", r, err, adapter.selfTests)
+			if err != nil || r.Status != "selftest_passed" || r.ModelCalls != 1 || adapter.selfTests != wantTests || adapter.submits != 0 || r.CandidateID == c.ID {
+				t.Fatalf("stored answer handling: result=%+v err=%v tests=%d", r, err, adapter.selfTests)
 			}
 			stored, err := bank.Candidate(context.Background(), c.ID)
-			want := 0
-			if tc.validation != "" {
-				want = 1
-			}
 			if err != nil || len(stored.Validations) != want {
-				t.Fatalf("ineligible candidate gained new execution evidence: %+v err=%v", stored, err)
+				t.Fatalf("stored answer evidence: %+v err=%v", stored, err)
 			}
 		})
 	}
@@ -187,15 +192,39 @@ func TestVerifiedCandidateKeepsPriorityOverOperatorProposal(t *testing.T) {
 	}
 }
 
-func TestOperatorProposalDoesNotReuseTerminalWorkspace(t *testing.T) {
+// A terminal script stored for this level is run before paying the model.
+func TestTerminalReusesAStoredScriptBeforeTheModel(t *testing.T) {
 	files := candidate("good").Files
 	hash, _ := problem.HashFiles(files)
-	store := &fakeStore{candidates: []questionbank.Candidate{{ID: 1, CandidateInput: questionbank.CandidateInput{Source: "manual_public_statement", Files: files}, FilesHash: hash, Status: "candidate"}}}
+	store := &fakeStore{candidates: []questionbank.Candidate{{ID: 1, CandidateInput: questionbank.CandidateInput{Source: "model", Files: files}, FilesHash: hash, Status: "workspace_passed"}}}
 	snap := testSnapshot()
 	snap.EditMode = "terminal"
 	adapter := &fakeAdapter{snap: snap}
 	r, err := New(store, nil, Config{}).Run(context.Background(), adapter, recoveryRequest())
-	if err == nil || r == nil || r.Status != "needs_provider" || r.ModelCalls != 0 || adapter.selfTests != 0 || adapter.submits != 0 {
-		t.Fatalf("operator proposal reused terminal workspace: result=%+v err=%v tests=%d submits=%d", r, err, adapter.selfTests, adapter.submits)
+	if err != nil || r == nil || r.Status != "selftest_passed" || r.ModelCalls != 0 || r.CandidateID != 1 || adapter.selfTests != 1 {
+		t.Fatalf("stored terminal script was not reused: result=%+v err=%v tests=%d", r, err, adapter.selfTests)
+	}
+}
+
+// Nine production answers passed formally and were later banned by one
+// failed self-test, several of them environment failures. Such an answer is
+// still tried before the model.
+func TestAnswerThatPassedFormallyStaysReusableAfterALaterSelftestFailure(t *testing.T) {
+	bank, c := operatorFixture(t, "model", "good")
+	if err := bank.RecordValidation(context.Background(), operatorValidation(c, "formal", "passed")); err != nil {
+		t.Fatal(err)
+	}
+	failed := operatorValidation(c, "selftest", "failed")
+	failed.PassedCount = 0
+	if err := bank.RecordValidation(context.Background(), failed); err != nil {
+		t.Fatal(err)
+	}
+	if stored, err := bank.Candidate(context.Background(), c.ID); err != nil || stored.Status != "rejected" {
+		t.Fatalf("fixture is not a passed-then-rejected answer: %+v %v", stored, err)
+	}
+	adapter := &importedAdapter{fakeAdapter: fakeAdapter{snap: testSnapshot()}}
+	r, err := New(bank, nil, Config{}).Run(context.Background(), adapter, recoveryRequest())
+	if err != nil || r.Status != "selftest_passed" || r.CandidateID != c.ID || r.ModelCalls != 0 || adapter.selfTests != 1 {
+		t.Fatalf("formally passed answer was not reused: result=%+v err=%v", r, err)
 	}
 }

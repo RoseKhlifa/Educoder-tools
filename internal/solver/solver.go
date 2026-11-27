@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -641,53 +642,36 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 	// Verified candidates are reusable. Narrow legacy output-comparison or
 	// environment-start failures may be re-tested, with no promotion or skipped
 	// samples: their old rejection is not evidence of wrong source.
+	// Every stored answer for this exact problem is worth one free evaluation
+	// before the model is paid, best evidence first. Only an answer that never
+	// passed and failed on its own code is left out: a later failure, often the
+	// environment, does not ban an answer that passed formally before, and a
+	// terminal script that passed in a classmate's workspace is reused too.
+	// This replaces the verified, operator, imported, observed and legacy
+	// retest tiers, which each admitted only one kind of answer (2026-11-27).
 	var candidates []questionbank.Candidate
 	legacyRetest := make(map[int64]bool)
+	rankOf := make(map[int64]int)
 	for _, c := range allCandidates {
-		if snap.EditMode != "terminal" && c.Status == "upstream_verified" {
-			candidates = append(candidates, c)
+		environmentOnly := runtimeOnlyRejected[c.FilesHash] || legacyNewlineOnlyRejection(c) || legacyEmptyOutputRejection(snap, c, ref)
+		rank, ok := storedAnswerRank(c, environmentOnly)
+		if !ok || c.Status == "rejected" && (req.Mode == ModeGenerateOnly || len(snap.PublicTests) == 0) {
+			continue
+		}
+		rankOf[c.ID] = rank
+		candidates = append(candidates, c)
+		if c.Status == "rejected" {
+			legacyRetest[c.ID] = true
 		}
 	}
-	if len(candidates) == 0 && snap.EditMode != "terminal" {
-		for _, c := range allCandidates {
-			if operatorProposalEligible(c) {
-				candidates = append(candidates, c)
-			}
+	// Within one rank, newer first: a later answer is usually the repair of an
+	// earlier one, and a recent pass describes the current platform.
+	sort.SliceStable(candidates, func(i, j int) bool {
+		if rankOf[candidates[i].ID] != rankOf[candidates[j].ID] {
+			return rankOf[candidates[i].ID] < rankOf[candidates[j].ID]
 		}
-	}
-	if len(candidates) == 0 && snap.EditMode != "terminal" {
-		for _, c := range allCandidates {
-			if c.Status != "candidate" && c.Status != "selftest_passed" {
-				continue
-			}
-			if c.Source == "manual_public_statement" && !operatorProposalEligible(c) {
-				continue
-			}
-			imported, lookupErr := s.isExternalCandidate(ctx, c.ID)
-			if lookupErr != nil {
-				return result, lookupErr
-			}
-			if imported {
-				candidates = append(candidates, c)
-			}
-		}
-	}
-	if len(candidates) == 0 && snap.EditMode != "terminal" {
-		for _, c := range allCandidates {
-			if observedFullScoreAnswer(c) {
-				candidates = append(candidates, c)
-			}
-		}
-	}
-	if len(candidates) == 0 && snap.EditMode != "terminal" && req.Mode != ModeGenerateOnly && len(snap.PublicTests) > 0 {
-		for _, c := range allCandidates {
-			if legacyNewlineOnlyRejection(c) || runtimeOnlyRejected[c.FilesHash] || legacyEmptyOutputRejection(snap, c, ref) {
-				candidates = append(candidates, c)
-				legacyRetest[c.ID] = true
-				break
-			}
-		}
-	}
+		return candidates[i].ID > candidates[j].ID
+	})
 	// Revalidate only the best reusable candidate first. If it fails, feed its
 	// concrete output back to the model instead of spending all attempts on
 	// stale candidates; every other candidate remains queryable in the bank.
@@ -748,7 +732,7 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			result.CandidateID = bankID
 			legacyRetestAttempt = legacyRetest[bankID]
 			if legacyRetestAttempt {
-				result.Diagnostics = append(result.Diagnostics, "旧候选的失败记录属于输出比较或环境启动问题，正在重新执行全部公开自测和正式评测")
+				result.Diagnostics = append(result.Diagnostics, "题库答案曾有一次未通过（可能是环境原因），正在重新完整评测")
 			}
 		} else {
 			if snap.EditMode == "graphic" {
@@ -1396,7 +1380,7 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 		if passed {
 			if eval.ReuseUnproven {
 				stage(req, "bank_saved", "已保存当前实验工作区通过证据")
-				result.Diagnostics = append(result.Diagnostics, "当前实验工作区已通过正式评测；终端脚本尚未证明可独立复现，不进入共享答案库")
+				result.Diagnostics = append(result.Diagnostics, "当前实验工作区已通过正式评测")
 			} else {
 				stage(req, "bank_saved", "已保存正式通过证据")
 			}
@@ -1548,33 +1532,57 @@ func formalRuntimeStartupFeedback(feedback string) bool {
 	return true
 }
 
-// observedFullScoreAnswer reports a source read from a classmate's editor on a
-// level the platform showed at full score (taskservice/collection.go). It is
-// stored unverified because the read API cannot prove those bytes are the
-// submitted ones, but it is far stronger evidence than a cold model guess, and
-// a programming evaluation is score-safe. So it is evaluated before paying for
-// generation, after verified, operator and imported answers; a failure feeds
-// the model like any other bank candidate, and a pass promotes it.
-//
-// Before this, these answers were stored but never tried: on 2026-11-27 a
-// level whose printf format only the classmates' code revealed failed 15 model
-// guesses across three students while two full-score answers sat in the bank.
-func observedFullScoreAnswer(c questionbank.Candidate) bool {
-	return c.Source == "collection:platform_observed" && (c.Status == "candidate" || c.Status == "selftest_passed")
+// storedAnswerRank orders the stored answers for one problem, lowest first.
+// ok is false only for an answer that never passed and failed on its own code.
+func storedAnswerRank(c questionbank.Candidate, environmentOnlyRejection bool) (rank int, ok bool) {
+	switch {
+	case c.Status == "upstream_verified" || c.Status == "workspace_passed":
+		return 0, true
+	case c.Status == "rejected" && passedFormally(c) && !failedFormallyLast(c):
+		// It passed formally; only a later self-test failed, which a platform
+		// or environment hiccup can cause.
+		return 1, true
+	case c.Status == "selftest_passed":
+		return 2, true
+	case c.Status == "candidate":
+		switch {
+		case c.Source == "manual_public_statement" || c.Source == "reviewed_repair" || c.Source == "verified_bank_import":
+			return 3, true
+		case c.Source == "collection:platform_observed":
+			return 4, true
+		case strings.HasPrefix(c.Source, "external:"):
+			return 5, true
+		}
+		return 6, true
+	case c.Status == "rejected" && environmentOnlyRejection:
+		return 7, true
+	}
+	return 0, false
 }
 
-func operatorProposalEligible(c questionbank.Candidate) bool {
-	if c.Source != "manual_public_statement" || c.Status != "candidate" && c.Status != "selftest_passed" {
-		return false
-	}
-	// The source label permits a fresh evaluation, never a trust promotion or
-	// replay of an unresolved operation. Existing pass evidence is also rerun.
-	for _, validation := range c.Validations {
-		if validation.Result != "passed" {
-			return false
+// failedFormallyLast reports whether the latest formal evaluation of this
+// answer failed. Such an answer is dropped even if it passed before: a
+// terminal script that passed only on files left by an earlier attempt fails
+// once in a fresh workspace and is then not tried again.
+func failedFormallyLast(c questionbank.Candidate) bool {
+	last := ""
+	for _, v := range c.Validations {
+		if v.Kind == "formal" || v.Kind == "formal_workspace" {
+			last = v.Result
 		}
 	}
-	return true
+	return last == "failed"
+}
+
+// passedFormally reports any complete formal pass of this answer, including
+// one in a terminal workspace, whatever later evidence says.
+func passedFormally(c questionbank.Candidate) bool {
+	for _, v := range c.Validations {
+		if v.Result == "passed" && (v.Kind == "formal" || v.Kind == "formal_workspace") {
+			return true
+		}
+	}
+	return false
 }
 
 // retryableGenerationError only covers failures before any upstream save or

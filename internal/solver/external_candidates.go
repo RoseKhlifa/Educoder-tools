@@ -8,10 +8,8 @@ import (
 )
 
 // Import capabilities are optional so custom stores keep the same solver API.
-// Provenance comes from database bindings, never a caller-controlled source label.
 type externalCandidateStore interface {
 	BindExternalCandidates(context.Context, questionbank.Ref, questionbank.ExternalIdentity, problem.Snapshot) ([]questionbank.Candidate, error)
-	IsExternalCandidate(context.Context, int64) (bool, error)
 }
 
 func (s *Service) bindExternalCandidates(ctx context.Context, ref questionbank.Ref, loaded LoadedProblem) error {
@@ -27,11 +25,4 @@ func (s *Service) bindExternalCandidates(ctx context.Context, ref questionbank.R
 	}
 	_, err := store.BindExternalCandidates(ctx, ref, loaded.ExternalIdentity, loaded.Snapshot)
 	return err
-}
-
-func (s *Service) isExternalCandidate(ctx context.Context, id int64) (bool, error) {
-	if store, ok := s.store.(externalCandidateStore); ok {
-		return store.IsExternalCandidate(ctx, id)
-	}
-	return false, nil
 }

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.176 - 2026-11-27
+
+- Replace the verified and unverified answer tiers with one evidence ranking: every stored answer for a problem gets one free evaluation before the model, best evidence first, including terminal scripts that passed in a classmate workspace; only an answer that never passed and failed on its code, or whose latest formal evaluation failed, is skipped
+
 ## 0.1.175 - 2026-11-27
 
 - Remove the read-only recheck: every stopped assignment can simply be run again, because a new run reads the platform first and skips levels already at full score; a stop during submission, an unconfirmed level or an unknown earlier objective submission no longer blocks retry

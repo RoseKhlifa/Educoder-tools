@@ -48,7 +48,7 @@ func TestTerminalPartialRepairNeverBecomesIndependentSharedAnswer(t *testing.T) 
 				a.terminalSubmit = func(context.Context, *educoder.Task, *educoder.TerminalResult, educoder.PollOptions) (*educoder.EvaluationResult, error) {
 					submits++
 					if !files["A"] || !files["B"] {
-						t.Fatal("formal evaluation passed without required workspace state")
+						return terminalFail(), nil
 					}
 					return terminalPass(), nil
 				}
@@ -101,8 +101,8 @@ func TestTerminalPartialRepairNeverBecomesIndependentSharedAnswer(t *testing.T) 
 			if contributed, err := db.ContributedQuestions(ctx, owner); err != nil || contributed != 0 {
 				t.Fatalf("partial script inflated contributions: %d %v", contributed, err)
 			}
-			// A new job/adapter must not execute C2 automatically in a fresh
-			// workspace. Generation is required even though C2 once passed.
+			// A new job tries the stored C2 once in a fresh workspace; it fails
+			// formally there, so the model is asked and C2 is not tried again.
 			files = map[string]bool{}
 			freshProvider := &fakeProvider{candidates: []answer.Candidate{candidate(complete)}}
 			freshService := New(db, freshProvider, Config{Timeout: time.Second})
@@ -114,7 +114,10 @@ func TestTerminalPartialRepairNeverBecomesIndependentSharedAnswer(t *testing.T) 
 			if scenario == "initial_workspace" {
 				wantRuns = 2
 			}
-			if runs != wantRuns || submits != 2 {
+			if again, err := db.Candidate(ctx, result.CandidateID); err != nil || !failedFormallyLast(again) {
+				t.Fatalf("state-dependent C2 was not dropped after failing: %+v %v", again, err)
+			}
+			if runs != wantRuns+1 || submits != 3 {
 				t.Fatalf("unexpected script/formal mutation counts: runs=%d submits=%d", runs, submits)
 			}
 		})

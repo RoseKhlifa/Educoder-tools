@@ -61,6 +61,12 @@ func terminalPass() *educoder.EvaluationResult {
 	return &educoder.EvaluationResult{Completed: true, Passed: true, Status: &status, TestSetsCount: &count, TestSets: []educoder.TestSet{{Result: &passed, CompileSuccess: &compile}}}
 }
 
+func terminalFail() *educoder.EvaluationResult {
+	status, count, compile := 0, 1, 1
+	passed := false
+	return &educoder.EvaluationResult{Completed: true, Passed: false, Status: &status, TestSetsCount: &count, TestSets: []educoder.TestSet{{Result: &passed, CompileSuccess: &compile}}}
+}
+
 func bindTerminalTest(t *testing.T, a *EducoderAdapter) LoadedProblem {
 	t.Helper()
 	loaded, err := a.Load(context.Background(), Target{"c", 1, "g"})
