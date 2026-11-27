@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.174 - 2026-11-27
+
+- Let a recheck continue a homework whose terminal self-test ended unknown, since a terminal script is evaluated only after a completed receipt, so a stopped course no longer has neither retry nor a passing recheck
+
 ## 0.1.173 - 2026-11-27
 
 - Start HBase, after HDFS, in the command line beside an editor when a self-test or evaluation prints its start prompt, re-test answers that failed only on that prompt, finish terminal scripts whose output runs past the limit by keeping its start and end, and reopen homework paused on those prompts

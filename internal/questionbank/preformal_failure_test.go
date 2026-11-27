@@ -11,7 +11,7 @@ import (
 )
 
 func TestPreformalProgrammingFailureRequiresExactOwnerAndNoFormalAttempt(t *testing.T) {
-	for _, scenario := range []string{"eligible", "wrong_owner", "wrong_target", "wrong_key", "terminal", "missing_selftest", "formal_attempt", "formal_workspace", "evaluation_present", "wrong_hash", "nonterminal_run"} {
+	for _, scenario := range []string{"eligible", "wrong_owner", "wrong_target", "wrong_key", "terminal", "graphic", "missing_selftest", "formal_attempt", "formal_workspace", "evaluation_present", "wrong_hash", "nonterminal_run"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx := context.Background()
 			s, err := Open(":memory:")
@@ -21,8 +21,8 @@ func TestPreformalProgrammingFailureRequiresExactOwnerAndNoFormalAttempt(t *test
 			defer s.Close()
 			snapshot := bankSnapshot()
 			snapshot.EditMode = "single_file"
-			if scenario == "terminal" {
-				snapshot.EditMode = "terminal"
+			if scenario == "terminal" || scenario == "graphic" {
+				snapshot.EditMode = scenario
 			}
 			ref, err := s.UpsertSnapshot(ctx, snapshot)
 			if err != nil {
@@ -73,7 +73,8 @@ func TestPreformalProgrammingFailureRequiresExactOwnerAndNoFormalAttempt(t *test
 				course = "OTHER"
 			}
 			got, err := s.PreformalProgrammingFailure(ctx, queryOwner, queryKey, course, 42)
-			if err != nil || got != (scenario == "eligible") {
+			// An unknown terminal self-test never reached formal evaluation.
+			if err != nil || got != (scenario == "eligible" || scenario == "terminal") {
 				t.Fatalf("allow=%v err=%v", got, err)
 			}
 			stored, err := s.GetRun(ctx, id)

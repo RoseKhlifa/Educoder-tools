@@ -9,8 +9,8 @@ import (
 )
 
 // PreformalProgrammingFailure proves that this exact owner/target/key stopped
-// in an editor self-test before any formal submission. It does not promote an
-// answer, reinterpret an uncertain build, or change the original run.
+// in an editor or terminal self-test before any formal submission. It does not
+// promote an answer, reinterpret an uncertain build, or change the original run.
 func (s *Store) PreformalProgrammingFailure(ctx context.Context, owner, key, course string, homeworkID int64) (bool, error) {
 	run, err := s.FindRunByIdempotency(ctx, owner, key)
 	if errors.Is(err, ErrNotFound) {
@@ -47,7 +47,12 @@ func (s *Store) PreformalProgrammingFailure(ctx context.Context, owner, key, cou
 	if err != nil {
 		return false, err
 	}
-	if snapshot.Kind != "programming" || snapshot.EditMode != "single_file" {
+	// A terminal script reaches formal evaluation only through the receipt of
+	// a completed execution (SubmitTerminal), so an unknown terminal self-test
+	// is pre-formal too; excluding it left a stopped course with neither retry
+	// nor a passing recheck (2026-11-27). Graphic tasks write before building
+	// and prove that with their own unsubmitted marker.
+	if snapshot.Kind != "programming" || snapshot.EditMode != "single_file" && snapshot.EditMode != "terminal" {
 		return false, nil
 	}
 	candidate, err := s.Candidate(ctx, state.Result.CandidateID)
