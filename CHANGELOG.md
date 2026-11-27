@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.182 - 2026-11-28
+
+- Name the step that stopped a graphic submission before any save, such as an oversized or linked workspace file, using only fixed messages and never upstream text, so a level that fails the same way on every retry shows its cause
+
 ## 0.1.181 - 2026-11-28
 
 - Make the per-homework pause check take milliseconds instead of 13 s, which held the only database connection and timed out saving formal evidence, and stop an objective quiz without model calls when Educoder withholds the score from answers it counts correct or that scored full marks before

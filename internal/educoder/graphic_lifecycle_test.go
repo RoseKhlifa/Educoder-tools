@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -307,5 +308,18 @@ func TestGraphicUnicodeNameAndAmbiguity(t *testing.T) {
 	task.Challenge.Description += " 另一份命名为教师选课图。"
 	if got := task.GraphicPaths(); len(got) != 0 {
 		t.Fatalf("ambiguous names guessed %v", got)
+	}
+}
+
+// A pre-write stop names the step from this package's fixed messages, and
+// never repeats wrapped upstream text.
+func TestGraphicPrewriteStopNamesItsStepButNoUpstreamText(t *testing.T) {
+	named := &GraphicMutationError{Stage: GraphicStagePrewrite, Cause: errors.New("图形文件必须是大小受限的普通文件")}
+	if got := named.Error(); got != "图形操作在提交之前停止：图形文件必须是大小受限的普通文件" {
+		t.Fatalf("named stop = %q", got)
+	}
+	wrapped := &GraphicMutationError{Stage: GraphicStagePrewrite, Cause: fmt.Errorf("图形评测准备失败: %w", errors.New("upstream secret wss://private"))}
+	if got := wrapped.Error(); got != "图形操作在提交之前停止" {
+		t.Fatalf("wrapped upstream text leaked: %q", got)
 	}
 }

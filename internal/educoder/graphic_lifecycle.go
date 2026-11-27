@@ -38,10 +38,29 @@ func (e *GraphicMutationError) Error() string {
 	case GraphicStageBuildSent, GraphicStageBuildAccepted:
 		return "图形评测已发起，结果尚未确认；仅可复核，不重放构建"
 	default:
+		// Name the step that stopped: "图形操作在提交之前停止" alone left a
+		// level failing the same way on every retry with no cause to act on.
+		if cause := graphicStepCause(e.Cause); cause != "" {
+			return "图形操作在提交之前停止：" + cause
+		}
 		return "图形操作在提交之前停止"
 	}
 }
 func (e *GraphicMutationError) Unwrap() error { return e.Cause }
+
+// graphicStepCause returns the first error in the chain that is one of this
+// package's fixed step messages ("图形…", no colon or path). A wrapped
+// upstream error always carries ": <upstream text>", so no response body,
+// address, key or signed link can pass.
+func graphicStepCause(err error) string {
+	for current := err; current != nil; current = errors.Unwrap(current) {
+		message := current.Error()
+		if strings.HasPrefix(message, "图形") && !strings.ContainsAny(message, ":：/\\") && len([]rune(message)) <= 40 {
+			return message
+		}
+	}
+	return ""
+}
 
 // VNC environments are limited per upstream account, not per game/client.
 // Reference counts remove idle locks instead of retaining account identities.
