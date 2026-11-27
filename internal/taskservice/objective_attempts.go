@@ -347,6 +347,32 @@ func (h *objectiveAttemptHistory) contains(candidate answer.ObjectiveCandidate) 
 	return false
 }
 
+// restoreTarget returns the highest-scoring answers already submitted for this
+// quiz when they scored strictly above the run's last submission, against the
+// same maximum. Educoder keeps the latest objective score, so a run that ends
+// on a worse vector would leave the student below a score already reached.
+func (h *objectiveAttemptHistory) restoreTarget(lastScore, lastMax string) (objectiveAttempt, bool) {
+	last, ok := objectiveScoreNumber(lastScore)
+	if !ok {
+		return objectiveAttempt{}, false
+	}
+	var best objectiveAttempt
+	var bestScore *big.Rat
+	for _, attempt := range append(append([]objectiveAttempt(nil), h.prior...), h.attempts...) {
+		if strings.TrimSpace(attempt.MaxScore) != strings.TrimSpace(lastMax) {
+			continue
+		}
+		score, ok := objectiveScoreNumber(attempt.Score)
+		if ok && (bestScore == nil || score.Cmp(bestScore) > 0) {
+			best, bestScore = attempt, score
+		}
+	}
+	if bestScore == nil || bestScore.Cmp(last) <= 0 {
+		return objectiveAttempt{}, false
+	}
+	return best, true
+}
+
 func (h *objectiveAttemptHistory) remember(candidate answer.ObjectiveCandidate, score, maxScore string, results ...objectiveQuestionResult) {
 	key := objectiveAttemptKey(candidate)
 	if _, ok := h.byHash[key]; ok || len(h.attempts) >= h.limit {

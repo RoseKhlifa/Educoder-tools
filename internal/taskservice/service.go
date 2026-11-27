@@ -712,7 +712,7 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			}
 			if r.ModelCalls >= s.cfg.MaxModelCalls {
 				r.Status = "attempts_exhausted"
-				return r, nil
+				return r, s.restoreBestObjective(ctx, client, req, r, choice, snapshot, hash, mediaErr, created, attemptHistory, emit)
 			}
 			// Legacy one-question review is retained only for deterministic replay
 			// of pre-v0.1.111 runs. Production wiring disables it so every repair
@@ -865,6 +865,11 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			} else {
 				c = generated.Candidate
 			}
+			// A malformed reply switches only the next call to the plain answers
+			// contract. Once the model has answered again, later repairs ask for
+			// ranked alternatives, which the platform-score search needs; staying
+			// answers-only made a production repair re-answer blind and score lower.
+			answersOnly = false
 			r.Source = "model"
 		}
 		materialized, e := answer.MaterializeObjectiveCandidate(snapshot, c)
@@ -1046,7 +1051,64 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 		emit("repairing", "当前关卡未满分，正在根据得分自动修复")
 	}
 	r.Status = "attempts_exhausted"
-	return r, nil
+	return r, s.restoreBestObjective(ctx, client, req, r, choice, snapshot, hash, mediaErr, created, attemptHistory, emit)
+}
+
+// restoreBestObjective resubmits the best-scoring answers already submitted
+// for this quiz when the run's last submission scored lower, so a run never
+// ends below a score it reached. Educoder keeps the latest objective score: on
+// 2026-11-27 a run scored 12.15/13.5, a blind repair then scored 10.80, and the
+// run stopped there, leaving the student 1.35 points worse. The vector it picks
+// was submitted before with a known score, no model is called, and the same
+// identity and snapshot checks as any objective submission run first; if they
+// cannot be confirmed nothing is submitted.
+func (s *Service) restoreBestObjective(ctx context.Context, client *educoder.Client, req Request, r *Result, choice *educoder.ChoiceTask, snapshot answer.ObjectiveSnapshot, hash string, mediaErr error, created time.Time, history *objectiveAttemptHistory, emit func(string, string)) error {
+	if req.Mode != solver.ModeSubmit || !r.ScoreKnown || r.ScoreCheck != "not_full_score" || ctx.Err() != nil {
+		return nil
+	}
+	best, ok := history.restoreTarget(r.Score, r.MaxScore)
+	if !ok {
+		return nil
+	}
+	fresh, err := client.LoadChoiceTask(ctx, req.Course, req.HomeworkID, req.Game)
+	if err != nil || fresh.Task.IsOptional() || fresh.Task.Challenge.ID != choice.Task.Challenge.ID || fresh.Task.Kind() != educoder.TaskKindChoice {
+		return nil
+	}
+	freshSnapshot := objectiveSnapshot(fresh)
+	var refreshErr error
+	if mediaErr == nil {
+		freshSnapshot, _, refreshErr = prepareObjectiveResources(ctx, client, fresh)
+	}
+	if refreshErr != nil || !fresh.ReadComplete() || !reflect.DeepEqual(snapshot, freshSnapshot) {
+		return nil
+	}
+	stored, err := s.store.AddObjectiveCandidate(ctx, hash, snapshot, best.Candidate, "best_score_restore")
+	if err != nil {
+		return nil
+	}
+	ended := r.Status
+	r.Status, r.CandidateID, r.Source = "submitting", stored.ID, "best_score_restore"
+	if err := s.persistObjective(ctx, req, r, created); err != nil {
+		r.Status = ended
+		return nil
+	}
+	emit("submitting", "正在重新提交本次得分最高的答案，避免成绩下降")
+	submitted, err := client.ObjectiveSubmit(ctx, choice, best.Candidate.Answers)
+	if err != nil {
+		r.Status = "uncertain"
+		durable, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		_ = s.store.RecordObjectiveVerification(durable, stored.ID, r.RunID, "uncertain", "", "")
+		cancel()
+		return err
+	}
+	r.Score, r.MaxScore, r.ScoreKnown, r.ScoreCheck = submitted.Score, submitted.MaxScore, submitted.ScoreKnown, submitted.ScoreCheck
+	_ = s.store.RecordObjectiveVerification(ctx, stored.ID, r.RunID, submitted.ScoreCheck, submitted.Score, submitted.MaxScore)
+	r.Diagnostics = append(r.Diagnostics, fmt.Sprintf("已重新提交本次得分最高的答案，关卡得分为 %s / %s", submitted.Score, submitted.MaxScore))
+	r.Status = ended
+	if submitted.Passed && submitted.ScoreKnown && submitted.ScoreCheck == "full_score" {
+		r.Status = "passed"
+	}
+	return nil
 }
 
 func scoreFeedbackLocks(search *objectiveScoreFeedback) map[int]string {

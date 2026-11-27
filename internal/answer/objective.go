@@ -490,6 +490,36 @@ func validateObjectiveFixedAnswerMatch(s ObjectiveSnapshot, fixed []string, cand
 
 var objectiveOutputKeys = []string{"kind", "answers", "ranked_answers"}
 
+// parsePositionalRanked accepts ranked_answers written as one list of choices
+// per requested question, in question order: {"kind":"objective",
+// "ranked_answers":[["B","A"],["C","D"]]}. It carries exactly the information
+// of the slot form, and only an exact one-list-per-question shape is accepted;
+// every choice is still validated against its question afterwards. Rejecting
+// it cost a production run its first model call (2026-11-27) and pushed the
+// rest of the run into answers-only mode, which lost the score search.
+func parsePositionalRanked(s ObjectiveSnapshot, body string) (ObjectiveCandidate, bool) {
+	var shape struct {
+		Kind          string     `json:"kind"`
+		RankedAnswers [][]string `json:"ranked_answers"`
+	}
+	dec := json.NewDecoder(strings.NewReader(body))
+	dec.DisallowUnknownFields()
+	if dec.Decode(&shape) != nil {
+		return ObjectiveCandidate{}, false
+	}
+	if _, err := dec.Token(); err != io.EOF || len(shape.RankedAnswers) == 0 || len(shape.RankedAnswers) != len(s.Questions) {
+		return ObjectiveCandidate{}, false
+	}
+	slots := make([]ObjectiveRankedSlot, len(shape.RankedAnswers))
+	for i, choices := range shape.RankedAnswers {
+		if len(choices) == 0 {
+			return ObjectiveCandidate{}, false
+		}
+		slots[i] = ObjectiveRankedSlot{QuestionPosition: s.Questions[i].Position, Choices: choices}
+	}
+	return ObjectiveCandidate{Kind: shape.Kind, RankedAnswers: slots}, true
+}
+
 func parseObjectiveCandidate(s ObjectiveSnapshot, content string) (ObjectiveCandidate, error) {
 	var c ObjectiveCandidate
 	// The objective contract stays strict: a Markdown fence is reported in the
@@ -504,9 +534,12 @@ func parseObjectiveCandidate(s ObjectiveSnapshot, content string) (ObjectiveCand
 	dec := json.NewDecoder(strings.NewReader(body))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&c); err != nil {
-		return c, invalid()
-	}
-	if _, err := dec.Token(); err != io.EOF {
+		positional, ok := parsePositionalRanked(s, body)
+		if !ok {
+			return c, invalid()
+		}
+		c = positional
+	} else if _, err := dec.Token(); err != io.EOF {
 		return c, invalid()
 	}
 	for i := range c.Answers {

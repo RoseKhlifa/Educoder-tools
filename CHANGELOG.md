@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.172 - 2026-11-27
+
+- Let an untried classmate answer reopen a paused homework once, restore the best objective score before a run stops, read ranked answers given as one list per question, and keep a malformed reply from pinning the rest of the run to answers-only
+
 ## 0.1.171 - 2026-11-27
 
 - Evaluate answers read from classmates full-score editors before calling the model, after verified, operator and imported answers, so a stored observed answer is no longer ignored while the model guesses

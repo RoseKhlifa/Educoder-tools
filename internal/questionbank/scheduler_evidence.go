@@ -51,7 +51,31 @@ func (s *Store) ReusableEvidenceRevisionForHomework(ctx context.Context, owner, 
 	if err != nil {
 		return "", err
 	}
-	hash := sha256.Sum256([]byte(fmt.Sprint(values)))
+	// A classmate's full-score answer that has never been evaluated on a level
+	// this owner already attempted is a new opportunity the solver now uses
+	// before the model (solver.observedFullScoreAnswer). Without it here, a
+	// homework stuck before that change stayed paused on retry (2026-11-27).
+	// Each such answer stops counting once it has a verification, so the fuse
+	// reopens at most once per untried answer. Homeworks without one keep
+	// exactly their previous revision.
+	var observed int64
+	err = s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(s.id),0) FROM solutions s
+		WHERE s.source='collection:platform_observed'
+		AND NOT EXISTS(SELECT 1 FROM verifications v WHERE v.solution_id=s.id)
+		AND EXISTS(SELECT 1 FROM solver_runs r WHERE r.owner=?
+			AND CASE WHEN json_valid(r.data_json) THEN COALESCE(json_extract(r.data_json,'$.target.course'),json_extract(r.data_json,'$.target.Course')) END=?
+			AND CASE WHEN json_valid(r.data_json) THEN COALESCE(json_extract(r.data_json,'$.target.homework_id'),json_extract(r.data_json,'$.target.HomeworkID')) END=?
+			AND json_extract(r.data_json,'$.snapshot_ref.revision_hash')=s.revision_hash
+			AND json_extract(r.data_json,'$.snapshot_ref.contract_hash')=s.contract_hash)`,
+		owner, course, homeworkID).Scan(&observed)
+	if err != nil {
+		return "", err
+	}
+	parts := []int64{values[0], values[1], values[2]}
+	if observed > 0 {
+		parts = append(parts, observed)
+	}
+	hash := sha256.Sum256([]byte(fmt.Sprint(parts)))
 	return hex.EncodeToString(hash[:]), nil
 }
 
