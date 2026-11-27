@@ -21,7 +21,9 @@ const noProgressFuseTTL = 24 * time.Hour
 // patch releases must not silently erase a valid no-progress cooldown.
 // policy-3 (2026-11-27): an HBase start prompt used to count as failed code,
 // so fuses set from it were not evidence that a retry cannot progress.
-const noProgressPolicyVersion = "scheduler-policy-3"
+// policy-4 (2026-11-27): a self-test that printed the expected output after
+// extra log lines no longer counts as failed code.
+const noProgressPolicyVersion = "scheduler-policy-4"
 
 type homeworkBlock struct {
 	Kind         string    `json:"kind"`

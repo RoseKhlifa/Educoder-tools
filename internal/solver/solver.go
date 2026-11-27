@@ -653,7 +653,7 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 	legacyRetest := make(map[int64]bool)
 	rankOf := make(map[int64]int)
 	for _, c := range allCandidates {
-		environmentOnly := runtimeOnlyRejected[c.FilesHash] || legacyNewlineOnlyRejection(c) || legacyEmptyOutputRejection(snap, c, ref)
+		environmentOnly := runtimeOnlyRejected[c.FilesHash] || outputNoiseOnlyRejection(c) || legacyEmptyOutputRejection(snap, c, ref)
 		rank, ok := storedAnswerRank(c, environmentOnly)
 		if !ok || c.Status == "rejected" && (req.Mode == ModeGenerateOnly || len(snap.PublicTests) == 0) {
 			continue
@@ -1092,6 +1092,17 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 					se = errors.New("empty selftest output conflicts with this candidate's bound passing evidence; execution result remains unknown")
 				}
 				ok := se == nil && st.Completed && st.Matches && (st.CompileOK == nil || *st.CompileOK) && (st.SavedFilesHash == "" || st.SavedFilesHash == result.CodeHash)
+				// The self-test stream mixes in what the program and its tools
+				// print outside its output: jieba's start-up log, javac's
+				// deprecation notes. When the expected output is all there at the
+				// end, the self-test decides nothing; the formal evaluation, which
+				// is score-safe for code, judges it (2026-11-27: a jieba level
+				// stalled twice on correct code, and HBase Java levels paid 5 model
+				// calls for javac notes).
+				if !ok && se == nil && st.Completed && snap.EditMode == "single_file" && (st.CompileOK == nil || *st.CompileOK) && (st.SavedFilesHash == "" || st.SavedFilesHash == result.CodeHash) && leadingLinesOnly(st.Output, test.ExpectedStdout) {
+					ok = true
+					result.Diagnostics = append(result.Diagnostics, "自测输出在预期结果前多了几行日志（例如库的启动日志或编译提示），交给正式评测判定")
+				}
 				if se == nil && st.SavedFilesHash != "" && st.SavedFilesHash != result.CodeHash {
 					se = errors.New("selftest editor content does not match candidate")
 				}
@@ -1832,12 +1843,22 @@ func publicText(s string) string {
 	return s
 }
 
-// legacyNewlineOnlyRejection is a compatibility read, not a bank migration or
-// correctness verdict. Every historical rejection must bind this exact source
-// and a terminal, complete self-test whose only mismatch was the one terminal
-// newline now handled by PublicOutputMatches. Unknown evaluations and any
-// genuine failed sample keep the ordinary rejected-candidate guard.
-func legacyNewlineOnlyRejection(c questionbank.Candidate) bool {
+// leadingLinesOnly reports self-test output that is exactly the expected
+// output with extra whole lines in front of it, such as a library's start-up
+// log or a compiler note the runner mixes into its output stream.
+func leadingLinesOnly(actual, expected string) bool {
+	normalize := func(output string) string {
+		return strings.TrimSuffix(strings.ReplaceAll(output, "\r\n", "\n"), "\n")
+	}
+	a, e := normalize(actual), normalize(expected)
+	return e != "" && a != e && strings.HasSuffix(a, "\n"+e)
+}
+
+// outputNoiseOnlyRejection admits a rejected answer for a new evaluation when
+// every self-test that rejected it printed the expected output, differing only
+// in line endings or in extra lines in front (see leadingLinesOnly). It does
+// not change the stored evidence or promote the answer.
+func outputNoiseOnlyRejection(c questionbank.Candidate) bool {
 	if c.Status != "rejected" || c.FilesHash == "" {
 		return false
 	}
@@ -1863,7 +1884,7 @@ func legacyNewlineOnlyRejection(c questionbank.Candidate) bool {
 		for _, entry := range feedback {
 			oldActual := strings.ReplaceAll(entry.ActualStdout, "\r\n", "\n")
 			oldExpected := strings.ReplaceAll(entry.ExpectedStdout, "\r\n", "\n")
-			if entry.Kind != "selftest" || oldActual == oldExpected || !educoder.PublicOutputMatches(entry.ActualStdout, entry.ExpectedStdout) {
+			if entry.Kind != "selftest" || oldActual == oldExpected || !educoder.PublicOutputMatches(entry.ActualStdout, entry.ExpectedStdout) && !leadingLinesOnly(entry.ActualStdout, entry.ExpectedStdout) {
 				return false
 			}
 		}

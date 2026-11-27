@@ -113,6 +113,8 @@ HTTP 响应只给 `data.wss_url`。连接其 `/log`，客户端发送明文 JSON
 
 公开样例仅取 `is_public=true` 的测试。输入与预期输出同时为精确空字符串的条目视为无可观察输出的占位项，不用于自测；只缺一侧、或者包含空格和换行的样例仍有效。未公开测试输入/输出以及没有可运行公开样例都不阻止 `submit` 模式继续正式评测；单独请求 `selftest` 模式时，无公开样例返回 `selftest_skipped`。这项规则不会把隐藏的测试结果或不完整的通过证据直接认定为通过。
 
+自测流会把程序和工具在正常输出之外打印的内容一起推送过来，例如 jieba 的启动日志（`Building prefix dict ...`、`Loading model cost ...`）和 javac 的弃用提示（`Note: ... uses or overrides a deprecated API.`）。如果预期输出完整地出现在自测输出末尾、前面只是多了几行，这次自测不算代码失败，直接交给正式评测判定（代码题正式评测不影响成绩）；只因这类多余行被判失败的历史答案也会重新评测。预期结果之后多出来的输出仍算失败。2026-11-27 起；此前一份 jieba 词云关卡用正确代码连续卡住两次，HBase Java 关卡因 javac 提示多花了 5 次模型调用。
+
 ## 提交、评测和通过状态
 
 正式评测请求包含保存响应提供的 `sec_key`、`resubmit`、`content_modified`，以及 `first:1`、环境 ID、`tab_type`、含 `commitID` 的 extras。保存失败则不启动 build。写请求不做自动重试，评测轮询次数/时间有界。

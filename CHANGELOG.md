@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.180 - 2026-11-27
+
+- Send code to the formal evaluation when its self-test printed the expected output after extra log lines, such as a jieba start-up log or javac notes, retry answers rejected only for such lines, and reopen homework paused on them
+
 ## 0.1.179 - 2026-11-27
 
 - Show assignments a teacher reopened for late submission as 补交中 with their late deadline instead of past their deadline, and keep them runnable on their own until the late deadline
