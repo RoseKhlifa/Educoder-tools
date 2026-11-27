@@ -10,16 +10,17 @@ import (
 	"educoder-cli/internal/jobs"
 )
 
-// Automatic retry of jobs that stopped only because Educoder refused to run
-// them (runtime pool exhausted, evaluation refused or left queued, lab quota).
-// An unattended service should finish that work once the platform recovers,
-// without anyone pressing "重新执行".
+// Automatic retry of jobs that stopped only because of Educoder: a refused or
+// busy runtime (pool exhausted, evaluation refused or left queued, lab quota),
+// a progress read that failed, or a save or self-test whose result never
+// arrived. An unattended service should finish that work once the platform
+// recovers, without anyone pressing "重新执行".
 //
 // The plan is written into the job result when the job ends, so the page can
 // show it. A scheduler tick launches due retries through the owner's live
 // session with the same idempotency key a manual retry uses
-// ("retry-job:<id>"), so the two can never both run. Nothing is replayed
-// after an unknown or uncertain write: such a result is not eligible.
+// ("retry-job:<id>"), so the two can never both run. A retry reads progress
+// first and skips levels already at full score.
 
 // autoRetryDelays[i] is the wait before retry attempt i+1; its length is the
 // maximum number of automatic retries of one original job.
@@ -57,35 +58,45 @@ type retryHomeworkState struct {
 	Result     *retryBatchState `json:"result"`
 }
 
-func resourceRefusal(status, reason string) bool {
-	return status == "resource_unavailable" || reason == "resource_unavailable"
+// platformStop reports a level stopped by the platform rather than by the
+// answer: the consumer categories that already tell the user to simply run it
+// again (platform busy, platform unavailable, retry later).
+func platformStop(status, reason string) bool {
+	code := reason
+	if code == "" {
+		code = status
+	}
+	switch consumerReasonCodes[code] {
+	case "platform_busy", "platform_unavailable", "retry_later":
+		return true
+	}
+	return false
 }
 
-// homeworkResourceOnly: some level was refused by the platform, and every
-// other unfinished level either was refused too or never started because of
-// that refusal (planned/pending or blocked from entering the next level).
-func homeworkResourceOnly(b *retryBatchState) bool {
+// homeworkPlatformOnly: some level was stopped by the platform, and every
+// other unfinished level stopped the same way or never started because of it.
+func homeworkPlatformOnly(b *retryBatchState) bool {
 	if b == nil || len(b.Levels) == 0 {
 		return false
 	}
-	refused := false
+	stopped := false
 	for _, l := range b.Levels {
 		switch {
 		case l.Status == "passed" || l.Status == "skipped":
-		case resourceRefusal(l.Status, l.ReasonCode):
-			refused = true
-		case l.Status == "planned" || l.Status == "pending" || l.ReasonCode == "runtime_initialization_failed":
+		case platformStop(l.Status, l.ReasonCode):
+			stopped = true
+		case l.Status == "planned" || l.Status == "pending":
 		default:
 			return false
 		}
 	}
-	return refused
+	return stopped
 }
 
-// resourceOnlyStop reports whether a homework/course/all result stopped only
-// because the platform refused to run work. Anything uncertain, any code or
-// model failure, or any other operator hand-off makes it ineligible.
-func resourceOnlyStop(raw json.RawMessage) bool {
+// platformOnlyStop reports whether a homework/course/all result stopped only
+// because of the platform. Any code or model failure, or any other operator
+// hand-off, makes it ineligible.
+func platformOnlyStop(raw json.RawMessage) bool {
 	var top struct {
 		retryBatchState
 		Homeworks []retryHomeworkState `json:"homeworks"`
@@ -94,7 +105,7 @@ func resourceOnlyStop(raw json.RawMessage) bool {
 		return false
 	}
 	if len(top.Homeworks) == 0 {
-		return homeworkResourceOnly(&top.retryBatchState)
+		return homeworkPlatformOnly(&top.retryBatchState)
 	}
 	refused := false
 	for _, h := range top.Homeworks {
@@ -102,7 +113,9 @@ func resourceOnlyStop(raw json.RawMessage) bool {
 		case "passed", "skipped", "skipped_optional":
 			continue
 		case "needs_service":
-			if !homeworkResourceOnly(h.Result) {
+			// A homework stopped before any level ran (its progress read
+			// failed) has no levels; its own reason decides.
+			if !homeworkPlatformOnly(h.Result) && !((h.Result == nil || len(h.Result.Levels) == 0) && platformStop("", h.ReasonCode)) {
 				return false
 			}
 			refused = true
@@ -153,7 +166,7 @@ func (s *Server) nextAutoRetryAttempt(ctx context.Context, request jobs.Request)
 
 // planAutoRetry decorates a finished outcome with a retry plan when eligible.
 func (s *Server) planAutoRetry(ctx context.Context, request jobs.Request, out jobs.Outcome, err error) jobs.Outcome {
-	if err != nil || out.Status != jobs.Failed || !isRestartableRequest(request) || !resourceOnlyStop(out.Result) {
+	if err != nil || out.Status != jobs.Failed || !isRestartableRequest(request) || !platformOnlyStop(out.Result) {
 		return out
 	}
 	return withAutoRetryPlan(out, s.nextAutoRetryAttempt(ctx, request))

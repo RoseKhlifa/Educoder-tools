@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.177 - 2026-11-27
+
+- Run an editor self-test that did not finish once more with the same code before stopping, and retry automatically every stop the platform caused, including a save or self-test whose result never arrived, not only refused runtimes
+
 ## 0.1.176 - 2026-11-27
 
 - Replace the verified and unverified answer tiers with one evidence ranking: every stored answer for a problem gets one free evaluation before the model, best evidence first, including terminal scripts that passed in a classmate workspace; only an answer that never passed and failed on its code, or whose latest formal evaluation failed, is skipped

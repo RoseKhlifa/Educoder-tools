@@ -1168,10 +1168,20 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 							return result, se
 						}
 					}
-					if (startupFailure || emptyConflict) && runtimeAttempt == 0 && ctx.Err() == nil {
+					// An editor self-test that did not finish (a save or run timed
+					// out, the stream closed) says nothing about the code and cannot
+					// change the score, so it is run once more with the same code
+					// before the level stops. On 2026-11-27 a save to Educoder hung
+					// for the whole 45 s client timeout once and stopped a homework.
+					unfinished := snap.EditMode == "single_file" && !startupFailure && !emptyConflict
+					if (startupFailure || emptyConflict || unfinished) && runtimeAttempt == 0 && ctx.Err() == nil {
 						message := "上游自测环境未启动，稍后使用相同代码重试一次"
+						wait := waitRuntimeRetry
 						if emptyConflict {
-							message = "自测空输出与同代码历史通过证据冲突，使用相同代码复核一次"
+							message = "自测空输出与同代码历史通过证据冲突，使用相同代码再测一次"
+						} else if unfinished {
+							message = "自测没有完成（平台响应超时或连接中断），稍后使用相同代码重试一次"
+							wait = func(ctx context.Context) error { return waitFor(ctx, unfinishedSelfTestRetryDelay) }
 						}
 						stage(req, "environment_retry", message)
 						result.Diagnostics = append(result.Diagnostics, message)
@@ -1180,7 +1190,7 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 							result.Status = "checkpoint_persistence_failed"
 							return result, err
 						}
-						if waitErr := waitRuntimeRetry(ctx); waitErr == nil {
+						if waitErr := wait(ctx); waitErr == nil {
 							continue
 						} else {
 							se = waitErr

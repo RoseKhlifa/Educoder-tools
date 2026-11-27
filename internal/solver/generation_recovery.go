@@ -305,6 +305,10 @@ func waitRuntimeRetry(ctx context.Context) error {
 // for resource pressure. Tests replace it to avoid real waits.
 var selfTestResourceBackoff = []time.Duration{15 * time.Second, 45 * time.Second}
 
+// unfinishedSelfTestRetryDelay is the pause before an editor self-test that did
+// not finish is run once more. Tests replace it to avoid real waits.
+var unfinishedSelfTestRetryDelay = 15 * time.Second
+
 func waitFor(ctx context.Context, delay time.Duration) error {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()

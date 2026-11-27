@@ -11,7 +11,7 @@ import (
 	"educoder-cli/internal/jobs"
 )
 
-func TestResourceOnlyStopRecognizesOnlyPlatformRefusals(t *testing.T) {
+func TestPlatformOnlyStopRecognizesOnlyPlatformFailures(t *testing.T) {
 	for name, tc := range map[string]struct {
 		raw  string
 		want bool
@@ -19,20 +19,23 @@ func TestResourceOnlyStopRecognizesOnlyPlatformRefusals(t *testing.T) {
 		"homework refused then planned": {`{"status":"needs_service","levels":[{"status":"passed"},{"status":"resource_unavailable"},{"status":"planned"}]}`, true},
 		"homework refused via reason":   {`{"status":"needs_service","levels":[{"status":"needs_service","reason_code":"resource_unavailable"},{"status":"precheck_failed","reason_code":"runtime_initialization_failed"}]}`, true},
 		"homework code failure":         {`{"status":"needs_service","levels":[{"status":"resource_unavailable"},{"status":"selftest_failed"}]}`, false},
-		"homework uncertain":            {`{"status":"uncertain","levels":[{"status":"uncertain"}]}`, false},
+		"homework uncertain":            {`{"status":"uncertain","levels":[{"status":"uncertain"}]}`, true},
+		"homework save timed out":       {`{"status":"needs_service","levels":[{"status":"passed"},{"status":"uncertain","reason_code":"selftest_stream_unconfirmed"},{"status":"planned"}]}`, true},
+		"homework model gave up":        {`{"status":"needs_service","levels":[{"status":"attempts_exhausted","reason_code":"attempts_exhausted"}]}`, false},
 		"homework nothing refused":      {`{"status":"needs_service","levels":[{"status":"passed"},{"status":"planned"}]}`, false},
 		"course one refused homework": {`{"status":"needs_service","homeworks":[{"status":"passed"},{"status":"skipped"},
 			{"status":"needs_service","reason_code":"service_required","result":{"levels":[{"status":"passed"},{"status":"resource_unavailable"}]}}]}`, true},
 		"course mixed failure": {`{"status":"needs_service","homeworks":[
 			{"status":"needs_service","result":{"levels":[{"status":"resource_unavailable"}]}},
 			{"status":"needs_service","result":{"levels":[{"status":"attempts_exhausted"}]}}]}`, false},
-		"course progress unavailable": {`{"status":"needs_service","homeworks":[{"status":"needs_service","reason_code":"progress_unavailable"}]}`, false},
+		"course progress unavailable": {`{"status":"needs_service","homeworks":[{"status":"needs_service","reason_code":"progress_unavailable"}]}`, true},
+		"course homework hand-off":    {`{"status":"needs_service","homeworks":[{"status":"needs_service","reason_code":"unsupported_homework"}]}`, false},
 		"course interrupted":          {`{"status":"needs_service","homeworks":[{"status":"needs_service","reason_code":"interrupted","result":{"levels":[{"status":"resource_unavailable"}]}},{"status":"planned"}]}`, false},
 		"malformed":                   {`{`, false},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if got := resourceOnlyStop(json.RawMessage(tc.raw)); got != tc.want {
-				t.Fatalf("resourceOnlyStop=%v want %v", got, tc.want)
+			if got := platformOnlyStop(json.RawMessage(tc.raw)); got != tc.want {
+				t.Fatalf("platformOnlyStop=%v want %v", got, tc.want)
 			}
 		})
 	}
@@ -143,8 +146,8 @@ func TestAutomaticAndManualRetryNeverBothRun(t *testing.T) {
 	}
 }
 
-// Code failures, uncertain results and owners without a live session are
-// never retried automatically.
+// Code failures and owners without a live session are never retried
+// automatically.
 func TestAutoRetryRequiresAResourceOnlyStopAndALiveSession(t *testing.T) {
 	now := time.Date(2026, 11, 20, 4, 0, 0, 0, time.UTC)
 	old := autoRetryNow
