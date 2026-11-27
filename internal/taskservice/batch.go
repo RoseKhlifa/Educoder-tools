@@ -231,12 +231,6 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 		out.Status, out.ReasonCode = "passed", "no_required_levels"
 		return out, nil
 	}
-	blockedGames, guardErr := s.guardHomeworkUnknown(ctx, req, roster, progress)
-	if guardErr != nil {
-		out.Status, out.ReasonCode = "verification_unconfirmed", "submission_uncertain"
-		out.Diagnostics = append(out.Diagnostics, guardErr.Error())
-		return out, guardErr
-	}
 	full := map[int64]educoder.ChallengeProgress{}
 	for _, p := range progress.Challenges {
 		if p.HasFullScore() {
@@ -246,13 +240,6 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 	for _, l := range levels {
 		i := batchLevelIndex(out, l.ChallengeID)
 		if i < 0 {
-			continue
-		}
-		if blockedGames[l.Game] {
-			out.Levels[i].Status = "verification_unconfirmed"
-			out.Levels[i].ReasonCode = "submission_uncertain"
-			out.FailedLevels++
-			out.Diagnostics = append(out.Diagnostics, fmt.Sprintf("第 %d 关存在未核验的正式提交结果，已跳过该关并继续其他关卡", l.Position))
 			continue
 		}
 		if out.Levels[i].Status == "precheck_failed" {
@@ -283,7 +270,7 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 		if i < 0 {
 			continue
 		}
-		if out.Levels[i].Status == "skipped" || out.Levels[i].Status == "precheck_failed" || (blockedGames[l.Game] && out.Levels[i].ReasonCode == "submission_uncertain") {
+		if out.Levels[i].Status == "skipped" || out.Levels[i].Status == "precheck_failed" {
 			continue
 		}
 		if err := ctx.Err(); err != nil {

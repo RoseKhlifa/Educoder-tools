@@ -28,6 +28,7 @@ const admin = await readFile(new URL('./src/admin.ts', import.meta.url), 'utf8')
 const types = await readFile(new URL('./src/types.ts', import.meta.url), 'utf8');
 assert.doesNotMatch(admin, /AccessCard|卡密|create-card|revoke-card|page === 'cards'/, 'administrator view must not retain access-card management');
 assert.doesNotMatch(types, /AccessCard/, 'retired access-card DTO must not remain');
+assert.doesNotMatch(`${api}\n${source}\n${jobs}\n${admin}\n${types}`, /recoverJob|\/recover|data-(?:job|admin)-recover|can_recover|复核/, 'retired read-only recheck must not remain in the browser bundle');
 
 assert.equal(/localStorage|sessionStorage|console\.(log|debug|info)\s*\(/.test(`${source}\n${api}`), false, 'sensitive browser persistence/logging found');
 assert.equal(/error_code|job\.message|model_calls|cost_micro_usd|diagnostics|attempts|budget/.test(jobs), false, 'consumer task renderer contains technical details');

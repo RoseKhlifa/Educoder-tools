@@ -1,6 +1,6 @@
 import { ApiRequestError, BrowserApi } from './api.js';
 import { adminJobResumeAction, adminJobTarget, partitionAdminJobs, renderAdmin, renderAdminJobDetail, type AdminPage, type AdminState } from './admin.js';
-import { canCancelJob, canRetryJob, canRecoverJob, currentStage, homeworkSquares, jobHomeworks, recoveryNotice, type JobActionState, currentServiceJobs, jobTitle, pendingJob, renderJobs, renderServiceDetail, serviceJob, serviceStatus } from './jobs.js';
+import { canCancelJob, canRetryJob, currentStage, homeworkSquares, jobHomeworks, type JobActionState, currentServiceJobs, jobTitle, pendingJob, renderJobs, renderServiceDetail, serviceJob, serviceStatus } from './jobs.js';
 import { cn, count, deadline, duration, escapeHtml as e, icon, record } from './ui.js';
 import { progressCounts, progressTone } from './progress.js';
 import { renderUserGuidelines } from './guidelines.js';
@@ -39,7 +39,6 @@ const state = {
 };
 let generation = 0;
 let jobsRevision = 0;
-let recoveryNoticeID = '';
 let coursesRevision = 0;
 let adminRevision = 0;
 let modalRevision = 0;
@@ -171,7 +170,7 @@ function scheduleSmsCooldown(): void {
 }
 function resetSession(message = ''): void {
   loginRevision++; void stopWechatAttempt().catch(() => {});
-  jobActions.clear(); recoveryNoticeID = ''; adminJobActions.clear(); homeworkRetryKeys.clear(); jobDialog = null; adminJobDialog = null; homeworkSync.clear(); homeworkJobObservations.clear(); jobDetails.clear(); adminJobDetails.clear();
+  jobActions.clear(); adminJobActions.clear(); homeworkRetryKeys.clear(); jobDialog = null; adminJobDialog = null; homeworkSync.clear(); homeworkJobObservations.clear(); jobDetails.clear(); adminJobDetails.clear();
   userTickets = emptyTickets(); adminTickets = emptyTickets(); ticketDialog = null; ticketRetryKeys.clear(); ticketFormDrafts.clear();
   renderedHTML = ''; stopAdminPoll(); generation++; jobsRevision++; coursesRevision++; adminRevision++; modalRevision++; bankRevision++; bankLoadedAt = 0; todayRevision++; todayLoadedAt = 0; todayLoadedDate = ''; guidelinesSource = 'login'; passwordVisible = false; loginMode = 'password'; smsCooldownUntil = 0; stopSmsCooldown(); stopPoll(); courseDialog = null; courseCache.clear();
   Object.assign(state, { user: null, page: 'courses', courses: [], jobs: [], selected: [], loading: false, signingIn: false, sendingCode: false, creating: false, notice: '', loginError: message, loginNotice: '', modal: '', modalKind: '', modalAction: null, search: '', progressHistoryOpen: false, questionBank: null, bankLoading: false, bankUnavailable: false, todaySummary: null, todayLoading: false, todayUnavailable: false, admin: { overview: {}, users: [], jobs: [], audit: [], loading: false, error: false, userSearch: '', userFilter: 'all' } });
@@ -1106,8 +1105,6 @@ async function loadJobs(): Promise<void> {
       jobDetails.delete(job.id);
       return job;
     });
-    const noticedRecovery = state.jobs.find(job => job.id === recoveryNoticeID);
-    if (noticedRecovery) state.notice = recoveryNotice(noticedRecovery) || state.notice;
     for (const job of state.jobs) if (jobActions.get(job.id) === 'stopping' && !pendingJob(job)) jobActions.delete(job.id);
     state.selected = state.selected.filter(id => courseSelectable(id));
     if (jobDialog && state.modalKind === 'job') {
@@ -1390,31 +1387,31 @@ function refreshJobCourseCache(job: AnswerJob, refreshed = new Set<string>()): v
     void courseCache.refreshHomeworksAfterPending(id).catch(() => {});
   }
 }
-function confirmJobAction(id: string, action: 'retry' | 'recover' | 'cancel'): void {
+function confirmJobAction(id: string, action: 'retry' | 'cancel'): void {
   const job = currentJob(id);
-  if (!job || jobActions.has(id) || !accessible() || !(action === 'retry' ? canRetryJob(job) : action === 'recover' ? canRecoverJob(job) : canCancelJob(job))) return;
-  const retry = action === 'retry', recover = action === 'recover'; courseDialog = null;
-  showModal(`<h2 id="modal-title">${recover ? '复核后继续？' : retry ? '现在重试？' : '停止这个任务？'}</h2>
+  if (!job || jobActions.has(id) || !accessible() || !(action === 'retry' ? canRetryJob(job) : canCancelJob(job))) return;
+  const retry = action === 'retry'; courseDialog = null;
+  showModal(`<h2 id="modal-title">${retry ? '现在重试？' : '停止这个任务？'}</h2>
     <p class="subtext">${e(jobTitle(job, state.courses))}</p>
-    <p class="dialog-note">${recover ? '先核对上次做到哪，再接着做剩下的必做内容。已通过的关卡会跳过，结果不明确时保留进度，不重复提交。' : retry ? '接着做原来范围里没完成的必做内容。已通过的关卡会跳过，选做的不做。' : '做好的结果保留，后面的不再做。等任务确认停下来，之后可以重新开始。'}</p>
-    <div class="dialog-actions"><button class="btn" data-action="close-modal">再看看</button><button class="btn red" data-action="modal-confirm">${recover ? '复核并继续' : retry ? '重试' : '停止'}</button></div>`, () => performJobAction(id, action));
+    <p class="dialog-note">${retry ? '接着做原来范围里没完成的必做内容。已通过的关卡会跳过，选做的不做。' : '做好的结果保留，后面的不再做。等任务确认停下来，之后可以重新开始。'}</p>
+    <div class="dialog-actions"><button class="btn" data-action="close-modal">再看看</button><button class="btn red" data-action="modal-confirm">${retry ? '重试' : '停止'}</button></div>`, () => performJobAction(id, action));
 }
-async function performJobAction(id: string, action: 'retry' | 'recover' | 'cancel'): Promise<void> {
+async function performJobAction(id: string, action: 'retry' | 'cancel'): Promise<void> {
   const source = currentJob(id);
-  if (!source || jobActions.has(id) || !accessible() || !(action === 'retry' ? canRetryJob(source) : action === 'recover' ? canRecoverJob(source) : canCancelJob(source))) { closeModal(); return; }
+  if (!source || jobActions.has(id) || !accessible() || !(action === 'retry' ? canRetryJob(source) : canCancelJob(source))) { closeModal(); return; }
   const session = generation; jobsRevision++; stopPoll(); jobActions.set(id, action); closeModal(); state.notice = ''; render();
   try {
-    const job = action === 'retry' ? await api.retryJob(id) : action === 'recover' ? await api.recoverJob(id) : await api.cancelJob(id);
+    const job = action === 'retry' ? await api.retryJob(id) : await api.cancelJob(id);
     if (session !== generation) return;
     if (!job || typeof job.id !== 'string' || !job.id || typeof job.status !== 'string' || !job.request) throw new Error('Invalid job response');
     state.jobs = [job, ...state.jobs.filter(previous => previous.id !== job.id)];
     if (action === 'cancel' && pendingJob(job)) jobActions.set(id, 'stopping'); else jobActions.delete(id);
-    state.page = 'progress'; if (action === 'recover') recoveryNoticeID = job.id; state.selected = state.selected.filter(course => courseSelectable(course));
-    state.notice = action === 'recover' ? recoveryNotice(job) || '已提交复核，确认上次结果后继续剩余内容。' : action === 'retry' ? pendingJob(job) ? '已重新开始处理，已完成的关卡会自动跳过。' : '已找到本次重试结果，请查看完成进度。' : pendingJob(job) ? '已请求停止，正在等待任务确认。停止后可重新执行。' : '任务已停止，已完成的结果会保留。'
+    state.page = 'progress'; state.selected = state.selected.filter(course => courseSelectable(course));
+    state.notice = action === 'retry' ? pendingJob(job) ? '已重新开始处理，已完成的关卡会自动跳过。' : '已找到本次重试结果，请查看完成进度。' : pendingJob(job) ? '已请求停止，正在等待任务确认。停止后可重新执行。' : '任务已停止，已完成的结果会保留。'
     render(); refreshJobCourseCache(source); scheduleJobs();
   } catch (error) {
     if (session !== generation || handleError(error)) return;
-    jobActions.delete(id); state.notice = action === 'recover' ? '暂未确认复核结果，请刷新进度后重试。' : action === 'retry' ? '暂未确认重新执行结果，请刷新进度后重试。' : '暂未确认停止结果，请刷新进度查看任务状态。'; render(); void loadJobs();
+    jobActions.delete(id); state.notice = action === 'retry' ? '暂未确认重新执行结果，请刷新进度后重试。' : '暂未确认停止结果，请刷新进度查看任务状态。'; render(); void loadJobs();
   }
 }
 function cachedCourseDialog(course: Course, tab: DetailTab): CourseDialog {
@@ -1439,8 +1436,8 @@ function adminJobDetailContent(job: AdminJob, historical: boolean): string {
 function confirmAdminJobAction(id: string, action: AdminJobAction): void {
   const job = currentAdminJob(id, action);
   if (!job) return;
-  const label = action === 'retry' ? '重新执行' : action === 'recover' ? '复核并继续' : '停止';
-  const note = action === 'retry' ? '用该用户当前有效的登录连接，继续处理原任务范围里没完成的必做内容。已核验通过的关卡自动跳过，选做内容不处理。' : action === 'recover' ? '用该用户当前有效的登录连接，先核对上次提交状态，再继续原范围里剩下的内容。复核不通过时不会发新的提交。' : '保留已完成的结果，停止后续处理。等任务确认停止后再重新执行。';
+  const label = action === 'retry' ? '重新执行' : '停止';
+  const note = action === 'retry' ? '用该用户当前有效的登录连接，继续处理原任务范围里没完成的必做内容。已核验通过的关卡自动跳过，选做内容不处理。' : '保留已完成的结果，停止后续处理。等任务确认停止后再重新执行。';
   showModal(`<h2 id="modal-title">${label}该用户的任务？</h2><p class="subtext">${e(adminJobTarget(job))}</p>
     <p class="dialog-note">${note}此操作记录到管理审计。</p>
     <div class="dialog-actions"><button class="btn" data-action="close-modal">取消</button><button class="btn red" data-action="modal-confirm">确认${label}</button></div>`, () => performAdminJobAction(id, action));
@@ -1450,17 +1447,17 @@ async function performAdminJobAction(id: string, action: AdminJobAction): Promis
   const session = generation;
   adminJobActions.set(id, action); closeModal(); state.notice = ''; render();
   try {
-    const result = action === 'retry' ? await api.adminRetryJob(id) : action === 'recover' ? await api.adminRecoverJob(id) : await api.adminCancelJob(id);
+    const result = action === 'retry' ? await api.adminRetryJob(id) : await api.adminCancelJob(id);
     if (session !== generation) return;
     if (action !== 'cancel' && (!result || typeof result.id !== 'string' || !result.id || typeof result.status !== 'string')) throw new Error('Invalid admin action response');
-    state.notice = action === 'retry' ? '已重新安排该用户的任务，已核验通过的关卡会自动跳过。' : action === 'recover' ? '已提交复核，确认上次结果后继续剩余内容。' : '已提交停止请求，请刷新确认停止状态。';
+    state.notice = action === 'retry' ? '已重新安排该用户的任务，已核验通过的关卡会自动跳过。' : '已提交停止请求，请刷新确认停止状态。';
   } catch (error) {
     if (session !== generation || handleError(error)) return;
     state.notice = error instanceof ApiRequestError && error.code === 'OWNER_LOGIN_REQUIRED'
-      ? `该用户的登录连接已过期，请用户重新登录后再${action === 'retry' ? '重新执行' : '复核继续'}。`
+      ? `该用户的登录连接已过期，请用户重新登录后再${action === 'retry' ? '重新执行' : '停止'}。`
       : error instanceof ApiRequestError && error.code === 'OWNER_ACCESS_REVOKED'
         ? '该用户的服务已暂停，请先恢复用户服务，再刷新任务记录。'
-        : `暂未确认${action === 'retry' ? '重新执行' : action === 'recover' ? '复核' : '停止'}结果，请刷新任务记录后重试。`;
+        : `暂未确认${action === 'retry' ? '重新执行' : '停止'}结果，请刷新任务记录后重试。`;
   } finally {
     if (session === generation) {
       await loadAdmin();
@@ -1871,8 +1868,6 @@ function bindEvents(): void {
   }));
   document.querySelectorAll<HTMLButtonElement>('[data-job-retry]').forEach(button => button.addEventListener('click', () => confirmJobAction(button.dataset.jobRetry!, 'retry')));
   document.querySelectorAll<HTMLButtonElement>('[data-admin-retry]').forEach(button => button.addEventListener('click', () => confirmAdminJobAction(button.dataset.adminRetry!, 'retry')));
-  document.querySelectorAll<HTMLButtonElement>('[data-admin-recover]').forEach(button => button.addEventListener('click', () => confirmAdminJobAction(button.dataset.adminRecover!, 'recover')));
-  document.querySelectorAll<HTMLButtonElement>('[data-job-recover]').forEach(button => button.addEventListener('click', () => confirmJobAction(button.dataset.jobRecover!, 'recover')));
   document.querySelectorAll<HTMLButtonElement>('[data-job-cancel]').forEach(button => button.addEventListener('click', () => confirmJobAction(button.dataset.jobCancel!, 'cancel')));
   document.querySelector<HTMLDetailsElement>('[data-service-history]')?.addEventListener('toggle', event => {
     state.progressHistoryOpen = (event.currentTarget as HTMLDetailsElement).open;

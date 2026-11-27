@@ -41,7 +41,7 @@ function asRecord(value: unknown): Raw {
 
 function normalizeAdminJob(value: unknown): AdminJob {
   const job = asRecord(value);
-  return { ...job, can_retry: job.can_retry === true, can_recover: job.can_recover === true } as unknown as AdminJob;
+  return { ...job, can_retry: job.can_retry === true } as unknown as AdminJob;
 }
 
 function text(value: unknown, fallback = ''): string {
@@ -362,7 +362,6 @@ export interface EducoderApi {
   createJob(request: JobRequest): Promise<AnswerJob>;
   cancelJob(id: string): Promise<AnswerJob>;
   retryJob(id: string): Promise<AnswerJob>;
-  recoverJob(id: string): Promise<AnswerJob>;
   adminOverview(): Promise<AdminOverview>;
   adminUsers(): Promise<AdminUser[]>;
   adminJobs(): Promise<AdminJob[]>;
@@ -370,7 +369,6 @@ export interface EducoderApi {
   adminAudit(): Promise<AdminAudit[]>;
   adminUserStatus(id: string | number, status: 'active' | 'disabled'): Promise<void>;
   adminCancelJob(id: string): Promise<void>;
-  adminRecoverJob(id: string): Promise<AnswerJob>;
   adminRetryJob(id: string): Promise<AdminJob>;
   tickets(options?: TicketListOptions): Promise<TicketList>;
   ticket(id: string): Promise<SupportTicketDetail>;
@@ -518,12 +516,6 @@ export class BrowserApi implements EducoderApi {
   }
   async retryJob(id: string): Promise<AnswerJob> {
     return this.request<AnswerJob>(`/api/jobs/${encodeURIComponent(id)}/retry`, { method: 'POST', body: '{}' });
-  }
-  async recoverJob(id: string): Promise<AnswerJob> {
-    return this.request<AnswerJob>(`/api/jobs/${encodeURIComponent(id)}/recover`, { method: 'POST', body: '{}' });
-  }
-  async adminRecoverJob(id: string): Promise<AnswerJob> {
-    return normalizeAdminJob(await this.request<unknown>(`/api/admin/jobs/${encodeURIComponent(id)}/recover`, { method: 'POST', body: '{}' }));
   }
   async adminRetryJob(id: string): Promise<AdminJob> {
     return normalizeAdminJob(await this.request<unknown>(`/api/admin/jobs/${encodeURIComponent(id)}/retry`, { method: 'POST', body: '{}' }));

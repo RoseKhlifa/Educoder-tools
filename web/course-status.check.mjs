@@ -10,14 +10,14 @@ const job = (extra = {}) => ({ id: 'old', status: 'failed', phase: 'completed', 
 const proofs = (data = [full], extra = {}, source = job()) => new Map([['C', { data, requestedAt: read, updatedAt: read + 100, stale: false, sync: 'ready', observedTerminalVersions: new Set([courseTerminalVersion(source)]), ...extra }]]);
 
 test('current course evidence archives an old attempt without changing its recorded result', () => {
-  const source = job({ status: 'uncertain', can_recover: true });
+  const source = job({ status: 'uncertain', can_retry: true });
   const original = JSON.stringify(source), ids = historicalCourseRecordIds([source], proofs([full], {}, source));
   assert.deepEqual([...ids], ['old']);
   const parts = partitionServiceJobs([source], ids);
   assert.equal(parts.current.length, 0); assert.equal(parts.history[0], source);
   const html = renderJobs([source], [], true, new Map(), ids);
   assert.match(html, /完成 6 \/ 10 份/); assert.doesNotMatch(html, /当次/);
-  assert.doesNotMatch(html, /data-job-recover=|data-job-retry=/);
+  assert.doesNotMatch(html, /data-job-retry=|data-job-recover=/);
   assert.equal(JSON.stringify(source), original);
 });
 

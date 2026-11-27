@@ -4,51 +4,17 @@ import { autoRetryText, marginMark, progressCounts, progressTone, reasonText, re
 export const pendingJob = (job: AnswerJob): boolean => ['queued', 'running', 'waiting', 'processing'].includes(job.status);
 export const serviceJob = (job: AnswerJob): boolean => job.request.mode !== 'collect_verified';
 // Capability flags come from the session-bound API. Missing flags fail closed.
-export const canRetryJob = (job: AnswerJob): boolean => job.can_retry === true && job.request.mode === 'submit' && ['homework', 'course', 'all'].includes(job.request.scope ?? '') && ['failed', 'canceled', 'interrupted', 'support'].includes(job.status);
+// An unconfirmed result is an ordinary stop: the only offer is a retry, which
+// skips whatever has already been verified.
+export const canRetryJob = (job: AnswerJob): boolean => job.can_retry === true && job.request.mode === 'submit' && ['homework', 'course', 'all'].includes(job.request.scope ?? '') && ['failed', 'canceled', 'uncertain', 'interrupted', 'support'].includes(job.status);
 export const canCancelJob = (job: AnswerJob): boolean => job.can_cancel === true && job.request.mode === 'submit' && ['homework', 'course', 'all'].includes(job.request.scope ?? '') && pendingJob(job);
-export const canRecoverJob = (job: AnswerJob): boolean => job.can_recover === true && job.request.mode === 'submit' && ['homework', 'course', 'all'].includes(job.request.scope ?? '') && ['failed', 'canceled', 'uncertain', 'interrupted', 'support'].includes(job.status);
-export type JobActionState = 'retry' | 'recover' | 'cancel' | 'stopping';
-function recoveryState(job: AnswerJob): string {
-  const recovery = job.recovery;
-  return typeof recovery?.state === 'string' ? recovery.state : '';
-}
-function recoveryMessage(job: AnswerJob): string {
-  const recovery = job.recovery;
-  return typeof recovery?.message === 'string' ? recovery.message : '';
-}
-export function recoveryNotice(job: AnswerJob): string {
-  if (!job.recovery) return '';
-  switch (recoveryState(job)) {
-    case 'queued': return '已提交复核，等待开始。';
-    case 'reconciling': return '正在复核上次结果，还没有新的提交。';
-    case 'continuing': return '复核通过，正在继续剩下的内容。';
-    case 'blocked': return '复核没通过，没有重试；做好的保留。';
-    case 'completed': return '复核和后续处理都完成了。';
-    case 'stopped': return '复核已停止，做好的保留。';
-    case 'failed': return '复核后仍未完成，做好的保留。';
-    default: return '';
-  }
-}
-function recoveryLabel(job: AnswerJob): string {
-  switch (recoveryState(job)) {
-    case 'queued': return '复核排队中';
-    case 'reconciling': return '正在复核';
-    case 'continuing': return '复核后继续';
-    case 'blocked': return '复核未通过';
-    case 'failed': return '复核后未完成';
-    case 'completed': return '复核已完成';
-    case 'stopped': return '复核已停止';
-    default: return '';
-  }
-}
-export function serviceLabel(job: AnswerJob): string { return recoveryLabel(job) || serviceLabels[serviceStatus(job)]; }
+export type JobActionState = 'retry' | 'cancel' | 'stopping';
+export function serviceLabel(job: AnswerJob): string { return serviceLabels[serviceStatus(job)]; }
 export function renderJobActions(job: AnswerJob, historical = false, pending?: JobActionState): string {
   if (historical) return '';
   if (pending === 'retry') return '<button class="btn sm" disabled>正在重试…</button>';
-  if (pending === 'recover') return '<button class="btn sm" disabled>正在复核…</button>';
   if (pending === 'cancel' || pending === 'stopping') return '<button class="btn sm stop" disabled>正在停止…</button>';
   if (canRetryJob(job)) return `<button class="btn sm" data-job-retry="${e(job.id)}">现在重试</button>`;
-  if (canRecoverJob(job)) return `<button class="btn sm" data-job-recover="${e(job.id)}">${recoveryState(job) === 'blocked' ? '再次复核并继续' : '复核并继续'}</button>`;
   if (canCancelJob(job)) return `<button class="btn sm stop" data-job-cancel="${e(job.id)}">停止</button>`;
   return '';
 }
@@ -269,7 +235,7 @@ export function renderServiceJob(job: AnswerJob, courses: Course[] = [], histori
   const progress = jobProgress(job);
   const active = pendingJob(job);
   const retry = autoRetryNotice(job);
-  const reason = historical ? '' : serviceReason(job) || serviceAttention(job) || (recoveryMessage(job) ? recoveryNotice(job) : '');
+  const reason = historical ? '' : serviceReason(job) || serviceAttention(job);
   const stage = currentStage(job);
   const focus = (typeof record(job.result).current_title === 'string' ? String(record(job.result).current_title).trim() : '')
     || items.filter(item => progressTone(item.status) === 'processing').map(item => String(item.title ?? '').trim()).filter(Boolean)[0] || '';
@@ -312,7 +278,7 @@ export function renderJobs(jobs: AnswerJob[], courses: Course[] = [], historyOpe
 /** examNote states what an exam record means for the user, if anything. */
 function examNote(job: AnswerJob, status: ServiceStatus): string {
   if (job.request.scope !== 'exercise') return '';
-  if (status === 'support') return '考试事项需要服务人员跟进，请勿重复提交。';
+  if (status === 'support') return '考试事项需要服务人员跟进。';
   if (pendingJob(job)) return '我们会处理整场考试，完成后显示交卷状态。';
   return '';
 }
@@ -327,9 +293,7 @@ export function renderServiceDetail(job: AnswerJob, courses: Course[] = [], hist
   const eyebrow = historical
     ? `<span class="tag">历史</span>${e(started)} 开始`
     : `${active ? '<span class="pulse"></span>' : ''}${e(serviceLabel(job))}${started ? ` · ${e(started)} 开始` : ''}`;
-  // The server's own recovery sentence is more specific than our summary, so
-  // it wins when present.
-  const note = !historical && (examNote(job, status) || serviceAttention(job) || recoveryMessage(job) || (retry ? `${retry}，做好的关卡不会重做。` : '')
+  const note = !historical && (examNote(job, status) || serviceAttention(job) || (retry ? `${retry}，做好的关卡不会重做。` : '')
     || (canRetryJob(job) ? '重试会接着处理原来的范围，已核验通过的必做关卡会自动跳过。' : ''));
   // The verdict already names the assignment tally, so the meta line only adds
   // a count it does not carry — levels or exam questions — plus the time spent.

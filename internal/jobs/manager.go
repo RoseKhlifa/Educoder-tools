@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -418,21 +417,6 @@ func (m *Manager) worker(collection bool) {
 				out.Message = "Job exceeded its execution time limit"
 			}
 		}
-		if r.mutating && (err != nil || ctxerr != nil || reserr != nil || status == Canceled) {
-			if code, ok := prewriteFailureCode(result); ok {
-				// A graphical save/resource failure is explicitly before formal
-				// evaluation. The task is retryable and must not be relabeled as an
-				// unknown upstream submission merely because the executor emitted a
-				// submitting phase before opening its environment.
-				status = Failed
-				out.ErrorCode = code
-				out.Message = "图形环境写入尚未提交评测，可安全重试"
-			} else {
-				status = Uncertain
-				out.ErrorCode = "submission_uncertain"
-				out.Message = "Submission may have reached the upstream service; check its result before retrying"
-			}
-		}
 		if !collection {
 			m.owners[r.owner]--
 			if m.owners[r.owner] == 0 {
@@ -455,29 +439,6 @@ func run(ctx context.Context, exec Executor, req Request, report func(Event)) (o
 	return exec(ctx, req, report)
 }
 
-// prewriteFailureCode recognizes only the public, typed result statuses that
-// prove a graphical mutation never reached formal evaluation. It deliberately
-// returns false for missing/malformed results and for build-sent errors so the
-// manager remains fail-closed for all genuinely ambiguous submissions.
-func prewriteFailureCode(raw []byte) (string, bool) {
-	var envelope struct {
-		Programming *struct {
-			Evaluation *struct {
-				Status string `json:"status"`
-			} `json:"evaluation"`
-		} `json:"programming"`
-	}
-	if len(raw) == 0 || json.Unmarshal(raw, &envelope) != nil || envelope.Programming == nil || envelope.Programming.Evaluation == nil {
-		return "", false
-	}
-	switch envelope.Programming.Evaluation.Status {
-	case "prewrite_error", "resource_unavailable", "saved_not_submitted", "save_unverified", "save_error", "editor_changed":
-		return envelope.Programming.Evaluation.Status, true
-	default:
-		return "", false
-	}
-}
-
 func defaultMessage(status string) string {
 	switch status {
 	case Succeeded:
@@ -485,7 +446,7 @@ func defaultMessage(status string) string {
 	case Canceled:
 		return "Job canceled"
 	case Uncertain:
-		return "Upstream result needs verification"
+		return "Job stopped; it can be retried"
 	default:
 		return "Job failed"
 	}

@@ -433,23 +433,26 @@ await test('browser API uses the Go workbench contract', async t => {
   });
   await t.test('admin retry uses its own opaque source action and strictly normalizes server capabilities', async () => {
     const requests = [], rows = [
-      { id: 'allowed', can_retry: true, can_recover: false },
-      { id: 'denied', can_retry: false, can_recover: true },
+      { id: 'allowed', can_retry: true },
+      { id: 'denied', can_retry: false },
       { id: 'missing' },
-      { id: 'coerced', can_retry: 'true', can_recover: 1 },
+      { id: 'coerced', can_retry: 'true' },
     ];
     globalThis.fetch = async (url, options) => {
       requests.push({ url, options });
       return envelope(options.method === 'POST' ? { id: 'admin-child', status: 'queued', can_retry: 'true' } : { items: rows }, options.method === 'POST' ? 202 : 200);
     };
     const api = new BrowserApi();
-    assert.deepEqual((await api.adminJobs()).map(({can_retry,can_recover}) => [can_retry,can_recover]), [[true,false],[false,true],[false,false],[false,false]]);
+    assert.deepEqual((await api.adminJobs()).map(({can_retry}) => can_retry), [true, false, false, false]);
     const child = await api.adminRetryJob('source/opaque ?#');
-    assert.equal(child.id, 'admin-child'); assert.equal(child.can_retry, false); assert.equal(child.can_recover, false);
+    assert.equal(child.id, 'admin-child'); assert.equal(child.can_retry, false);
     assert.equal(requests[1].url, '/api/admin/jobs/source%2Fopaque%20%3F%23/retry');
     assert.equal(requests[1].options.method, 'POST'); assert.equal(requests[1].options.credentials, 'include');
     assert.equal(requests[1].options.body, '{}');
     assert.equal(requests.some(({url}) => url.startsWith('/api/jobs/')), false);
+    // The read-only recheck is retired: no client function and no endpoint.
+    assert.equal(typeof api.recoverJob, 'undefined'); assert.equal(typeof api.adminRecoverJob, 'undefined');
+    assert.equal(requests.some(({url}) => url.includes('/recover')), false);
   });
   await t.test('foreign job errors remain errors rather than empty successful histories', async () => {
     globalThis.fetch = async () => new Response(JSON.stringify({ error: { code: 'JOB_NOT_FOUND', message: '任务不存在' } }), { status: 404 });

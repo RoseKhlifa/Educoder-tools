@@ -52,19 +52,19 @@ await test('collection capacity and exhaustive completion stay distinct from ans
   assert.match(failed, /需要处理/); assert.match(failed, /单次采集请求超时/); assert.doesNotMatch(failed, /完整扫描完成|达到采集上限/);
 });
 
-await test('admin task actions require explicit capabilities and keep retry separate from uncertain recovery', () => {
-  const source = job({can_retry:true,can_recover:false});
+await test('admin task actions require explicit capabilities and offer only a retry for a stopped task', () => {
+  const source = job({can_retry:true});
   for (const html of [renderAdmin('overview',state([source])),renderAdminJobDetail(source)]) {
-    assert.match(html,/data-admin-retry=/); assert.doesNotMatch(html,/data-admin-recover=/);
+    assert.match(html,/data-admin-retry=/); assert.doesNotMatch(html,/data-admin-recover=|复核/);
   }
   for (const value of [undefined,false,'true',1]) {
-    const denied = job({can_retry:value,can_recover:false});
+    const denied = job({can_retry:value});
     assert.doesNotMatch(renderAdmin('overview',state([denied]))+renderAdminJobDetail(denied),/data-admin-retry=|data-admin-recover=/);
   }
-  const unknown = job({can_retry:true,can_recover:true});
-  const uncertain = renderAdmin('overview',state([unknown]))+renderAdminJobDetail(unknown);
-  assert.match(uncertain,/data-admin-recover=/); assert.doesNotMatch(uncertain,/data-admin-retry=/);
-  const active = job({status:'running',can_retry:true,can_recover:true});
+  const unconfirmed = job({status:'uncertain',can_retry:true});
+  const uncertain = renderAdmin('overview',state([unconfirmed]))+renderAdminJobDetail(unconfirmed);
+  assert.match(uncertain,/data-admin-retry=/); assert.doesNotMatch(uncertain,/data-admin-recover=|复核/);
+  const active = job({status:'running',can_retry:true});
   const activeHTML = renderAdmin('operations',state([active]))+renderAdminJobDetail(active);
   assert.match(activeHTML,/data-admin-cancel=/); assert.doesNotMatch(activeHTML,/data-admin-retry=|data-admin-recover=/);
   assert.doesNotMatch(renderAdminJobDetail(source,true),/data-admin-retry=|data-admin-recover=/);
@@ -398,10 +398,10 @@ await test('a history record states what happened per assignment without repeati
   ];
   const record = { id: 'cccccccccccccccccccccccccccccccc', status: 'failed', request: { scope: 'all', mode: 'submit' }, created_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:10:00Z', result: { service_status: 'support', total_homeworks: 3, completed_homeworks: 0, homeworks: rows } };
   const history = visible(renderServiceDetail(record, [], true));
-  assert.ok(history.includes('当时提交结果尚未确认') && history.includes('当时头歌评测资源紧张') && history.includes('当时要人工核对'), history);
+  assert.ok(history.includes('当时结果没有确认') && history.includes('当时头歌评测资源紧张') && history.includes('当时要人工核对'), history);
   assert.doesNotMatch(history, /请使用|可稍后重新执行|需要先复核|可以直接重试|brand_new_code/);
   const live = visible(renderServiceDetail(record, [], false));
-  assert.ok(live.includes('上次提交结果没确认，需要先复核') && live.includes('头歌评测资源紧张，评测没能开始'), live);
+  assert.ok(live.includes('这次结果没有确认，可以直接重试') && live.includes('头歌评测资源紧张，评测没能开始'), live);
 });
 
 await test('a stopped assignment marks only levels with their own reason and states the time once', () => {

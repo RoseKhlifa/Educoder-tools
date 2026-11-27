@@ -6,7 +6,7 @@ export type AdminPage = 'overview' | 'users' | 'operations' | 'audit';
 export type AdminJobsView = 'current' | 'history';
 export type AdminJobsKind = 'service' | 'collection' | 'all';
 export interface AdminState { overview: AdminOverview; users: AdminUser[]; jobs: AdminJob[]; audit: AdminAudit[]; loading: boolean; error: boolean; jobsView?: AdminJobsView; jobsKind?: AdminJobsKind; userSearch?: string; userFilter?: 'all' | 'active' | 'disabled' }
-const statusLabels: Record<string, string> = { queued: '排队中', running: '执行中', succeeded: '已完成', failed: '需要处理', uncertain: '待核验', interrupted: '已中断', canceled: '已停止', active: '正常', disabled: '已暂停', passed: '已通过', completed: '已完成', skipped: '已满分，已跳过', skipped_optional: '选做，已跳过', planned: '尚未开始', needs_service: '需要跟进', verification_unconfirmed: '待核验', processing: '执行中', support: '需要跟进', waiting: '排队中', deadline_passed: '已截止' };
+const statusLabels: Record<string, string> = { queued: '排队中', running: '执行中', succeeded: '已完成', failed: '需要处理', uncertain: '结果未确认', interrupted: '已中断', canceled: '已停止', active: '正常', disabled: '已暂停', passed: '已通过', completed: '已完成', skipped: '已满分，已跳过', skipped_optional: '选做，已跳过', planned: '尚未开始', needs_service: '需要跟进', verification_unconfirmed: '待核验', processing: '执行中', support: '需要跟进', waiting: '排队中', deadline_passed: '已截止' };
 const phaseLabels: Record<string, string> = { initializing: '准备后续关卡', starting: '准备执行', preflight: '核对关卡清单', verified: '已核验当前结果', service_pending: '等待服务人员跟进', queued: '排队中', loading: '读取课程与作业', loading_resources: '读取题目图片', preparing: '准备执行', collecting: '采集已验证题目', bank_lookup: '查询题库答案', bank_saved: '保存已验证答案', generating: '生成答案', answering: '生成答案', solving: '处理题目', validating: '校验答案格式', saving: '保存代码', selftesting: '执行自测', environment_retry: '重试自测环境', selftest: '执行自测', submitting: '提交答案', evaluating: '等待评测', polling: '读取评测结果', verifying: '核验完成状态', reconciling: '核对提交结果', repairing: '根据反馈修复', completed: '执行结束', failed: '执行结束，等待处理', canceled: '已停止', processing: '执行中', running: '执行中' };
 const text = (value: unknown): string => typeof value === 'string' ? value.trim() : '';
 const pendingStatuses = new Set(['queued', 'running', 'waiting', 'processing']);
@@ -52,17 +52,15 @@ function adminLiveStage(job: AdminJob): string {
 function adminAutoRetry(job: AdminJob): string {
   return autoRetryText(record(job.result).auto_retry as { next_at?: string; attempt?: number; max?: number } | undefined);
 }
-export function adminJobResumeAction(job: AdminJob): 'retry' | 'recover' | undefined {
+export function adminJobResumeAction(job: AdminJob): 'retry' | undefined {
   if (pendingStatuses.has(job.status)) return undefined;
-  // An unresolved submission must be reconciled before a normal retry.
-  if (job.can_recover === true) return 'recover';
   return job.can_retry === true ? 'retry' : undefined;
 }
 function adminResumeButton(job: AdminJob, historical: boolean, pending?: AdminJobAction, detail = false): string {
   if (historical) return '';
   const action = adminJobResumeAction(job);
   if (!action) return '';
-  const label = pending === 'retry' ? '正在重新执行…' : pending === 'recover' ? '正在复核…' : pending === 'cancel' ? '正在停止…' : action === 'retry' ? '重新执行' : '复核并继续';
+  const label = pending === 'retry' ? '正在重新执行…' : pending === 'cancel' ? '正在停止…' : '重新执行';
   return `<button class="${detail ? 'btn red' : 'link'}" data-admin-${action}="${e(job.id)}" ${pending ? 'disabled' : ''}>${label}</button>`;
 }
 function targetKey(job: AdminJob): string {

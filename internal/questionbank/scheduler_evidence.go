@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 )
 
@@ -77,81 +76,4 @@ func (s *Store) ReusableEvidenceRevisionForHomework(ctx context.Context, owner, 
 	}
 	hash := sha256.Sum256([]byte(fmt.Sprint(parts)))
 	return hex.EncodeToString(hash[:]), nil
-}
-
-// UnresolvedHomeworkRuns finds unknown outcomes across idempotency keys. A new
-// batch is not permission to replay a prior uncertain mutation. Results remain
-// owner-scoped and contain no source, credentials or runtime transport data.
-func (s *Store) UnresolvedHomeworkRuns(ctx context.Context, owner, course string, homeworkID int64) ([]UnresolvedHomeworkRun, error) {
-	if err := validateOwner(owner); err != nil {
-		return nil, err
-	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, status, data_json, COALESCE(json_extract(data_json,'$.target.Game'),'') FROM solver_runs
-		WHERE owner=? AND status IN ('uncertain','verification_unconfirmed','usage_persistence_failed','verification_persistence_failed')
-		AND json_extract(data_json,'$.target.Course')=? AND json_extract(data_json,'$.target.HomeworkID')=?`, owner, course, homeworkID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []UnresolvedHomeworkRun
-	for rows.Next() {
-		var row UnresolvedHomeworkRun
-		var status string
-		var raw []byte
-		if err := rows.Scan(&row.RunID, &status, &raw, &row.Game); err != nil {
-			return nil, err
-		}
-		row.FormalUnknown = formalUnknownRun(status, raw)
-		out = append(out, row)
-	}
-	return out, rows.Err()
-}
-
-// UnresolvedHomeworkRun includes all historical uncertain records for audit
-// callers. FormalUnknown is deliberately narrower: it is true only when the
-// durable result proves that an objective submission reached the platform but
-// its outcome was not confirmed. Programming evaluations, pre-submit/self-test
-// and resource failures stay visible to operators without blocking levels.
-type UnresolvedHomeworkRun struct {
-	RunID         string
-	Game          string
-	FormalUnknown bool
-}
-
-// formalUnknownRun recognizes the public run DTOs written by the programming
-// and objective services. This parser is intentionally fail-closed for older
-// or malformed records: without an explicit formal-evaluation marker a run
-// cannot be used to block a new mutation.
-func formalUnknownRun(runStatus string, raw []byte) bool {
-	var envelope struct {
-		Result struct {
-			Kind       string `json:"kind"`
-			Status     string `json:"status"`
-			ScoreCheck string `json:"score_check"`
-		} `json:"result"`
-	}
-	if json.Unmarshal(raw, &envelope) != nil {
-		return false
-	}
-	switch envelope.Result.Kind {
-	case "objective":
-		// Objective verification_unconfirmed is also emitted before the
-		// submit when the question changed. A non-empty score check is only
-		// assigned after ObjectiveSubmit returned, so it proves a write.
-		if runStatus == "uncertain" || runStatus == "verification_persistence_failed" {
-			return true
-		}
-		return runStatus == "verification_unconfirmed" && envelope.Result.ScoreCheck != ""
-	default:
-		// Programming (including graphic and terminal) evaluations deliberately
-		// never block. Re-evaluating code is score-safe on Educoder: a level
-		// whose unknown evaluation actually passed stays passed, and the next
-		// batch reloads progress and skips it; one that did not pass needs a
-		// new attempt anyway. Blocking would stall an unattended homework on a
-		// question only a human could answer. (Programming runs persist their
-		// run state, not this envelope, so this was also the effective
-		// behavior before it was written down.) Objective submissions above
-		// still block, because a repeated wrong submission can cost score.
-		return false
-	}
 }

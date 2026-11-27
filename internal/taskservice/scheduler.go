@@ -119,47 +119,6 @@ func (s *Service) rememberHomeworkFailure(ctx context.Context, req Request, hw e
 	return s.store.PutRun(ctx, questionbank.RunRecord{ID: key, Owner: ownerHash(req.Owner), IdempotencyKey: key, Status: "blocked_deterministic", Data: raw, CreatedAt: now, UpdatedAt: now})
 }
 
-// guardHomeworkUnknown applies to direct single-homework runs too. It returns
-// only the exact runtime games whose formal write outcome is still unknown.
-// Callers must hold those levels while continuing unrelated levels in the same
-// homework. Self-test/pre-write failures are intentionally omitted by the
-// question-bank evidence classifier and never block a new mutation.
-func (s *Service) guardHomeworkUnknown(ctx context.Context, req Request, roster *educoder.HomeworkRoster, progress *educoder.HomeworkProgress) (map[string]bool, error) {
-	runs, err := s.store.UnresolvedHomeworkRuns(ctx, ownerHash(req.Owner), req.Course, req.HomeworkID)
-	if err != nil {
-		return nil, err
-	}
-	blocked := make(map[string]bool)
-	for _, run := range runs {
-		if !run.FormalUnknown {
-			continue
-		}
-		resolved := false
-		for _, level := range roster.Levels {
-			if level.Game != run.Game || level.RosterIssue != "" {
-				continue
-			}
-			if progressOptional(progress, level.ChallengeID) {
-				resolved = true
-			} else if _, full := findFull(progress, level.ChallengeID); full {
-				resolved = true
-			}
-			break
-		}
-		if resolved {
-			continue
-		}
-		if run.Game == "" {
-			// A formal unknown without a stable game cannot be mapped to one
-			// level. Keep the fail-closed whole-homework behavior rather than
-			// risking a duplicate write to an unidentified runtime.
-			return nil, errors.New("prior formal submission outcome has no stable level identity")
-		}
-		blocked[run.Game] = true
-	}
-	return blocked, nil
-}
-
 func mayContinueAfterLevel(task *educoder.Task, result *Result, err error) bool {
 	if task == nil || !task.CanContinueAfterConfirmedFailure() || result == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false

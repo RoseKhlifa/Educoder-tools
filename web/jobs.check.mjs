@@ -48,7 +48,7 @@ await test('consumer completion progress shows one current arrangement per origi
     assert.doesNotMatch(renderServiceDetail(failed), /服务人员正在处理|无需重复提交/);
     assert.match(renderServiceDetail(failed), /已核验通过的必做关卡会自动跳过/);
     for (const item of [
-      { ...failed, can_retry: undefined }, { ...failed, can_retry: 'true' }, { ...failed, status: 'uncertain' }, { ...failed, status: 'succeeded' },
+      { ...failed, can_retry: undefined }, { ...failed, can_retry: 'true' }, { ...failed, status: 'succeeded' },
       { ...failed, status: 'running' }, { ...failed, request: { mode: 'submit', scope: 'exercise', course: 'COURSE_A', exercise_id: 1 } },
       { ...failed, request: { mode: 'collect_verified' } }, { ...failed, request: { mode: 'selftest', scope: 'course', course: 'COURSE_A' } },
     ]) { assert.equal(canRetryJob(item), false); assert.doesNotMatch(renderServiceJob(item) + renderServiceDetail(item), /data-job-retry/); }
@@ -86,14 +86,14 @@ await test('consumer completion progress shows one current arrangement per origi
     assert.match(html, /正在处理第 4 关/);
     assert.match(html, /3 \/ 8 关/);
   });
-  await t.test('recovery status is visible and preserves the original progress while a follow-up is blocked', () => {
-    const blocked = job('recovery-child', 1, { status: 'failed', can_recover: true, result: { service_status: 'support', total_homeworks: 19, completed_homeworks: 13 }, recovery: { original_id: 'source', state: 'blocked', message: '复核未通过，未发送新的提交；可再次复核' } });
-    assert.equal(serviceLabel(blocked), '复核未通过');
-    const html = renderServiceJob(blocked) + renderServiceDetail(blocked);
-    assert.match(html, /再次复核并继续/); assert.match(html, /复核未通过/); assert.match(html, /复核未通过，未发送新的提交/); assert.match(html, /13 \/ 19 份作业/);
-    assert.doesNotMatch(html, /服务处理中/);
-    const running = { ...blocked, status: 'running', recovery: { original_id: 'source', state: 'reconciling', message: '正在只读复核上次提交结果，尚未开始新的提交' } };
-    assert.equal(serviceLabel(running), '正在复核'); assert.match(renderServiceDetail(running), /正在只读复核/);
+  await t.test('a stored unconfirmed record is an ordinary stopped task with a retry', () => {
+    const stopped = job('legacy-uncertain', 1, { status: 'uncertain', can_retry: true, error_code: 'RESULT_UNCONFIRMED', result: { service_status: 'support', total_homeworks: 19, completed_homeworks: 13 } });
+    assert.equal(canRetryJob(stopped), true);
+    assert.equal(serviceLabel(stopped), '需要跟进');
+    const html = renderServiceJob(stopped) + renderServiceDetail(stopped);
+    assert.match(html, /data-job-retry="legacy-uncertain"/); assert.match(html, /13 \/ 19 份作业/);
+    assert.doesNotMatch(html, /复核|请勿重复提交|data-job-recover|RESULT_UNCONFIRMED/);
+    assert.doesNotMatch(renderServiceJob(stopped, [], true) + renderServiceDetail(stopped, [], true), /data-job-retry/);
   });
   await t.test('exams have separate targets from homework IDs and from one another', () => {
     const exercise = exercise_id => ({ scope: 'exercise', course: 'COURSE_A', exercise_id, mode: 'submit' });

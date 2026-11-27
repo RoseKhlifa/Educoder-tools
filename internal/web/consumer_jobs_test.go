@@ -120,24 +120,16 @@ func TestConsumerTerminalProjectionRetainsProgressWithoutActiveChildren(t *testi
 	}
 }
 
-func TestConsumerRecoveryProjectionExplainsReconciliationAndPreservesProgress(t *testing.T) {
-	base := jobs.Job{ID: "recovery-child", Request: jobs.Request{Mode: "submit", Scope: "course", Course: "C", RecoveryOf: "source"}, Result: json.RawMessage(`{"status":"verification_unconfirmed","reason_code":"recovery_recheck_required","total_homeworks":19,"completed_homeworks":13}`), Progress: &jobs.BatchProgress{TotalHomeworks: 19, CompletedHomeworks: 13}}
-	for _, tc := range []struct{ status, phase, wantState, wantMessage string }{
-		{jobs.Queued, jobs.Queued, "queued", "复核任务已排队"},
-		{jobs.Running, "reconciling", "reconciling", "正在只读复核"},
-		{jobs.Running, "loading", "continuing", "复核已通过"},
-		{jobs.Failed, "reconciling", "blocked", "复核未通过"},
-		{jobs.Succeeded, "completed", "completed", "复核完成"},
-	} {
-		job := base
-		job.Status, job.Phase = tc.status, tc.phase
-		public := toConsumerJob(job)
-		if public.Recovery == nil || public.Recovery.State != tc.wantState || !strings.Contains(public.Recovery.Message, tc.wantMessage) {
-			t.Fatalf("%s/%s recovery=%+v", tc.status, tc.phase, public.Recovery)
-		}
-		if public.Result.TotalHomeworks != 19 || public.Result.CompletedHomeworks != 13 || public.Request.RecoveryOf != "" {
-			t.Fatalf("recovery lost public progress or leaked internal request: %+v", public)
-		}
+// A recheck child stored before 2026-11-27 is shown as an ordinary stopped job
+// that can be run again, with its progress kept and no recheck wording.
+func TestOldRecheckChildIsAnOrdinaryRetryableStop(t *testing.T) {
+	job := jobs.Job{ID: "old-child", Status: jobs.Failed, ErrorCode: "RECOVERY_RECHECK_REQUIRED", Message: "只读复核尚未通过，保留已完成进度，可再次复核",
+		Request: jobs.Request{Mode: "submit", Scope: "course", Course: "C", IdempotencyKey: "recover-job:source"},
+		Result:  json.RawMessage(`{"status":"verification_unconfirmed","reason_code":"recovery_recheck_required","total_homeworks":19,"completed_homeworks":13}`), Progress: &jobs.BatchProgress{TotalHomeworks: 19, CompletedHomeworks: 13}}
+	public := toConsumerJob(job)
+	wire, err := json.Marshal(public)
+	if err != nil || !public.CanRetry || strings.Contains(string(wire), "recover") || strings.Contains(string(wire), "复核") || public.Result.TotalHomeworks != 19 || public.Result.CompletedHomeworks != 13 {
+		t.Fatalf("old recheck child: %s err=%v", wire, err)
 	}
 }
 

@@ -187,8 +187,6 @@ export interface AnswerJob {
   finished_at?: string;
   can_retry?: boolean;
   can_cancel?: boolean;
-  can_recover?: boolean;
-  recovery?: { original_id: string; state: string; message: string };
   error_code?: string;
   message?: string;
   progress?: HomeworkProgress;
@@ -293,7 +291,7 @@ export interface AdminJobContext {
   progress?: HomeworkProgress;
   summary?: { stop_reason?: string; pending_homeworks?: number; reason?: string; reason_code?: string; message?: string; diagnostics?: string[]; progress_label?: string; attention_homeworks?: Array<{ id?: number; name?: string; course_identifier?: string; course_name?: string; reason?: string; reason_code?: string; diagnostics?: string[]; level_title?: string; level_position?: number }> };
 }
-export type AdminJobAction = 'retry' | 'recover' | 'cancel';
+export type AdminJobAction = 'retry' | 'cancel';
 export interface AdminJob extends AnswerJob { owner_id?: string | number; owner?: string; context?: AdminJobContext }
 export type AdminOverview = Record<string, unknown>;
 

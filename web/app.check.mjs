@@ -164,19 +164,19 @@ await test('consumer course service and administrator boundary',async t=>{
     assert.match(page.html(), /头歌妈妈有了新版本/);
     assert.equal(page.reloads(),0);assert.equal(page.requests.some(({url})=>url==='/version'),false);
   });
-  await t.test('real support envelopes update recovery notice from active read to blocked without announcing a retry', async () => {
-    const source=job({status:'support',can_recover:true,result:{service_status:'support',total_homeworks:19,completed_homeworks:13}});
-    const child=job({id:'wire-recovery',status:'processing',can_recover:false,created_at:'2026-11-03T06:00:00Z',result:{service_status:'processing',total_homeworks:19,completed_homeworks:13},recovery:{original_id:'job-1',state:'reconciling',message:'正在只读复核上次提交结果，尚未开始新的提交'}});
-    let rows=[source];
-    const page=await app({'/api/jobs':()=>ok({jobs:rows}),'/api/jobs/job-1/recover':()=>{rows=[child,source];return ok(child);}});
+  await t.test('a stored unconfirmed record reads as an ordinary stopped task offering a retry', async () => {
+    const stopped=job({status:'uncertain',can_retry:true,error_code:'RESULT_UNCONFIRMED',result:{service_status:'support',total_homeworks:19,completed_homeworks:13}});
+    const child=job({id:'retried-child',status:'queued',can_retry:false,created_at:'2026-11-03T06:00:00Z'});
+    let rows=[stopped];
+    const page=await app({'/api/jobs':()=>ok({jobs:rows}),'/api/jobs/job-1/retry':()=>{rows=[child,stopped];return ok(child);}});
     page.get('[data-nav="progress"]').dispatch('click');await settle();
-    page.get('[data-job-recover="job-1"]').dispatch('click');page.get('[data-action="modal-confirm"]').dispatch('click');await settle();
-    assert.match(page.html(),/正在复核上次结果，还没有新的提交/);assert.match(page.html(),/13 \/ 19 份作业/);
-    rows=[{...child,status:'support',can_recover:true,recovery:{...child.recovery,state:'blocked',message:'复核未通过，未发送新的提交；可再次复核'}},source];await page.tick();
-    assert.match(page.html(),/复核没通过，没有重试/);assert.match(page.html(),/再次复核/);
-    assert.doesNotMatch(page.html(),/已提交复核，确认上次结果后继续剩余内容|已重新开始处理/);
-    page.get('[data-job-detail="wire-recovery"]').dispatch('click');
-    assert.match(page.html().slice(page.html().indexOf('role="dialog"')),/复核未通过/);
+    assert.match(page.html(),/需要跟进/);assert.match(page.html(),/13 \/ 19 份作业/);
+    assert.doesNotMatch(page.html(),/复核|请勿重复提交|data-job-recover|RESULT_UNCONFIRMED/);
+    page.get('[data-job-retry="job-1"]').dispatch('click');assert.match(page.html(),/接着做原来范围里没完成的必做内容/);
+    page.get('[data-action="modal-confirm"]').dispatch('click');await settle();
+    assert.match(page.html(),/已重新开始处理/);assert.match(page.html(),/data-job-detail="retried-child"/);
+    assert.equal(page.requests.filter(item=>item.url==='/api/jobs/job-1/retry').length,1);
+    assert.equal(page.requests.some(item=>item.url.includes('/recover')),false);
   });
   await t.test('new asset revisions stay visible until the user chooses to refresh', async () => {
     const page = await app({
@@ -224,35 +224,6 @@ await test('consumer course service and administrator boundary',async t=>{
     assert.equal(page.get('#ticket-body').selectionDirection,'backward');
     assert.doesNotMatch(page.html(),/尚未发送的私有内容/);assert.equal(page.reloads(),0);
   });
-  await t.test('uncertain service tasks expose a guarded recovery action and reuse the returned child', async () => {
-    const source=job({status:'support',can_retry:false,can_recover:true,result:{service_status:'support',total_homeworks:19,completed_homeworks:13}});
-    const child=job({id:'recovery-child',status:'waiting'}),pending=deferred();
-    const page=await app({'/api/jobs':()=>ok({jobs:[source]}),'/api/jobs/job-1/recover':()=>pending.promise});
-    page.get('[data-nav="progress"]').dispatch('click');await settle();
-    page.get('[data-job-recover="job-1"]').dispatch('click');assert.match(page.html(),/先核对上次做到哪/);
-    page.get('[data-action="modal-confirm"]').dispatch('click');
-    assert.match(page.html(),/正在复核/);pending.resolve(ok(child));await settle();
-    assert.match(page.html(),/已提交复核/);assert.match(page.html(),/data-job-detail="recovery-child"/);
-    assert.equal(page.requests.filter(item=>item.url==='/api/jobs/job-1/recover').length,1);
-    assert.equal(page.requests.some(item=>item.url==='/api/jobs'&&item.options.method==='POST'),false);
-  });
-  await t.test('recovery child keeps the visible source progress and reports blocked reconciliation', async () => {
-    const source=job({status:'support',can_retry:false,can_recover:true,result:{service_status:'support',total_homeworks:19,completed_homeworks:13}});
-    const child=job({id:'recovery-blocked',status:'failed',can_recover:true,result:{service_status:'support',total_homeworks:19,completed_homeworks:13},recovery:{original_id:'job-1',state:'blocked',message:'复核未通过，未发送新的提交；可再次复核'}});
-    const page=await app({'/api/jobs':()=>ok({jobs:[child,source]})});page.get('[data-nav="progress"]').dispatch('click');await settle();
-    assert.match(page.html(),/复核未通过/);assert.match(page.html(),/13 \/ 19 份作业/);assert.match(page.html(),/再次复核/);assert.doesNotMatch(page.html(),/服务处理中/);
-  });
-  await t.test('administrator recovery uses its dedicated endpoint and explains when the owner must log in', async () => {
-    const source=job({id:'admin-recovery',status:'failed',can_recover:true,owner_id:'platform:synthetic'});
-    const page=await app({'/api/auth/me':()=>ok({user,platform:{role:'admin',status:'active'}}),'/api/admin/jobs':()=>ok({items:[source]}),'/api/admin/jobs/admin-recovery/recover':()=>failure(409,'OWNER_LOGIN_REQUIRED','PRIVATE_SECRET')});
-    page.get('[data-nav="admin-overview"]').dispatch('click');await settle();
-    page.get('[data-admin-recover="admin-recovery"]').dispatch('click');
-    assert.match(page.html(),/该用户当前有效的登录连接/);
-    page.get('[data-action="modal-confirm"]').dispatch('click');await settle();
-    assert.match(page.html(),/请用户重新登录后再复核继续/);assert.doesNotMatch(page.html(),/PRIVATE_SECRET/);
-    assert.equal(page.requests.filter(item=>item.url==='/api/admin/jobs/admin-recovery/recover').length,1);
-    assert.equal(page.requests.some(item=>item.url==='/api/jobs/admin-recovery/recover'),false);
-  });
   await t.test('a closed operator job dialog never freezes that job in the list, and an idle operator page keeps refreshing', async () => {
     const context={user:{name:'示例同学'},course:{name:'示例课堂'},homework:{name:'示例作业'}};
     let rows=[job({id:'admin-live',status:'running',phase:'evaluating',owner_id:'platform:synthetic',context})];
@@ -273,8 +244,8 @@ await test('consumer course service and administrator boundary',async t=>{
   });
   await t.test('admin retry confirms readable target, serializes each task action and reloads the server child', async () => {
     const context={user:{name:'示例同学'},course:{name:'示例课堂'},homework:{name:'示例作业'}};
-    const source=job({id:'admin-source',status:'failed',can_retry:true,can_recover:false,owner_id:'platform:synthetic',context});
-    const child=job({id:'admin-child',status:'queued',can_retry:false,can_recover:false,owner_id:source.owner_id,context,created_at:'2026-11-03T12:00:00Z'}),pending=deferred();
+    const source=job({id:'admin-source',status:'failed',can_retry:true,owner_id:'platform:synthetic',context});
+    const child=job({id:'admin-child',status:'queued',can_retry:false,owner_id:source.owner_id,context,created_at:'2026-11-03T12:00:00Z'}),pending=deferred();
     let rows=[source];
     const page=await app({'/api/auth/me':()=>ok({user,platform:{role:'admin',status:'active'}}),'/api/admin/jobs':()=>ok({items:rows}),'/api/admin/jobs/admin-source/retry':()=>pending.promise});
     page.get('[data-nav="admin-overview"]').dispatch('click');await settle();
@@ -305,7 +276,7 @@ await test('consumer course service and administrator boundary',async t=>{
     assert.match(page.html(),/data-admin-job-detail="admin-source"/);assert.doesNotMatch(page.html(),/data-admin-retry=/);
   });
   await t.test('admin retry failures never announce acceptance or leak raw errors and point to the required next action', async () => {
-    const source=job({id:'admin-failed',status:'failed',can_retry:true,can_recover:false,owner_id:'platform:synthetic'});
+    const source=job({id:'admin-failed',status:'failed',can_retry:true,owner_id:'platform:synthetic'});
     const cases=[
       [()=>{throw new Error('PRIVATE_NETWORK_TRACE');},/暂未确认重新执行结果，请刷新任务记录后重试/],
       [()=>failure(409,'OWNER_LOGIN_REQUIRED','PRIVATE_OWNER_COOKIE'),/请用户重新登录后再重新执行/],
@@ -321,16 +292,16 @@ await test('consumer course service and administrator boundary',async t=>{
       assert.equal(page.get('[data-admin-retry="admin-failed"]').disabled,false);
     }
   });
-  await t.test('admin pending locks survive a concurrent capability change and block overlapping recover or stop actions', async () => {
-    const source=job({id:'admin-overlap',status:'failed',can_retry:true,can_recover:false,owner_id:'platform:synthetic'}),pending=deferred();
+  await t.test('admin pending locks survive a concurrent status change and block overlapping retry or stop actions', async () => {
+    const source=job({id:'admin-overlap',status:'failed',can_retry:true,owner_id:'platform:synthetic'}),pending=deferred();
     let rows=[source];
     const page=await app({'/api/auth/me':()=>ok({user,platform:{role:'admin',status:'active'}}),'/api/admin/jobs':()=>ok({items:rows}),'/api/admin/jobs/admin-overlap/retry':()=>pending.promise});
     page.get('[data-nav="admin-overview"]').dispatch('click');await settle();
     page.get('[data-admin-retry="admin-overlap"]').dispatch('click');page.get('[data-action="modal-confirm"]').dispatch('click');await settle();
-    rows=[{...source,can_retry:false,can_recover:true}];page.get('[data-action="admin-refresh"]').dispatch('click');await settle();
-    const recover=page.get('[data-admin-recover="admin-overlap"]');assert.equal(recover.disabled,true);recover.dispatch('click');
-    assert.doesNotMatch(page.html(),/确认复核并继续<\/button>/);
-    rows=[{...source,status:'running',can_retry:false,can_recover:false}];page.get('[data-action="admin-refresh"]').dispatch('click');await settle();
+    rows=[{...source,status:'uncertain',can_retry:true}];page.get('[data-action="admin-refresh"]').dispatch('click');await settle();
+    const retry=page.get('[data-admin-retry="admin-overlap"]');assert.equal(retry.disabled,true);retry.dispatch('click');
+    assert.doesNotMatch(page.html(),/确认重新执行<\/button>/);
+    rows=[{...source,status:'running',can_retry:false}];page.get('[data-action="admin-refresh"]').dispatch('click');await settle();
     page.get('[data-admin-show-jobs="service"]').dispatch('click');await settle();
     const stop=page.get('[data-admin-cancel="admin-overlap"]');assert.equal(stop.disabled,true);stop.dispatch('click');
     assert.doesNotMatch(page.html(),/确认停止<\/button>/);

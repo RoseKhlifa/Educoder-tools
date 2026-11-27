@@ -12,26 +12,19 @@ import (
 // This allowlist is the API boundary, not a UI hiding rule. Operator events,
 // provider failures, generated answers, usage and execution settings stay out.
 type consumerJob struct {
-	ID         string            `json:"id"`
-	Status     string            `json:"status"`
-	Phase      string            `json:"phase"`
-	Kind       string            `json:"kind"`
-	Request    jobs.Request      `json:"request"`
-	CreatedAt  time.Time         `json:"created_at"`
-	UpdatedAt  time.Time         `json:"updated_at"`
-	StartedAt  *time.Time        `json:"started_at,omitempty"`
-	Message    string            `json:"message"`
-	CanRetry   bool              `json:"can_retry"`
-	CanRecover bool              `json:"can_recover"`
-	CanCancel  bool              `json:"can_cancel"`
-	Result     consumerResult    `json:"result"`
-	Progress   *consumerProgress `json:"progress,omitempty"`
-	Recovery   *consumerRecovery `json:"recovery,omitempty"`
-}
-type consumerRecovery struct {
-	OriginalID string `json:"original_id"`
-	State      string `json:"state"`
-	Message    string `json:"message"`
+	ID        string            `json:"id"`
+	Status    string            `json:"status"`
+	Phase     string            `json:"phase"`
+	Kind      string            `json:"kind"`
+	Request   jobs.Request      `json:"request"`
+	CreatedAt time.Time         `json:"created_at"`
+	UpdatedAt time.Time         `json:"updated_at"`
+	StartedAt *time.Time        `json:"started_at,omitempty"`
+	Message   string            `json:"message"`
+	CanRetry  bool              `json:"can_retry"`
+	CanCancel bool              `json:"can_cancel"`
+	Result    consumerResult    `json:"result"`
+	Progress  *consumerProgress `json:"progress,omitempty"`
 }
 type consumerResult struct {
 	Attention          string             `json:"attention,omitempty"`
@@ -119,11 +112,12 @@ var consumerReasonCodes = map[string]string{
 	"progress_unavailable": "platform_unavailable", "course_sync_failed": "platform_unavailable",
 	"homework_sync_failed": "platform_unavailable",
 
-	// A write whose result we cannot prove: the user must reconcile, not replay.
-	"uncertain": "needs_review", "submission_uncertain": "needs_review",
-	"verification_unconfirmed": "needs_review", "assignment_verification_unconfirmed": "needs_review",
-	"assignment_roster_incomplete": "needs_review", "editor_changed": "needs_review",
-	"selftest_stream_unconfirmed": "needs_review",
+	// A result we could not confirm. Running the assignment again reads the
+	// platform first and skips what already passed, so it is simply retried.
+	"uncertain": "retry_later", "submission_uncertain": "retry_later",
+	"verification_unconfirmed": "retry_later", "assignment_verification_unconfirmed": "retry_later",
+	"assignment_roster_incomplete": "retry_later", "editor_changed": "retry_later",
+	"selftest_stream_unconfirmed": "retry_later", "recovery_recheck_required": "retry_later",
 
 	// Explicitly before formal evaluation: safe to run again.
 	"saved_not_submitted": "retry_later", "save_unverified": "retry_later", "save_error": "retry_later",
@@ -332,14 +326,7 @@ func consumerView(j jobs.Job, detail bool) consumerJob {
 	}
 	req := j.Request
 	req.IdempotencyKey = ""
-	out := consumerJob{ID: j.ID, Status: status, Phase: status, Kind: "service", Request: req, CreatedAt: j.CreatedAt, UpdatedAt: j.UpdatedAt, StartedAt: j.StartedAt, Message: message, CanRetry: canRetryJob(j), CanRecover: canRecoverJob(j), CanCancel: isRestartableRequest(req) && (j.Status == jobs.Queued || j.Status == jobs.Running)}
-	if recoveryOriginalID(j) != "" {
-		recovery := publicRecovery(j)
-		out.Recovery = &recovery
-		out.Message = recovery.Message
-		req.RecoveryOf = ""
-		out.Request = req
-	}
+	out := consumerJob{ID: j.ID, Status: status, Phase: status, Kind: "service", Request: req, CreatedAt: j.CreatedAt, UpdatedAt: j.UpdatedAt, StartedAt: j.StartedAt, Message: message, CanRetry: canRetryJob(j), CanCancel: isRestartableRequest(req) && (j.Status == jobs.Queued || j.Status == jobs.Running)}
 	if req.Mode == "collect_verified" {
 		out.Kind = "collection"
 	}
@@ -474,10 +461,20 @@ func firstAttentionReason(groups ...[]consumerItem) string {
 // did not finish". They are kept as a last resort, after any child cause.
 func specificReason(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "service_required", "execution_failed", "needs_service", "failed", "":
+	case "service_required", "execution_failed", "needs_service", "failed", "recovery_recheck_required", "":
 		return ""
 	}
 	return value
+}
+
+// retryResultState is the nested status shape shared by level, homework and
+// course results.
+type retryResultState struct {
+	Status     string             `json:"status"`
+	ReasonCode string             `json:"reason_code"`
+	Result     *retryResultState  `json:"result"`
+	Homeworks  []retryResultState `json:"homeworks"`
+	Levels     []retryResultState `json:"levels"`
 }
 
 func hasPublicContractConflict(result retryResultState) bool {
@@ -498,51 +495,4 @@ func hasPublicContractConflict(result retryResultState) bool {
 		}
 	}
 	return false
-}
-
-func publicRecovery(j jobs.Job) consumerRecovery {
-	state, message := "failed", "复核后仍未完成，已保留进度，可再次复核"
-	if j.Status == jobs.Queued {
-		state, message = "queued", "复核任务已排队，尚未开始新的提交"
-	} else if j.Status == jobs.Running {
-		switch j.Phase {
-		case "reconciling":
-			state, message = "reconciling", "正在只读复核上次提交结果，尚未开始新的提交"
-		case "loading", "starting":
-			state, message = "continuing", "复核已通过，正在继续剩余内容"
-		default:
-			state, message = "continuing", "复核已通过，正在继续剩余内容"
-		}
-	} else if j.Status == jobs.Succeeded {
-		state, message = "completed", "复核完成，剩余内容已继续处理"
-	} else if j.Status == jobs.Canceled {
-		state, message = "stopped", "复核任务已停止，已完成进度保留"
-	} else {
-		var result struct {
-			ReasonCode string `json:"reason_code"`
-		}
-		if json.Unmarshal(j.Result, &result) == nil && result.ReasonCode == "recovery_recheck_required" {
-			state, message = "blocked", "复核未通过，未发送新的提交；可再次复核"
-		}
-	}
-	return consumerRecovery{OriginalID: recoveryOriginalID(j), State: state, Message: message}
-}
-
-func recoveryOriginalID(j jobs.Job) string {
-	if j.Request.RecoveryOf != "" {
-		return j.Request.RecoveryOf
-	}
-	// v0.1.65 children predate RecoveryOf. The server-owned key and persisted
-	// reconciliation failure together identify their read-only recovery path.
-	id, ok := strings.CutPrefix(j.Request.IdempotencyKey, "recover-job:")
-	if !ok || len(id) != 32 || strings.Trim(id, "0123456789abcdef") != "" {
-		return ""
-	}
-	var result struct {
-		ReasonCode string `json:"reason_code"`
-	}
-	if json.Unmarshal(j.Result, &result) != nil || result.ReasonCode != "recovery_recheck_required" {
-		return ""
-	}
-	return id
 }

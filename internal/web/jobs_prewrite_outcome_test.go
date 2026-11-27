@@ -52,9 +52,9 @@ func TestKnownPreFormalHomeworkFailureAfterSubmissionRemainsRetryable(t *testing
 	}
 }
 
-func TestHomeworkOutcomeKeepsFormalBuildUnknownUncertain(t *testing.T) {
+func TestHomeworkOutcomeWithAnUnconfirmedBuildIsARetryableFailure(t *testing.T) {
 	outcome, err := homeworkOutcome(&taskservice.BatchResult{Status: "uncertain", ReasonCode: "submission_uncertain", TotalLevels: 2, CompletedLevels: 1, FailedLevels: 1}, errors.New("formal build response lost"))
-	if err != nil || outcome.Status != jobs.Uncertain || outcome.ErrorCode != "RESULT_UNCONFIRMED" {
+	if err != nil || outcome.Status != jobs.Failed || outcome.ErrorCode != "RESULT_UNCONFIRMED" {
 		t.Fatalf("outcome=%+v err=%v", outcome, err)
 	}
 }

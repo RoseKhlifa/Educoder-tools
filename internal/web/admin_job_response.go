@@ -15,9 +15,8 @@ import (
 
 type adminJobResponse struct {
 	jobs.AdminRecord
-	Context    AdminJobContext `json:"context"`
-	CanRecover bool            `json:"can_recover"`
-	CanRetry   bool            `json:"can_retry"`
+	Context  AdminJobContext `json:"context"`
+	CanRetry bool            `json:"can_retry"`
 }
 
 // Join verified platform identities and display labels on the server. The
@@ -41,7 +40,7 @@ func (s *Server) adminJobResponses(ctx context.Context, records []jobs.AdminReco
 	for i, record := range records {
 		c := deriveJobContext(record.Job)
 		c.Progress = adminJobProgress(record.Job, detail)
-		out[i] = adminJobResponse{AdminRecord: record, Context: c, CanRecover: canRecoverJob(record.Job), CanRetry: canRetryJob(record.Job)}
+		out[i] = adminJobResponse{AdminRecord: record, Context: c, CanRetry: canRetryJob(record.Job)}
 		remember(c.Course.Identifier, c.Course.Name, c.Homework.ID, c.Homework.Name)
 		for _, h := range c.Summary.AttentionHomeworks {
 			remember(h.CourseIdentifier, h.CourseName, h.ID, h.Name)

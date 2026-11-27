@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"strings"
 
 	"educoder-cli/internal/educoder"
 	"educoder-cli/internal/jobs"
@@ -26,60 +25,19 @@ func isRestartableRequest(req jobs.Request) bool {
 	return false
 }
 
-type retryResultState struct {
-	Status     string             `json:"status"`
-	ReasonCode string             `json:"reason_code"`
-	Result     *retryResultState  `json:"result"`
-	Homeworks  []retryResultState `json:"homeworks"`
-	Levels     []retryResultState `json:"levels"`
-}
-
-func resultNeedsReview(state retryResultState) bool {
-	if uncertainJobState(state.Status) || uncertainJobState(state.ReasonCode) {
-		return true
-	}
-	if state.Result != nil && resultNeedsReview(*state.Result) {
-		return true
-	}
-	for _, child := range state.Homeworks {
-		if resultNeedsReview(child) {
-			return true
-		}
-	}
-	for _, child := range state.Levels {
-		if resultNeedsReview(child) {
-			return true
-		}
-	}
-	return false
-}
-
-func uncertainJobState(state string) bool {
-	switch strings.ToLower(state) {
-	case "uncertain", "verification_unconfirmed", "submission_uncertain", "result_unconfirmed", "selftest_stream_unconfirmed", "unknown":
-		return true
-	}
-	return false
-}
-
+// canRetryJob offers a new run for any stopped whole-assignment job. A new run
+// reads the platform first and skips levels that are already at full score, so
+// a stop whose last result was not confirmed is simply run again; there is no
+// separate read-only recheck step (removed 2026-11-27).
 func canRetryJob(job jobs.Job) bool {
-	if !isRestartableRequest(job.Request) || uncertainJobState(job.ErrorCode) {
+	if !isRestartableRequest(job.Request) {
 		return false
 	}
 	switch job.Status {
-	case jobs.Failed, jobs.Canceled, jobs.Interrupted:
-	default:
-		return false
+	case jobs.Failed, jobs.Canceled, jobs.Interrupted, jobs.Uncertain:
+		return true
 	}
-	if len(job.Result) != 0 {
-		var state retryResultState
-		// A course may be marked failed while one of its children has an
-		// unconfirmed submission. Check those children before allowing replay.
-		if json.Unmarshal(job.Result, &state) != nil || resultNeedsReview(state) {
-			return false
-		}
-	}
-	return true
+	return false
 }
 
 func emptyRetryBody(r *http.Request) error {

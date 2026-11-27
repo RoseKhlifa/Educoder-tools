@@ -353,7 +353,7 @@ func TestAcceptedJobOutlivesHTTPRequest(t *testing.T) {
 	waitJob(t, m, "a", j.ID, Canceled)
 }
 
-func TestRunningCancellationAndMutationUncertainty(t *testing.T) {
+func TestRunningCancellationIsAnOrdinaryStopInEveryPhase(t *testing.T) {
 	for _, phase := range []string{"loading", "saving", "submitting", "evaluating"} {
 		t.Run(phase, func(t *testing.T) {
 			m := testManager(t, Config{Workers: 1})
@@ -368,28 +368,20 @@ func TestRunningCancellationAndMutationUncertainty(t *testing.T) {
 			if _, e := m.Cancel(context.Background(), "a", j.ID); e != nil {
 				t.Fatal(e)
 			}
-			want := Uncertain
-			if phase == "loading" {
-				want = Canceled
-			}
-			finished := waitJob(t, m, "a", j.ID, want)
-			if want == Uncertain && finished.ErrorCode != "submission_uncertain" {
-				t.Fatal(finished)
-			}
+			// A stop during submission is an ordinary cancellation the user can
+			// retry; the next run reads the platform before writing again.
+			waitJob(t, m, "a", j.ID, Canceled)
 		})
 	}
 }
 
-func TestPrewriteGraphicFailureIsRetryableNotUncertain(t *testing.T) {
+func TestFailureDuringSubmissionIsAnOrdinaryFailure(t *testing.T) {
 	m := testManager(t, Config{Workers: 1})
 	j := submit(t, m, "a", request("graphic"), func(_ context.Context, _ Request, report func(Event)) (Outcome, error) {
 		report(Event{Phase: "submitting", Message: "graphic"})
 		return Outcome{Result: json.RawMessage(`{"programming":{"evaluation":{"status":"saved_not_submitted"}}}`)}, errors.New("graphic file saved before formal build")
 	})
-	finished := waitJob(t, m, "a", j.ID, Failed)
-	if finished.ErrorCode != "saved_not_submitted" {
-		t.Fatalf("pre-write graphic result was not retryable: %+v", finished)
-	}
+	waitJob(t, m, "a", j.ID, Failed)
 }
 
 func TestTimeoutPanicAndSubsequentWork(t *testing.T) {
@@ -436,11 +428,7 @@ func TestRestartMarksInterruptedAndDoesNotReplay(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		want := Interrupted
-		if id == "writing" {
-			want = Uncertain
-		}
-		if j.Status != want || j.FinishedAt == nil {
+		if j.Status != Interrupted || j.FinishedAt == nil {
 			t.Fatalf("restart: %+v", j)
 		}
 		_, reused, e := m.Submit(context.Background(), "a", j.Request, func(context.Context, Request, func(Event)) (Outcome, error) {
@@ -511,7 +499,7 @@ func TestShutdownCancelsAndPersists(t *testing.T) {
 		t.Fatal(e)
 	}
 	m2 := testManager(t, Config{Path: path})
-	if got, e := m2.Get(context.Background(), "a", j.ID); e != nil || got.Status != Uncertain {
+	if got, e := m2.Get(context.Background(), "a", j.ID); e != nil || got.Status != Canceled {
 		t.Fatalf("shutdown running: %+v %v", got, e)
 	}
 	if got, e := m2.Get(context.Background(), "b", queued.ID); e != nil || got.Status != Canceled {

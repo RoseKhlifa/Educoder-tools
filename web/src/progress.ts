@@ -35,16 +35,24 @@ export const progressReasons: Record<string, string> = {
   deadline_passed: '已截止，不再处理',
   platform_busy: '头歌评测资源紧张，评测没能开始',
   platform_unavailable: '头歌暂时读不到内容',
-  needs_review: '上次提交结果没确认，需要先复核',
-  retry_later: '提交还没发出，可以直接重试',
+  retry_later: '这次结果没有确认，可以直接重试',
   answer_unavailable: '没能生成通过的答案',
   question_conflict: '题目要求和公开样例矛盾，等课程方核对',
   unsupported: '这部分暂不支持自动完成',
   quota_reached: '到了本次处理上限，剩下的可以再执行',
   paused_cooldown: '上次失败后没有新进展，已暂停重试',
   stopped: '已按请求停止，做好的保留',
-  interrupted: '处理被中断，要先核对已完成的部分',
+  interrupted: '处理被中断，可以直接重试',
 };
+
+// Retired categories that stored records can still carry. They are read as the
+// category that replaced them, so an old row never falls back to a vaguer line.
+const retiredReasons: Record<string, string> = { needs_review: 'retry_later', recovery_recheck_required: 'retry_later' };
+/** canonicalReason normalizes a stored code and resolves a retired category. */
+function canonicalReason(reason?: string): string {
+  const code = String(reason ?? '').trim().toLowerCase();
+  return retiredReasons[code] ?? code;
+}
 
 // historyReasons describe a settled earlier run. The live wording ends with an
 // instruction ("可以直接重试"), which applies only to the current record; a
@@ -53,8 +61,7 @@ const historyReasons: Record<string, string> = {
   service_followup: '当时要人工核对',
   platform_busy: '当时头歌评测资源紧张',
   platform_unavailable: '当时头歌读不到内容',
-  needs_review: '当时提交结果尚未确认',
-  retry_later: '当时提交还没发出',
+  retry_later: '当时结果没有确认',
   answer_unavailable: '当时没能生成通过的答案',
   quota_reached: '当时到了处理上限',
   paused_cooldown: '当时没有新进展，已暂停重试',
@@ -62,7 +69,7 @@ const historyReasons: Record<string, string> = {
   interrupted: '当时处理被中断',
 };
 function historyReasonText(reason?: string): string {
-  const code = String(reason ?? '').trim().toLowerCase();
+  const code = canonicalReason(reason);
   if (!code) return '';
   return historyReasons[code] ?? progressReasons[code] ?? historyReasons.service_followup;
 }
@@ -124,7 +131,7 @@ export function stageLabel(stage?: string): string {
 // reasonText keeps unknown codes out of the consumer page. The operator view
 // shows the code itself so a new state is still traceable without a deploy.
 export function reasonText(reason?: string, admin = false): string {
-  const code = String(reason ?? '').trim().toLowerCase();
+  const code = canonicalReason(reason);
   if (!code) return '';
   const label = progressReasons[code] ?? (admin ? internalReasonLabels[code] : undefined);
   if (label) return label;

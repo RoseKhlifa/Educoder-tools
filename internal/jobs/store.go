@@ -125,11 +125,6 @@ func recoverStore(ctx context.Context, db *sql.DB, now time.Time, retention time
 		s.Status = Interrupted
 		s.ErrorCode = "service_restarted"
 		s.Message = "Service restarted; this job was not replayed"
-		if s.mutating {
-			s.Status = Uncertain
-			s.ErrorCode = "submission_uncertain"
-			s.Message = "Service restarted after submission began; check the upstream result before retrying"
-		}
 		s.UpdatedAt = now
 		s.FinishedAt = &now
 		if err = writeStore(db, s, false); err != nil {

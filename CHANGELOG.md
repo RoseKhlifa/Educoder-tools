@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.175 - 2026-11-27
+
+- Remove the read-only recheck: every stopped assignment can simply be run again, because a new run reads the platform first and skips levels already at full score; a stop during submission, an unconfirmed level or an unknown earlier objective submission no longer blocks retry
+
 ## 0.1.174 - 2026-11-27
 
 - Let a recheck continue a homework whose terminal self-test ended unknown, since a terminal script is evaluated only after a completed receipt, so a stopped course no longer has neither retry nor a passing recheck

@@ -14,7 +14,7 @@ import (
 )
 
 func TestAdminJobRetryUsesTargetOwnersClientAndAuditsAcceptedAction(t *testing.T) {
-	ownerClient, adminClient := newRecoveryFixtureClient(), newRecoveryFixtureClient()
+	ownerClient, adminClient := newRetryFixtureClient(), newRetryFixtureClient()
 	var calls atomic.Int64
 	observations := make(chan struct {
 		owner   string
@@ -31,12 +31,12 @@ func TestAdminJobRetryUsesTargetOwnersClientAndAuditsAcceptedAction(t *testing.T
 		}{owner, req}
 		return jobs.Outcome{Status: jobs.Failed, ErrorCode: "model_error", Result: json.RawMessage(`{"status":"model_error","diagnostics":["operator-only-marker"]}`)}, nil
 	})
-	installRecoveryClient(t, f, f.aliceClient, ownerClient)
-	installRecoveryClient(t, f, f.adminClient, adminClient)
+	installRetryClient(t, f, f.aliceClient, ownerClient)
+	installRetryClient(t, f, f.adminClient, adminClient)
 	req := jobs.Request{Mode: "submit", Scope: "course", Course: "C"}
-	original := recoveryOriginal(t, f, req, jobs.Failed, `{"status":"generation_stalled"}`)
+	original := retryOriginal(t, f, req, jobs.Failed, `{"status":"generation_stalled"}`)
 	listed := f.request(t, f.adminClient, "GET", "/api/admin/jobs/"+original.ID, "")
-	if listed.StatusCode != http.StatusOK || !strings.Contains(listed.Body, `"can_retry":true`) || !strings.Contains(listed.Body, `"can_recover":false`) {
+	if listed.StatusCode != http.StatusOK || !strings.Contains(listed.Body, `"can_retry":true`) || strings.Contains(listed.Body, "can_recover") {
 		t.Fatalf("eligible admin job has no explicit retry capability: %s", listed.Body)
 	}
 	path := "/api/admin/jobs/" + original.ID + "/retry"
@@ -118,7 +118,7 @@ func TestAdminJobRetryRechecksOwnerBeforeQueuedExecution(t *testing.T) {
 				calls.Add(1)
 				return jobs.Outcome{Status: jobs.Succeeded}, nil
 			})
-			original := recoveryOriginal(t, f, jobs.Request{Mode: "submit", Scope: "course", Course: "C"}, jobs.Failed, `{}`)
+			original := retryOriginal(t, f, jobs.Request{Mode: "submit", Scope: "course", Course: "C"}, jobs.Failed, `{}`)
 			entered, release := make(chan struct{}, 2), make(chan struct{})
 			var once sync.Once
 			defer once.Do(func() { close(release) })
@@ -179,7 +179,7 @@ func TestAdminJobRetryRequiresActiveOwnerAndLiveSession(t *testing.T) {
 				calls.Add(1)
 				return jobs.Outcome{Status: jobs.Succeeded}, nil
 			})
-			original := recoveryOriginal(t, f, jobs.Request{Mode: "submit", Scope: "course", Course: "C"}, jobs.Failed, `{}`)
+			original := retryOriginal(t, f, jobs.Request{Mode: "submit", Scope: "course", Course: "C"}, jobs.Failed, `{}`)
 			code := "OWNER_LOGIN_REQUIRED"
 			switch state {
 			case "disabled":
@@ -215,7 +215,7 @@ func TestAdminAndConsumerRetryShareDurableIdempotency(t *testing.T) {
 				calls.Add(1)
 				return jobs.Outcome{Status: jobs.Failed}, nil
 			})
-			original := recoveryOriginal(t, f, jobs.Request{Mode: "submit", Scope: "homework", Course: "C", HomeworkID: 42}, jobs.Failed, `{}`)
+			original := retryOriginal(t, f, jobs.Request{Mode: "submit", Scope: "homework", Course: "C", HomeworkID: 42}, jobs.Failed, `{}`)
 			adminPath, consumerPath := "/api/admin/jobs/"+original.ID+"/retry", "/api/jobs/"+original.ID+"/retry"
 			paths := []struct {
 				client *http.Client
@@ -244,13 +244,49 @@ func TestAdminAndConsumerRetryShareDurableIdempotency(t *testing.T) {
 	}
 }
 
-func TestAdminJobRetryCapabilitiesRejectUnknownNestedAndUnsupportedRequests(t *testing.T) {
+// A stop whose last result was not confirmed is retried like any other stop:
+// the new run reads the platform first and skips levels already at full score.
+func TestStoppedJobsWithUnconfirmedResultsAreRetryable(t *testing.T) {
+	for _, tc := range []struct {
+		name, status, result string
+	}{
+		{"unknown nested level", jobs.Failed, `{"homeworks":[{"result":{"levels":[{"status":"uncertain","reason_code":"selftest_stream_unconfirmed"}]}}]}`},
+		{"uncertain job", jobs.Uncertain, `{}`},
+		{"old recheck child", jobs.Failed, `{"status":"verification_unconfirmed","reason_code":"recovery_recheck_required"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int64
+			f := newPlatformHTTPFixture(t, func(context.Context, EducoderClient, string, jobs.Request, func(jobs.Event)) (jobs.Outcome, error) {
+				calls.Add(1)
+				return jobs.Outcome{Status: jobs.Succeeded}, nil
+			})
+			original := retryOriginal(t, f, jobs.Request{Mode: "submit", Scope: "course", Course: "C"}, tc.status, tc.result)
+			if !canRetryJob(original) {
+				t.Fatalf("stopped job is not retryable: %+v", original)
+			}
+			response := f.request(t, f.adminClient, "POST", "/api/admin/jobs/"+original.ID+"/retry", "{}")
+			if response.StatusCode != http.StatusAccepted {
+				t.Fatalf("retry refused: %d %s", response.StatusCode, response.Body)
+			}
+			var accepted adminJobResponse
+			if json.Unmarshal([]byte(response.Body), &struct {
+				Data *adminJobResponse `json:"data"`
+			}{Data: &accepted}) != nil || accepted.ID == "" {
+				t.Fatalf("retry response has no job: %s", response.Body)
+			}
+			f.waitJob(t, accepted.ID)
+			if calls.Load() != 1 {
+				t.Fatalf("retry ran %d times", calls.Load())
+			}
+		})
+	}
+}
+
+func TestAdminJobRetryCapabilitiesRejectCompletedAndUnsupportedRequests(t *testing.T) {
 	for _, tc := range []struct {
 		name, status, result string
 		request              jobs.Request
 	}{
-		{"unknown nested", jobs.Failed, `{"homeworks":[{"result":{"levels":[{"status":"submission_uncertain"}]}}]}`, jobs.Request{Mode: "submit", Scope: "course", Course: "C"}},
-		{"unknown result", jobs.Uncertain, `{}`, jobs.Request{Mode: "submit", Scope: "course", Course: "C"}},
 		{"completed", jobs.Succeeded, `{}`, jobs.Request{Mode: "submit", Scope: "course", Course: "C"}},
 		{"exercise", jobs.Failed, `{}`, jobs.Request{Mode: "submit", Scope: "exercise", Course: "C", ExerciseID: 4}},
 		{"collection", jobs.Failed, `{}`, jobs.Request{Mode: "collect_verified"}},
@@ -262,14 +298,14 @@ func TestAdminJobRetryCapabilitiesRejectUnknownNestedAndUnsupportedRequests(t *t
 				calls.Add(1)
 				return jobs.Outcome{Status: jobs.Succeeded}, nil
 			})
-			original := recoveryOriginal(t, f, tc.request, tc.status, tc.result)
+			original := retryOriginal(t, f, tc.request, tc.status, tc.result)
 			response := f.request(t, f.adminClient, "POST", "/api/admin/jobs/"+original.ID+"/retry", "{}")
 			if response.StatusCode != http.StatusConflict || !strings.Contains(response.Body, "JOB_NOT_RETRYABLE") || calls.Load() != 0 {
 				t.Fatalf("protected task retried: %d %s", response.StatusCode, response.Body)
 			}
 			views, err := f.app.adminJobResponses(context.Background(), []jobs.AdminRecord{{Job: original, OwnerID: f.alice.Owner()}}, true)
-			if err != nil || len(views) != 1 || views[0].CanRetry || views[0].CanRecover != canRecoverJob(original) {
-				t.Fatalf("admin capabilities changed recovery boundary: %+v %v", views, err)
+			if err != nil || len(views) != 1 || views[0].CanRetry {
+				t.Fatalf("admin capabilities offered retry for a protected task: %+v %v", views, err)
 			}
 			wire, err := json.Marshal(views[0])
 			if err != nil || !strings.Contains(string(wire), `"can_retry":false`) {
