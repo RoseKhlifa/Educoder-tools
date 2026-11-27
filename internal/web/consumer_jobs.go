@@ -61,9 +61,14 @@ type consumerAutoRetry struct {
 // levels share this shape so the consumer and operator views can render the
 // same component for a live job and for a finished record.
 type consumerItem struct {
-	Position        int            `json:"position,omitempty"`
-	Title           string         `json:"title"`
-	CourseName      string         `json:"course_name,omitempty"`
+	Position   int    `json:"position,omitempty"`
+	Title      string `json:"title"`
+	CourseName string `json:"course_name,omitempty"`
+	// Course and HomeworkID identify an assignment entry so the page can
+	// update that assignment's progress the moment the job ends, instead of
+	// waiting for a fresh read of the whole course.
+	Course          string         `json:"course,omitempty"`
+	HomeworkID      int64          `json:"homework_id,omitempty"`
 	Status          string         `json:"status"`
 	Reason          string         `json:"reason,omitempty"`
 	TotalLevels     int            `json:"total_levels,omitempty"`
@@ -80,6 +85,8 @@ type summaryItem struct {
 	Position   int    `json:"position"`
 	Title      string `json:"title"`
 	CourseName string `json:"course_name"`
+	Course     string `json:"course"`
+	HomeworkID int64  `json:"homework_id"`
 	Status     string `json:"status"`
 	ReasonCode string `json:"reason_code"`
 	Result     *struct {
@@ -215,7 +222,10 @@ func consumerItems(items []summaryItem, parentStatus string, detail bool) []cons
 		if len(out) >= 100 {
 			break
 		}
-		entry := consumerItem{Position: item.Position, Title: adminContextText(item.Title, 200), CourseName: adminContextText(item.CourseName, 200), Status: consumerStatus(item.Status, parentStatus)}
+		entry := consumerItem{Position: item.Position, Title: adminContextText(item.Title, 200), CourseName: adminContextText(item.CourseName, 200), Status: consumerStatus(item.Status, parentStatus), HomeworkID: max(item.HomeworkID, 0)}
+		if educoderIdentifier(item.Course) == nil {
+			entry.Course = item.Course
+		}
 		reason := item.ReasonCode
 		if batch := item.Result; batch != nil {
 			if batch.ReasonCode != "" {

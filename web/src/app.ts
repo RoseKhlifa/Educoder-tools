@@ -124,10 +124,14 @@ const courseCache = new CourseDetailsCache({
 function handleCourseCacheChange(event: CourseCacheEvent): void {
   if (!state.user || !state.courses.some(course => course.identifier === event.identifier)) return;
   if (event.kind === 'homeworks') {
-    homeworkSync.set(event.identifier, {
-      state: event.state === 'success' ? 'ready' : event.state,
-      hasPreviousData: event.hasPreviousData || Boolean(courseCache.peekHomeworks(event.identifier)),
-    });
+    // A patch republishes data the page already had. It is not a read, so it
+    // must neither claim a read finished nor clear a failed read's notice.
+    if (!event.patched) {
+      homeworkSync.set(event.identifier, {
+        state: event.state === 'success' ? 'ready' : event.state,
+        hasPreviousData: event.hasPreviousData || Boolean(courseCache.peekHomeworks(event.identifier)),
+      });
+    }
     state.selected = state.selected.filter(id => courseSelectable(id));
   }
   const dialog = courseDialog;
@@ -140,8 +144,10 @@ function handleCourseCacheChange(event: CourseCacheEvent): void {
       const cached = courseCache.peekExercises(event.identifier);
       if (cached) { dialog.exercises = cached.data; dialog.updatedAt.exercise = cached.updatedAt; }
     }
-    dialog.loading[tab] = event.state === 'loading';
-    dialog.failed[tab] = event.state === 'error';
+    if (!event.patched) {
+      dialog.loading[tab] = event.state === 'loading';
+      dialog.failed[tab] = event.state === 'error';
+    }
     renderCourseDialog();
   } else if (!state.modal) render();
 }
@@ -604,8 +610,9 @@ function courseSquares(course: Course): string {
 /**
  * courseFootState is the one line under a course's squares. Its precedence is
  * deliberate: live work first, then whether the list can be trusted, and only
- * then a completion claim. A course never says "done" while a read that could
- * contradict it is still in flight.
+ * then a completion claim. A read in flight hides nothing — the page states
+ * what it already knows and lets the quiet re-read correct it — but a failed
+ * read still says the figures are the previous ones.
  */
 function courseFootState(course: Course, summary: HomeworkSummary): string {
   const cached = courseCache.peekHomeworks(course.identifier);
@@ -617,10 +624,7 @@ function courseFootState(course: Course, summary: HomeworkSummary): string {
   if (running) return `<span class="state run"><span class="pulse"></span>正在处理${tally}</span>`;
   if (matching.some(job => jobActions.has(job.id))) return '<span class="state run"><span class="pulse"></span>正在更新</span>';
   if (!cached) return `<span class="state muted">${summary.sync === 'error' ? '没能同步' : '正在同步作业…'}</span>`;
-  // A read that could contradict the list is still in flight, so nothing here
-  // may claim the course is finished yet.
-  if (summary.sync === 'loading') return `<span class="state">正在核对${tally}</span>`;
-  if (summary.stale) return `<span class="state">${summary.sync === 'error' ? '显示上次结果' : '正在核对'}${tally}</span>`;
+  if (summary.sync === 'error') return `<span class="state">显示上次结果${tally}</span>`;
   if (!shixun.length) return `<span class="state muted">${summary.commonPending > 0 ? '图文作业待提交' : '无需处理'}</span>`;
   if (summary.runnableCount === 0) {
     if (summary.commonPending > 0) return `<span class="state">图文作业待提交${tally}</span>`;
@@ -695,7 +699,10 @@ function renderCourseCard(course: Course): string {
   const shixun = cached ? cached.data.filter(homework => homework.homeworkKind !== 'common') : [];
   const selectableCourse = courseSelectable(course.identifier);
   const selected = state.selected.includes(course.identifier);
-  const allDone = Boolean(cached && shixun.length > 0 && summary.runnableCount === 0 && !summary.stale && summary.sync === 'ready');
+  // A read still in flight does not unseal a finished course: the figures on
+  // the card are the ones the page has, and a failed read is the one case
+  // where they may already be out of date.
+  const allDone = Boolean(cached && shixun.length > 0 && summary.runnableCount === 0 && summary.sync !== 'error');
   // The box stays on the card even when the course cannot be scheduled: a
   // disabled box says "not this one, not now", where a missing box would read
   // as if selection did not exist.
@@ -1378,8 +1385,63 @@ function jobDetailContent(job: AnswerJob, historical: boolean): string {
   return renderServiceDetail(job, state.courses, archived, jobActions.get(job.id));
 }
 function currentJob(id: string): AnswerJob | undefined { return consumerCurrentJobs().find(job => job.id === id); }
+/**
+ * jobVerifiedAssignments reads a settled job's own result as course evidence:
+ * the assignments it finished, with the level count it reported for each. The
+ * job already verified those scores upstream, so the course lists can show
+ * them without waiting for the classroom to be read again.
+ */
+function jobVerifiedAssignments(job: AnswerJob): Map<string, Map<number, number>> {
+  const assignments = new Map<string, Map<number, number>>();
+  if (job.request.mode !== 'submit' || job.request.scope === 'exercise' || pendingJob(job)) return assignments;
+  const jobCourse = typeof job.request.course === 'string' ? job.request.course : '';
+  const add = (course: string, id: unknown, levels: unknown): void => {
+    const homeworkID = Number(id);
+    if (!course || !Number.isSafeInteger(homeworkID) || homeworkID <= 0) return;
+    const forCourse = assignments.get(course) ?? new Map<number, number>();
+    forCourse.set(homeworkID, count(levels));
+    assignments.set(course, forCourse);
+  };
+  if (job.request.scope === 'homework') {
+    // A single-assignment job has no assignment list: it is the assignment.
+    if (serviceStatus(job) === 'completed') add(jobCourse, job.request.homework_id, record(job.result).total_levels);
+    return assignments;
+  }
+  for (const item of jobHomeworks(job)) {
+    if (progressTone(item.status) !== 'completed') continue;
+    add(typeof item.course === 'string' ? item.course : jobCourse, item.homework_id, item.total_levels);
+  }
+  return assignments;
+}
+/**
+ * applyJobResultToCourses marks the assignments a job verified as complete in
+ * the cached course lists. Only a finished required count is written: the
+ * server's own list stays the source of everything else, and the forced read
+ * that follows replaces this patch with the classroom's own answer.
+ */
+function applyJobResultToCourses(job: AnswerJob): void {
+  for (const [course, assignments] of jobVerifiedAssignments(job)) {
+    courseCache.patchHomeworks(course, homeworks => {
+      let changed = false;
+      const patched = homeworks.map(homework => {
+        const levels = assignments.get(homework.id);
+        if (levels === undefined || homework.homeworkKind === 'common') return homework;
+        // The classroom's own level total wins; the job's count is a fallback
+        // for a list that never carried one.
+        const required = homework.requiredChallengeCount ?? levels;
+        if (homework.requiredProgressKnown === true && homework.requiredChallengeCount === required && homework.finishedRequiredChallengeCount === required) return homework;
+        changed = true;
+        return { ...homework, requiredProgressKnown: true, requiredChallengeCount: required, finishedRequiredChallengeCount: required };
+      });
+      return changed ? patched : undefined;
+    });
+  }
+}
 function refreshJobCourseCache(job: AnswerJob, refreshed = new Set<string>()): void {
   if (job.request.scope === 'exercise') return;
+  // What the job verified is known now. Publish it first, then re-read the
+  // course quietly: the page never waits on a second look to show the counts.
+  applyJobResultToCourses(job);
   const identifiers = job.request.scope === 'all' ? state.courses.map(course => course.identifier) : job.request.course ? [job.request.course] : [];
   for (const id of identifiers) {
     if (refreshed.has(id)) continue;

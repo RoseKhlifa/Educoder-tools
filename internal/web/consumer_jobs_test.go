@@ -240,3 +240,17 @@ func TestBusyBackgroundCollectionDoesNotStarveAnswerWorkers(t *testing.T) {
 	}
 	t.Fatal("an additional background scan occupied the free answer worker while another scan waited on upstream")
 }
+
+// Each assignment entry names its course and assignment, so the page can mark
+// it finished the moment the job ends instead of re-reading the course.
+func TestConsumerHomeworkItemsCarryTheirAssignmentIdentity(t *testing.T) {
+	job := jobs.Job{ID: "j", Status: jobs.Succeeded, Request: jobs.Request{Mode: "submit", Scope: "course", Course: "5m9itqyf"},
+		Result: json.RawMessage(`{"status":"passed","homeworks":[{"course":"5m9itqyf","homework_id":3998852,"title":"Pandas数据结构创建","status":"passed","result":{"total_levels":4,"completed_levels":4}},{"course":"bad course!","homework_id":-1,"title":"x","status":"skipped"}]}`)}
+	items := toConsumerJob(job).Result.Homeworks
+	if len(items) != 2 || items[0].Course != "5m9itqyf" || items[0].HomeworkID != 3998852 || items[0].Status != "completed" || items[0].TotalLevels != 4 {
+		t.Fatalf("assignment identity missing: %+v", items)
+	}
+	if items[1].Course != "" || items[1].HomeworkID != 0 {
+		t.Fatalf("invalid identity was published: %+v", items[1])
+	}
+}

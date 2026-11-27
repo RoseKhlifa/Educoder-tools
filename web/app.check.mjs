@@ -567,7 +567,7 @@ await test('consumer course service and administrator boundary',async t=>{
     assert.equal(reads, 2, 'observing a new terminal version requires a read started afterwards');
     assert.match(page.html(), /data-stat="followup">1</);
     const pendingRow = page.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/article>/)?.[0] || '';
-    assert.match(pendingRow, /正在核对|正在更新/); assert.doesNotMatch(pendingRow, /badge completed|>暂无待办</);
+    assert.match(pendingRow, /无需处理|全部完成/); assert.doesNotMatch(pendingRow, /正在核对|badge completed|>暂无待办</);
     afterObservation.resolve(ok([])); await settle();
     assert.match(page.html(), /data-stat="followup">0</);
     assert.match(page.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/article>/)?.[0] || '', /无需处理|全部完成/);
@@ -587,7 +587,7 @@ await test('consumer course service and administrator boundary',async t=>{
     row = running.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/article>/)?.[0] || '';
     assert.match(row, /正在处理/); assert.doesNotMatch(row, /badge completed|待跟进/);
   });
-  await t.test('cached zero with historical support cannot claim completion during a refresh or after its failure', async () => {
+  await t.test('cached zero stays readable during a refresh and says so once that refresh fails', async () => {
     const refresh = deferred(); let reads = 0;
     const page = await app({
       '/api/jobs': () => ok({ jobs: [job({ status: 'support', result: { service_status: 'support' } })] }),
@@ -596,7 +596,8 @@ await test('consumer course service and administrator boundary',async t=>{
     const row = () => page.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/article>/)?.[0] || '';
     assert.match(row(), /data-pending="0"[\s\S]*?(?:无需处理|全部完成)/);
     page.get('[data-action="refresh"]').dispatch('click'); await settle();
-    assert.match(row(), /正在核对|正在更新/); assert.doesNotMatch(row(), /badge completed|>可安排</);
+    // A read in flight must not hide the counts the page already holds.
+    assert.match(row(), /无需处理|全部完成/); assert.doesNotMatch(row(), /正在核对|badge completed|>可安排</);
     refresh.resolve(failure(503, 'UPSTREAM', 'private error')); await settle();
     assert.match(row(), /data-pending="0"[^>]*data-stale="true"|data-stale="true"[^>]*data-pending="0"/); assert.match(row(), /显示上次结果/);
     assert.doesNotMatch(row(), /badge completed|>已完成<|private error/);
@@ -641,6 +642,63 @@ await test('consumer course service and administrator boundary',async t=>{
     jobStep = 1; homeworkStep = 1; await page.tick();
     assert.match(page.html(), /data-pending="0"/); assert.match(page.html(), /无需处理|全部完成/);
     assert.ok(page.requests.filter(item => item.url === '/api/courses/COURSE_A/homeworks').length >= 2);
+  });
+  await t.test('a finished job marks its own assignments complete before the quiet re-read answers', async () => {
+    const refresh = deferred(); let jobStep = 0, reads = 0;
+    const running = job({ id: 'verified-counts', status: 'running', request: { scope: 'course', course: 'COURSE_A', mode: 'submit' }, result: { service_status: 'processing' } });
+    const done = { ...running, status: 'completed', updated_at: '2026-10-31T02:00:00Z', result: { service_status: 'completed', total_homeworks: 2, completed_homeworks: 2,
+      homeworks: [{ course: 'COURSE_A', homework_id: 1, title: '第一份', status: 'completed', total_levels: 3 }, { course: 'COURSE_A', homework_id: 2, title: '第二份', status: 'passed', total_levels: 4 }] } };
+    const page = await app({
+      '/api/jobs': () => ok({ jobs: [jobStep === 0 ? running : done] }),
+      '/api/courses/COURSE_A/homeworks': () => ++reads === 1 ? ok([
+        { id: 1, name: '第一份', requiredProgressKnown: true, requiredChallengeCount: 3, finishedRequiredChallengeCount: 1 },
+        { id: 2, name: '第二份', requiredProgressKnown: false },
+      ]) : refresh.promise,
+      '/api/courses/COURSE_B/homeworks': () => ok([]),
+    });
+    const row = () => page.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/article>/)?.[0] || '';
+    assert.match(row(), /data-pending="2"/);
+    jobStep = 1; await page.tick();
+    // The job verified these scores, so the card states them at once and the
+    // forced re-read goes out quietly behind it.
+    assert.match(row(), /data-pending="0"/); assert.match(row(), /全部完成 · 2 份/);
+    assert.doesNotMatch(row(), /正在核对|正在同步作业/);
+    assert.equal(page.get('[data-select-course="COURSE_A"]').disabled, true);
+    assert.equal(reads, 2, 'the course is still re-read after the patch');
+    page.get('[data-course-detail="COURSE_A"]').dispatch('click');
+    const sheet = page.html().slice(page.html().indexOf('role="dialog"'));
+    assert.match(sheet, /3 \/ 3 关/); assert.match(sheet, /4 \/ 4 关/); assert.doesNotMatch(sheet, /关卡待核验/);
+    page.get('[data-action="close-modal"]').dispatch('click');
+    refresh.resolve(ok([
+      { id: 1, name: '第一份', requiredProgressKnown: true, requiredChallengeCount: 3, finishedRequiredChallengeCount: 3 },
+      { id: 2, name: '第二份', requiredProgressKnown: true, requiredChallengeCount: 4, finishedRequiredChallengeCount: 4 },
+    ])); await settle();
+    assert.match(row(), /data-pending="0"/); assert.match(row(), /全部完成 · 2 份/);
+    assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
+  });
+  await t.test('a finished single-assignment job completes that one assignment from its own result', async () => {
+    const refresh = deferred(); let jobStep = 0, reads = 0;
+    const request = { scope: 'homework', course: 'COURSE_A', homework_id: 7, mode: 'submit' };
+    const running = job({ id: 'one-homework', status: 'running', request, result: { service_status: 'processing' } });
+    const done = { ...running, status: 'succeeded', updated_at: '2026-10-31T02:00:00Z', result: { service_status: 'completed', total_levels: 5 } };
+    const page = await app({
+      '/api/jobs': () => ok({ jobs: [jobStep === 0 ? running : done] }),
+      '/api/courses/COURSE_A/homeworks': () => ++reads === 1 ? ok([
+        { id: 7, name: '这一份', requiredProgressKnown: true, requiredChallengeCount: 5, finishedRequiredChallengeCount: 2 },
+        { id: 8, name: '另一份', requiredProgressKnown: true, requiredChallengeCount: 2, finishedRequiredChallengeCount: 0 },
+      ]) : refresh.promise,
+      '/api/courses/COURSE_B/homeworks': () => ok([]),
+    });
+    const row = () => page.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/article>/)?.[0] || '';
+    assert.match(row(), /data-pending="2"/);
+    jobStep = 1; await page.tick();
+    // Only the job's own assignment is marked; the untouched one still counts.
+    assert.match(row(), /data-pending="1"/); assert.match(row(), /还差 1 份 · 1 \/ 2 份/);
+    assert.doesNotMatch(row(), /正在核对|全部完成/);
+    assert.equal(reads, 2);
+    refresh.resolve(failure(503, 'UPSTREAM', 'private refresh trace')); await settle();
+    // The quiet re-read failed, so the patched figures stay and say so.
+    assert.match(row(), /显示上次结果 · 1 \/ 2 份/); assert.doesNotMatch(row(), /private refresh trace/);
   });
   await t.test('a terminal refresh updates an already open course dialog and keeps its active tab focused', async () => {
     let complete = false;
@@ -699,14 +757,15 @@ await test('consumer course service and administrator boundary',async t=>{
       assert.equal(page.requests.some(item => item.options.method === 'POST'), false);
     } finally { Date.now = actualNow; }
   });
-  await t.test('expired facts remain explicitly updating and failed automatic refreshes respect cooldown before recovery', async () => {
+  await t.test('expired facts stay readable while they are renewed and failed automatic refreshes respect cooldown before recovery', async () => {
     const actualNow = Date.now; let now = actualNow(); Date.now = () => now;
     const refresh = deferred(); let reads = 0;
     try {
       const page = await app({ '/api/courses/COURSE_A/homeworks': () => ++reads === 1 ? ok([]) : reads === 2 ? refresh.promise : ok([]), '/api/courses/COURSE_B/homeworks': () => ok([]) });
       now += 600_001; await page.tick();
       const row = () => page.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/article>/)?.[0] || '';
-      assert.equal(reads, 2); assert.match(row(), /正在核对|正在更新/); assert.match(row(), /data-pending="0"[^>]*data-stale="true"|data-stale="true"[^>]*data-pending="0"/);
+      assert.equal(reads, 2); assert.match(row(), /无需处理|全部完成/); assert.doesNotMatch(row(), /正在核对/);
+      assert.match(row(), /data-pending="0"[^>]*data-stale="true"|data-stale="true"[^>]*data-pending="0"/);
       assert.doesNotMatch(row(), /badge completed|>暂无待办<|>已完成</);
       refresh.resolve(failure(503, 'UPSTREAM', 'private refresh trace')); await settle();
       assert.match(row(), /显示上次结果/); assert.doesNotMatch(row(), /badge completed|private refresh trace/);

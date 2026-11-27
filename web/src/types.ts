@@ -200,6 +200,11 @@ export interface ProgressItem {
   position?: number;
   title?: string;
   course_name?: string;
+  // course and homework_id name the assignment a row belongs to when the
+  // server knows them, so a finished job's own result can update the course
+  // lists the page already holds.
+  course?: string;
+  homework_id?: number;
   status?: string;
   reason?: string;
   total_levels?: number;

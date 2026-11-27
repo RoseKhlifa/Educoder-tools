@@ -102,6 +102,25 @@ await test('course details cache keeps course reads within the current browser s
     assert.deepEqual(homeworkEvents.map(event => event.state), ['loading', 'success', 'loading', 'success']);
     assert.equal(homeworkEvents.filter(event => event.state === 'loading').length, 2);
   });
+  await t.test('an in-place patch republishes a cached list as fresh without reading the course again', async () => {
+    let now = 100;
+    const events = [], h = harness({ clock: () => now, ttlMs: 50, onChange: event => events.push(event) });
+    assert.equal(h.cache.patchHomeworks('A', () => homework('no entry yet')), false, 'a patch cannot invent an absent list');
+    const first = h.cache.getHomeworks('A'); await tick();
+    h.calls[0].resolve(homework('待完成')); await first;
+    now = 200;
+    assert.equal(h.cache.peekHomeworks('A').stale, true);
+    events.length = 0;
+    assert.equal(h.cache.patchHomeworks('A', () => undefined), false, 'an updater that changes nothing publishes nothing');
+    assert.deepEqual(events, []);
+    assert.equal(h.cache.patchHomeworks('A', list => [{ ...list[0], name: '已完成' }]), true);
+    const patched = h.cache.peekHomeworks('A');
+    assert.equal(patched.data[0].name, '已完成'); assert.equal(patched.stale, false, 'a patch keeps the entry fresh');
+    assert.equal(patched.requestedAt, 100, 'a patch is not a read, so it never moves the read time');
+    assert.deepEqual(events.map(event => [event.kind, event.state, event.patched]), [['homeworks', 'success', true]]);
+    assert.equal(h.calls.length, 1, 'a patch reaches no loader');
+    await h.finish();
+  });
   await t.test('clearing a prefetched forced refresh never starts its follow-up in the next session', async () => {
     const h = harness();
     h.cache.prefetch(['A']); await tick();

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.178 - 2026-11-27
+
+- Show a finished job on the course page at once: job results name each assignment, the page marks the assignments the job verified as complete immediately, and a re-read in flight no longer replaces known progress with a checking label
+
 ## 0.1.177 - 2026-11-27
 
 - Run an editor self-test that did not finish once more with the same code before stopping, and retry automatically every stop the platform caused, including a save or self-test whose result never arrived, not only refused runtimes

@@ -17,6 +17,8 @@ export interface CourseCacheEvent {
   state: 'loading' | 'success' | 'error';
   updatedAt?: number;
   hasPreviousData: boolean;
+  /** True when a cached list was rewritten in place instead of read again. */
+  patched?: boolean;
 }
 
 export interface CachedCourseDetails<T> {
@@ -112,6 +114,25 @@ export class CourseDetailsCache {
 
   peekExercises(identifier: string): CachedCourseDetails<Exercise> | undefined {
     return this.peek('exercises', identifier) as CachedCourseDetails<Exercise> | undefined;
+  }
+
+  /**
+   * patchHomeworks rewrites a cached list from evidence the page already holds,
+   * such as the verified result of a job that just finished. The updater
+   * returns the new list, or nothing when it changes none of it. The entry
+   * stays fresh so the new counts are shown at once, while `requestedAt` keeps
+   * naming the read the data came from: a patch is not a read of its own.
+   */
+  patchHomeworks(identifier: string, update: (homeworks: Homework[]) => Homework[] | undefined): boolean {
+    const key = `homeworks:${identifier}`;
+    const entry = this.session.entries.get(key);
+    if (!entry) return false;
+    const data = update(entry.data as Homework[]);
+    if (!data) return false;
+    const updatedAt = this.clock();
+    this.session.entries.set(key, { data, requestedAt: entry.requestedAt, updatedAt });
+    this.onChange?.({ kind: 'homeworks', identifier, state: 'success', updatedAt, hasPreviousData: true, patched: true });
+    return true;
   }
 
   prefetch(identifiers: string[]): void {
