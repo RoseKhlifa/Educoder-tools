@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.171 - 2026-11-27
+
+- Evaluate answers read from classmates full-score editors before calling the model, after verified, operator and imported answers, so a stored observed answer is no longer ignored while the model guesses
+
 ## 0.1.170 - 2026-11-23
 
 - Keep only the answer files writable when an editor mixes languages, and give the model the other files, such as the saved page a scraping level parses, as read-only reference instead of making it rewrite them

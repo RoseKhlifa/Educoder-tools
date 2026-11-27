@@ -670,6 +670,13 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			}
 		}
 	}
+	if len(candidates) == 0 && snap.EditMode != "terminal" {
+		for _, c := range allCandidates {
+			if observedFullScoreAnswer(c) {
+				candidates = append(candidates, c)
+			}
+		}
+	}
 	if len(candidates) == 0 && snap.EditMode != "terminal" && req.Mode != ModeGenerateOnly && len(snap.PublicTests) > 0 {
 		for _, c := range allCandidates {
 			if legacyNewlineOnlyRejection(c) || runtimeOnlyRejected[c.FilesHash] || legacyEmptyOutputRejection(snap, c, ref) {
@@ -1476,6 +1483,21 @@ func formalRuntimeStartupFeedback(feedback string) bool {
 		}
 	}
 	return true
+}
+
+// observedFullScoreAnswer reports a source read from a classmate's editor on a
+// level the platform showed at full score (taskservice/collection.go). It is
+// stored unverified because the read API cannot prove those bytes are the
+// submitted ones, but it is far stronger evidence than a cold model guess, and
+// a programming evaluation is score-safe. So it is evaluated before paying for
+// generation, after verified, operator and imported answers; a failure feeds
+// the model like any other bank candidate, and a pass promotes it.
+//
+// Before this, these answers were stored but never tried: on 2026-11-27 a
+// level whose printf format only the classmates' code revealed failed 15 model
+// guesses across three students while two full-score answers sat in the bank.
+func observedFullScoreAnswer(c questionbank.Candidate) bool {
+	return c.Source == "collection:platform_observed" && (c.Status == "candidate" || c.Status == "selftest_passed")
 }
 
 func operatorProposalEligible(c questionbank.Candidate) bool {
