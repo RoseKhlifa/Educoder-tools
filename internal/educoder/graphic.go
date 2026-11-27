@@ -459,7 +459,10 @@ func (p *GraphicProtocol) Describe(t *Task) (*GraphicDocument, error) {
 func readGraphicDocument(ctx context.Context, session GraphicSession, t *Task, file string) (*GraphicDocument, error) {
 	content, exists, err := session.ReadFile(ctx, file)
 	if err != nil {
-		return nil, errors.New("图形文件读取失败")
+		// Keep the step that failed (directory, link, size, permission) for
+		// graphicStepCause; the session already maps upstream errors to fixed
+		// messages.
+		return nil, fmt.Errorf("图形文件读取失败: %w", err)
 	}
 	if len(content) > MaxGraphicBytes || !utf8.Valid(content) {
 		return nil, errors.New("图形文件不是支持范围内的 UTF-8 内容")

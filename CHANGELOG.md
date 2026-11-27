@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.183 - 2026-11-28
+
+- Keep the specific reason when reading a graphic workspace file fails, such as a linked directory, an oversized or irregular file, or a permission error, so the named pre-write step is the precise one
+
 ## 0.1.182 - 2026-11-28
 
 - Name the step that stopped a graphic submission before any save, such as an oversized or linked workspace file, using only fixed messages and never upstream text, so a level that fails the same way on every retry shows its cause

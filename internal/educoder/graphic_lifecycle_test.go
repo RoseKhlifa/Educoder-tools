@@ -323,3 +323,12 @@ func TestGraphicPrewriteStopNamesItsStepButNoUpstreamText(t *testing.T) {
 		t.Fatalf("wrapped upstream text leaked: %q", got)
 	}
 }
+
+// The read helper wraps the session's own reason, so the named step is the
+// specific one (here: not a regular, size-limited file).
+func TestGraphicReadFailureNamesTheInnerReason(t *testing.T) {
+	err := &GraphicMutationError{Stage: GraphicStagePrewrite, Cause: fmt.Errorf("图形文件读取失败: %w", errors.New("图形文件必须是大小受限的普通文件"))}
+	if got := err.Error(); got != "图形操作在提交之前停止：图形文件必须是大小受限的普通文件" {
+		t.Fatalf("inner reason lost: %q", got)
+	}
+}
