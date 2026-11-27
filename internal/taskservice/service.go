@@ -16,6 +16,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -595,6 +596,9 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 	var previous *answer.ObjectiveCandidate
 	var feedback []answer.Feedback
 	attemptHistory := newObjectiveAttemptHistory(s.cfg.ObjectiveMaxSubmissions)
+	// verifiedSubmitted marks that the first submission was the bank's answer
+	// that earned full marks for this exact snapshot.
+	verifiedSubmitted := false
 	compactOutput := false
 	// answersOnly switches the remaining model calls of this run to the plain
 	// answers contract after a truncated or malformed response, so a failed
@@ -694,6 +698,7 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			c = cached.Candidate
 			r.CandidateID = cached.ID
 			r.Source = "bank"
+			verifiedSubmitted = true
 		} else if attempt == 0 && fixedReady && len(fixedAnswers) == len(snapshot.Questions) && allObjectiveAnswersFixed(fixedAnswers) {
 			c = answer.ObjectiveCandidate{Kind: "objective", Answers: append([]string(nil), fixedAnswers...)}
 			r.Source = "question_bank"
@@ -995,6 +1000,22 @@ func (s *Service) runObjective(ctx context.Context, client *educoder.Client, req
 			r.Status = "verification_unconfirmed"
 			return r, nil
 		}
+		// The platform withheld the score, so no other answer can earn it and
+		// the model is not paid to "repair" correct answers: either it counted
+		// every answer correct, or, when it gives no per-answer count, answers
+		// that earned full marks for these exact questions scored nothing. On
+		// 2026-11-27 a 补交 quiz scored 0/25 for answers that scored 25/25 on
+		// 11-07, and 12 model calls changed nothing.
+		allCorrect := submitted.Correct != nil && submitted.Count == len(snapshot.Questions) && *submitted.Correct == submitted.Count
+		if allCorrect || verifiedSubmitted && attempt == 0 && submitted.Correct == nil && zeroScore(submitted.Score) {
+			r.Status = "score_withheld"
+			counted := ""
+			if allCorrect {
+				counted = fmt.Sprintf("平台判定 %d/%d 题全部正确，", submitted.Count, submitted.Count)
+			}
+			r.Diagnostics = append(r.Diagnostics, fmt.Sprintf("已提交这道题的满分答案，%s头歌只给了 %s / %s 分（可能是补交期的客观题不计分），没有再调用模型", counted, submitted.Score, submitted.MaxScore))
+			return r, nil
+		}
 		if submitted.ScoreKnown {
 			attemptHistory.remember(c, submitted.Score, submitted.MaxScore, questionResults...)
 		}
@@ -1109,6 +1130,12 @@ func (s *Service) restoreBestObjective(ctx context.Context, client *educoder.Cli
 		r.Status = "passed"
 	}
 	return nil
+}
+
+// zeroScore reports a platform score of exactly zero.
+func zeroScore(score string) bool {
+	value, err := strconv.ParseFloat(strings.TrimSpace(score), 64)
+	return err == nil && value == 0
 }
 
 func scoreFeedbackLocks(search *objectiveScoreFeedback) map[int]string {

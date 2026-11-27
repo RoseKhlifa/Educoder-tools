@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.181 - 2026-11-28
+
+- Make the per-homework pause check take milliseconds instead of 13 s, which held the only database connection and timed out saving formal evidence, and stop an objective quiz without model calls when Educoder withholds the score from answers it counts correct or that scored full marks before
+
 ## 0.1.180 - 2026-11-27
 
 - Send code to the formal evaluation when its self-test printed the expected output after extra log lines, such as a jieba start-up log or javac notes, retry answers rejected only for such lines, and reopen homework paused on them

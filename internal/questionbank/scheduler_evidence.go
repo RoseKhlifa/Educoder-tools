@@ -57,15 +57,20 @@ func (s *Store) ReusableEvidenceRevisionForHomework(ctx context.Context, owner, 
 	// Each such answer stops counting once it has a verification, so the fuse
 	// reopens at most once per untried answer. Homeworks without one keep
 	// exactly their previous revision.
+	// Start from this owner's runs of this homework (a few rows) and look the
+	// problems up by index. Checking every observed answer against every run
+	// took 13 s on production data; the store has one connection, so other
+	// writes timed out behind it (2026-11-27: formal evidence of a passed
+	// level could not be saved). This form takes milliseconds.
 	var observed int64
-	err = s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(s.id),0) FROM solutions s
-		WHERE s.source='collection:platform_observed'
-		AND NOT EXISTS(SELECT 1 FROM verifications v WHERE v.solution_id=s.id)
-		AND EXISTS(SELECT 1 FROM solver_runs r WHERE r.owner=?
+	err = s.db.QueryRowContext(ctx, `SELECT COALESCE(MAX(s.id),0) FROM (
+			SELECT DISTINCT json_extract(r.data_json,'$.snapshot_ref.revision_hash') AS rev, json_extract(r.data_json,'$.snapshot_ref.contract_hash') AS con
+			FROM solver_runs r WHERE r.owner=?
 			AND CASE WHEN json_valid(r.data_json) THEN COALESCE(json_extract(r.data_json,'$.target.course'),json_extract(r.data_json,'$.target.Course')) END=?
-			AND CASE WHEN json_valid(r.data_json) THEN COALESCE(json_extract(r.data_json,'$.target.homework_id'),json_extract(r.data_json,'$.target.HomeworkID')) END=?
-			AND json_extract(r.data_json,'$.snapshot_ref.revision_hash')=s.revision_hash
-			AND json_extract(r.data_json,'$.snapshot_ref.contract_hash')=s.contract_hash)`,
+			AND CASE WHEN json_valid(r.data_json) THEN COALESCE(json_extract(r.data_json,'$.target.homework_id'),json_extract(r.data_json,'$.target.HomeworkID')) END=?) refs
+		JOIN solutions s ON s.revision_hash=refs.rev AND s.contract_hash=refs.con
+		WHERE s.source='collection:platform_observed'
+		AND NOT EXISTS(SELECT 1 FROM verifications v WHERE v.solution_id=s.id)`,
 		owner, course, homeworkID).Scan(&observed)
 	if err != nil {
 		return "", err

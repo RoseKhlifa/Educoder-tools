@@ -709,7 +709,7 @@ func batchFailureReason(r *Result, err error) string {
 		return "selftest_stream_unconfirmed"
 	}
 	switch r.Status {
-	case "model_error", "selftest_failed", "attempts_exhausted", "verification_unconfirmed", "budget_exhausted", "canceled":
+	case "model_error", "selftest_failed", "attempts_exhausted", "verification_unconfirmed", "budget_exhausted", "canceled", "score_withheld":
 		return r.Status
 	case "invalid_candidate":
 		return "model_response_invalid"

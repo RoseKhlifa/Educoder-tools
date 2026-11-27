@@ -141,6 +141,9 @@ var consumerReasonCodes = map[string]string{
 
 	"public_contract_conflict": "question_conflict",
 
+	// Correct answers that the platform gave no points; nothing to repair.
+	"score_withheld": "score_withheld",
+
 	"unsupported_homework": "unsupported", "unsupported_roster": "unsupported",
 	"unsupported_multifile": "unsupported", "unsupported_question_kind": "unsupported",
 	"task_identity_mismatch": "unsupported",
