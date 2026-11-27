@@ -100,8 +100,10 @@ type protocolClientAdapter interface {
 	ProtocolClient() *educoder.Client
 }
 
-type hadoopStarter interface {
-	StartHadoop(context.Context, Target) error
+// runtimeStarter starts a service a level's statement asks the learner to
+// start in its attached command line (educoder.Client.StartRuntime).
+type runtimeStarter interface {
+	StartRuntime(context.Context, Target, educoder.RuntimeService) error
 }
 
 type Target struct {
@@ -719,7 +721,9 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 		seed := answer.Candidate{Kind: "programming", Language: languageOf(snap), Files: candidates[0].Files}
 		previous = &seed
 	}
-	hadoopStartAttempted := false
+	// Each service is started at most once per run; a second start prompt for
+	// it stops the run instead of starting again.
+	startAttempted := make(map[educoder.RuntimeService]bool)
 	// Statement figures are fetched once per run and only when the model is
 	// actually called; bank and external candidates never pay for them.
 	var statementImages []answer.StatementImage
@@ -1088,9 +1092,13 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				// changed the workspace before emitting any text, so never infer a
 				// replayable pre-execution failure from that text.
 				startupFailure := snap.EditMode != "terminal" && se == nil && (st.SavedFilesHash == "" || st.SavedFilesHash == result.CodeHash) && runtimeStartupFailure(st.Output, test.ExpectedStdout)
-				startRequired := snap.EditMode == "single_file" && se == nil && st.Completed && st.ProcessFinishedSeen && st.SavedFilesHash == result.CodeHash && runtimeStartRequired(st.Output, test.ExpectedStdout)
+				var startService educoder.RuntimeService
+				startRequired := false
+				if snap.EditMode == "single_file" && se == nil && st.Completed && st.ProcessFinishedSeen && st.SavedFilesHash == result.CodeHash {
+					startService, startRequired = runtimeStartRequired(st.Output, test.ExpectedStdout)
+				}
 				if startRequired {
-					se = errors.New("上游运行环境要求先启动 Hadoop")
+					se = runtimeStartError(startService)
 				}
 				if startupFailure {
 					se = errors.New("upstream runtime environment failed to start before selftest")
@@ -1132,20 +1140,20 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				}
 				if se != nil {
 					if startRequired {
-						if starter, ok := adapter.(hadoopStarter); ok && !hadoopStartAttempted {
-							hadoopStartAttempted = true
-							stage(req, "environment_retry", "正在启动 Hadoop 并核对 HDFS 就绪状态")
-							if startErr := starter.StartHadoop(ctx, target); startErr == nil {
+						if starter, ok := adapter.(runtimeStarter); ok && !startAttempted[startService] {
+							startAttempted[startService] = true
+							stage(req, "environment_retry", "正在启动 "+string(startService)+" 并核对就绪状态")
+							if startErr := starter.StartRuntime(ctx, target, startService); startErr == nil {
 								continue
 							}
 						}
 						result.SelfTestStatus = "unknown"
 						result.Status = "uncertain"
-						result.Diagnostics = append(result.Diagnostics, "Hadoop 环境准备未确认完成，已保留候选并停止模型修复")
+						result.Diagnostics = append(result.Diagnostics, string(startService)+" 环境准备未确认完成，已保留候选并停止模型修复")
 						state.Feedback = codeRepairFeedback(feedback)
 						state.Result = *result
 						_ = s.persist(ctx, result.RunID, state, result.Status, created)
-						return result, errors.New("头歌要求先启动 Hadoop 运行环境")
+						return result, errors.New("头歌要求先启动 " + string(startService) + " 运行环境")
 					}
 					var refused *educoder.SelfTestRefusedError
 					if errors.As(se, &refused) {
@@ -1298,6 +1306,14 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 			if startupFailure {
 				ee = errors.New("upstream runtime environment failed to start before formal evaluation")
 			}
+			var startService educoder.RuntimeService
+			startRequired := false
+			if snap.EditMode == "single_file" && ee == nil {
+				startService, startRequired = formalRuntimeStartRequired(eval)
+			}
+			if startRequired {
+				ee = runtimeStartError(startService)
+			}
 			passed = ee == nil && eval.Completed && eval.Passed
 			kind := "formal"
 			if eval.ReuseUnproven {
@@ -1354,6 +1370,26 @@ func (s *Service) execute(ctx context.Context, adapter Adapter, req Request, sna
 				} else {
 					ee = waitErr
 				}
+			}
+			// A verified answer skips the public self-test, so its evaluation is
+			// the first to meet a service that is not started yet. Start it once
+			// and evaluate the same code again, as after a self-test prompt.
+			if startRequired && attempt+1 < req.MaxEvaluations && eval.SavedFilesHash == result.CodeHash && eval.SubmittedFilesHash == result.CodeHash && ctx.Err() == nil {
+				if starter, ok := adapter.(runtimeStarter); ok && !startAttempted[startService] {
+					startAttempted[startService] = true
+					stage(req, "environment_retry", "正在启动 "+string(startService)+" 并核对就绪状态")
+					if startErr := starter.StartRuntime(ctx, target, startService); startErr == nil {
+						attempt++
+						state.Attempts = attempt + 1
+						state.Result = *result
+						if err := s.persist(ctx, result.RunID, state, "submitting", created); err != nil {
+							result.Status = "checkpoint_persistence_failed"
+							return result, err
+						}
+						continue
+					}
+				}
+				result.Diagnostics = append(result.Diagnostics, string(startService)+" 环境准备未确认完成，已保留候选并停止模型修复")
 			}
 			break
 		}
@@ -1467,6 +1503,33 @@ func formalRuntimeStartupFailure(eval Evaluation) bool {
 		return false
 	}
 	return formalRuntimeStartupFeedback(eval.Feedback)
+}
+
+// formalRuntimeStartRequired reports a formal evaluation in which no test
+// passed and every failing public test printed the same observed start
+// prompt: the service was down, so the result says nothing about the code.
+func formalRuntimeStartRequired(eval Evaluation) (educoder.RuntimeService, bool) {
+	if !eval.Completed || eval.Passed || eval.PassedCount != 0 || eval.ReuseUnproven {
+		return "", false
+	}
+	var service educoder.RuntimeService
+	for _, line := range strings.Split(strings.ReplaceAll(eval.Feedback, "\r\n", "\n"), "\n") {
+		if !strings.HasPrefix(line, "Public test: ") {
+			continue
+		}
+		var input, expected, actual string
+		const format = "Public test: input=%q expected=%q actual=%q"
+		n, err := fmt.Sscanf(line, format, &input, &expected, &actual)
+		if err != nil || n != 3 || line != fmt.Sprintf(format, input, expected, actual) {
+			return "", false
+		}
+		found, ok := runtimeStartRequired(actual, expected)
+		if !ok || service != "" && found != service {
+			return "", false
+		}
+		service = found
+	}
+	return service, service != ""
 }
 
 func formalRuntimeStartupFeedback(feedback string) bool {

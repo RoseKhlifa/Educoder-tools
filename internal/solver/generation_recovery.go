@@ -119,11 +119,32 @@ const runtimeStartupFailureMessage = "启动环境失败，请稍后重试，如
 
 const runtimeStartRequiredMessage = "请先启动Hadoop再点击评测！"
 
-func runtimeStartRequired(output, expected string) bool {
-	return strings.TrimSpace(output) == runtimeStartRequiredMessage && strings.TrimSpace(expected) != runtimeStartRequiredMessage
+// runtimeStartPrompts are complete runner responses, observed on real levels,
+// that ask for a service the statement tells the learner to start in the
+// attached command line first. They describe the environment, not the code.
+var runtimeStartPrompts = map[string]educoder.RuntimeService{
+	runtimeStartRequiredMessage: educoder.RuntimeHadoop,
+	"Hbase未启动，请先启动Hbase。":       educoder.RuntimeHBase,
 }
 
-// Old runners rejected source before Hadoop was started. Permit a new full
+// runtimeStartRequired matches only a whole observed prompt, never program
+// output containing the same words or a sample that expects this text.
+func runtimeStartRequired(output, expected string) (educoder.RuntimeService, bool) {
+	prompt := strings.TrimSpace(output)
+	service, ok := runtimeStartPrompts[prompt]
+	if !ok || strings.TrimSpace(expected) == prompt {
+		return "", false
+	}
+	return service, true
+}
+
+// runtimeStartError is the execution error recorded for a start prompt.
+func runtimeStartError(service educoder.RuntimeService) error {
+	return errors.New("上游运行环境要求先启动 " + string(service))
+}
+
+// Old runners rejected source before Hadoop was started, and until 2026-11-27
+// every HBase prompt rejected source the same way. Permit a new full
 // validation of only this complete, source-bound prerequisite observation,
 // including an unknown result from a later failed bootstrap. Any formal or
 // unrelated unknown evidence still prevents reuse.
@@ -152,7 +173,7 @@ func hadoopPrerequisiteOnlyRejection(c questionbank.Candidate) bool {
 		}
 		marker := false
 		for _, f := range feedback {
-			if f.Kind == "selftest" && runtimeStartRequired(f.ActualStdout, f.ExpectedStdout) && (strings.TrimSpace(f.Message) == runtimeStartRequiredMessage || f.Message == "上游运行环境要求先启动 Hadoop") {
+			if service, ok := runtimeStartRequired(f.ActualStdout, f.ExpectedStdout); f.Kind == "selftest" && ok && (strings.TrimSpace(f.Message) == strings.TrimSpace(f.ActualStdout) || f.Message == runtimeStartError(service).Error()) {
 				marker = true
 				continue
 			}
@@ -181,7 +202,8 @@ func legacyRuntimeFeedback(f answer.Feedback) bool {
 	if strings.TrimSpace(f.Message) == runtimeStartupFailureMessage && runtimeStartupFailure(f.ActualStdout, f.ExpectedStdout) {
 		return true
 	}
-	return runtimeStartRequired(f.ActualStdout, f.ExpectedStdout) && strings.TrimSpace(f.Message) == runtimeStartRequiredMessage
+	_, ok := runtimeStartRequired(f.ActualStdout, f.ExpectedStdout)
+	return ok && strings.TrimSpace(f.Message) == strings.TrimSpace(f.ActualStdout)
 }
 
 func codeRepairFeedback(feedback []answer.Feedback) []answer.Feedback {

@@ -39,26 +39,41 @@ func (t *Task) IsHadoopWorkspaceTask() bool {
 }
 
 func hadoopWorkspaceEnvironment(t *Task) (ProgrammingEnvironment, error) {
-	if t == nil || t.ST == nil || *t.ST != 0 || t.Challenge.ST == nil || *t.Challenge.ST != 0 || t.Challenge.WithCodeFile == nil || !*t.Challenge.WithCodeFile || len(t.Chooses) != 0 || t.CodeEditor.EnvironmentID <= 0 || !strings.EqualFold(strings.TrimSpace(t.CodeEditor.Name), "Hadoop") || len(t.CodePaths()) != 1 || !strings.EqualFold(t.CodePaths()[0], "src/step1/hint.txt") {
+	if t == nil || !strings.EqualFold(strings.TrimSpace(t.CodeEditor.Name), "Hadoop") || len(t.CodePaths()) != 1 || !strings.EqualFold(t.CodePaths()[0], "src/step1/hint.txt") {
 		return ProgrammingEnvironment{}, errors.New("任务不是已观察的 Hadoop 工作区布局")
 	}
 	statement := strings.ToLower(strings.TrimSpace(t.Challenge.Description))
 	if !strings.Contains(statement, "命令行") && !strings.Contains(statement, "command line") && !strings.Contains(statement, "terminal") {
 		return ProgrammingEnvironment{}, errors.New("Hadoop 题干未明确要求使用命令行")
 	}
+	return attachedTerminalEnvironment(t)
+}
+
+// attachedTerminalEnvironment finds the command line beside a code editor: the
+// unique non-VNC tab_type=4 environment that shares the editor's environment
+// ID, next to exactly one tab_type=1 editor. Big-data levels (Hadoop, HBase)
+// use it for the services their statements ask the learner to start before
+// evaluating editor code; the editor stays the programming contract.
+func attachedTerminalEnvironment(t *Task) (ProgrammingEnvironment, error) {
+	if t == nil || t.ST == nil || *t.ST != 0 || t.Challenge.ST == nil || *t.Challenge.ST != 0 || t.Challenge.WithCodeFile == nil || !*t.Challenge.WithCodeFile || len(t.Chooses) != 0 || t.CodeEditor.EnvironmentID <= 0 || bool(t.VNCURL) {
+		return ProgrammingEnvironment{}, errors.New("任务不是带命令行的代码编辑器布局")
+	}
 	var terminal ProgrammingEnvironment
 	count, editorCount := 0, 0
 	for _, env := range t.Environments {
-		if env.EnvironmentID == t.CodeEditor.EnvironmentID && env.TabType == 1 && env.EnvironmentID > 0 {
+		if env.EnvironmentID != t.CodeEditor.EnvironmentID {
+			continue
+		}
+		if env.TabType == 1 {
 			editorCount++
 		}
-		if env.EnvironmentID == t.CodeEditor.EnvironmentID && env.TabType == 4 && env.EnvironmentID > 0 && !bool(env.VNCURL) {
+		if env.TabType == 4 && !bool(env.VNCURL) {
 			terminal = env
 			count++
 		}
 	}
-	if count != 1 || editorCount != 1 || bool(t.VNCURL) {
-		return ProgrammingEnvironment{}, errors.New("Hadoop 工作区没有唯一匹配的 tab_type=4 环境")
+	if count != 1 || editorCount != 1 {
+		return ProgrammingEnvironment{}, errors.New("代码编辑器没有唯一匹配的 tab_type=4 命令行")
 	}
 	return terminal, nil
 }
@@ -218,6 +233,109 @@ func terminalOutput(raw []byte, start, finish string) (string, *int, string) {
 	return string(output), nil, ""
 }
 
+// terminalHeadBytes is how much script output a cut transcript keeps after
+// the start boundary (at most a quarter of the limit); between a quarter and
+// half of the limit holds the latest bytes, so the kept output stays below it.
+const terminalHeadBytes = 8 << 10
+
+// terminalTranscript bounds a terminal stream in memory. Below its limit it
+// keeps every byte. Past it, it keeps everything through the start boundary
+// plus the first terminalHeadBytes of script output, and a rolling tail of the
+// latest bytes, so a long but ordinary output still reaches its finish
+// boundary. On 2026-11-27 an HBase install level's own steps (tar -zxvf)
+// printed more than the limit, and a script that completed was recorded as an
+// unknown result. Only a stream that overflows before its start boundary
+// fails. Cuts fall between UTF-8 characters, and the omitted size is reported
+// where the bytes were dropped.
+type terminalTranscript struct {
+	limit   int
+	start   []byte
+	head    []byte
+	tail    []byte
+	omitted int64
+	cut     bool
+}
+
+func (b *terminalTranscript) add(p []byte) bool {
+	if b.cut {
+		b.tail = append(b.tail, p...)
+		if len(b.tail) > b.limit/2 {
+			b.trim()
+		}
+		return true
+	}
+	if len(b.head)+len(p) <= b.limit {
+		b.head = append(b.head, p...)
+		return true
+	}
+	all := append(b.head, p...)
+	i := bytes.Index(all, b.start)
+	if i < 0 {
+		return false
+	}
+	line := bytes.IndexByte(all[i:], '\n')
+	if line < 0 {
+		return false
+	}
+	body := i + line + 1
+	keep := runeCut(all, min(len(all), body+min(terminalHeadBytes, b.limit/4)), body)
+	b.head, b.tail, b.cut = all[:keep:keep], append([]byte(nil), all[keep:]...), true
+	b.trim()
+	return true
+}
+
+// trim keeps the latest limit/4 tail bytes. add calls it only when the tail
+// doubled, so a stream of tiny frames is not copied once per frame.
+func (b *terminalTranscript) trim() {
+	keep := b.limit / 4
+	if len(b.tail) <= keep {
+		return
+	}
+	drop := len(b.tail) - keep
+	for drop < len(b.tail) && !utf8.RuneStart(b.tail[drop]) {
+		drop++
+	}
+	b.omitted += int64(drop)
+	b.tail = append([]byte(nil), b.tail[drop:]...)
+}
+
+// recent returns at most the last n bytes received.
+func (b *terminalTranscript) recent(n int) []byte {
+	if !b.cut {
+		return b.head[max(0, len(b.head)-n):]
+	}
+	if len(b.tail) >= n || b.omitted > 0 {
+		return b.tail[max(0, len(b.tail)-n):]
+	}
+	// Right after the cut the window can still reach back into the head.
+	return append(append([]byte(nil), b.head[max(0, len(b.head)-(n-len(b.tail))):]...), b.tail...)
+}
+
+func (b *terminalTranscript) bytes() []byte {
+	if !b.cut {
+		return b.head
+	}
+	out := append([]byte(nil), b.head...)
+	if b.omitted > 0 {
+		out = append(out, fmt.Sprintf("\n…（终端输出过长，已省略中间 %d 字节）…\n", b.omitted)...)
+	}
+	return append(out, b.tail...)
+}
+
+// runeCut moves cut back, not below floor, so b[:cut] does not end inside a
+// UTF-8 character.
+func runeCut(b []byte, cut, floor int) int {
+	for i := cut - 1; i >= floor && i >= cut-utf8.UTFMax; i-- {
+		if utf8.RuneStart(b[i]) {
+			if !utf8.FullRune(b[i:cut]) {
+				return i
+			}
+			return cut
+		}
+	}
+	return cut
+}
+
 func terminalFailure(ctx context.Context, message string) error {
 	if ctx.Err() != nil {
 		return fmt.Errorf("%s: %w", message, ctx.Err())
@@ -330,10 +448,10 @@ func (c *Client) runBoundTerminalCommand(ctx context.Context, t *Task, env Progr
 	}
 	command, start, finish := terminalCommand(script, hex.EncodeToString(nonceBytes))
 	sent := false
-	var raw []byte
+	transcript := &terminalTranscript{limit: int(limit), start: []byte(start)}
 	defer func() {
 		if !result.Completed {
-			result.Output, _, _ = terminalOutput(raw, start, finish)
+			result.Output, _, _ = terminalOutput(transcript.bytes(), start, finish)
 		}
 	}()
 	for {
@@ -348,11 +466,9 @@ func (c *Client) runBoundTerminalCommand(ctx context.Context, t *Task, env Progr
 		if err != nil {
 			return result, errors.New("终端流包含无效编码帧")
 		}
-		if int64(len(raw))+int64(len(decoded)) > limit {
+		if !transcript.add(decoded) {
 			return result, errors.New("终端输出超过字节上限")
 		}
-		previousLength := len(raw)
-		raw = append(raw, decoded...)
 		if !sent {
 			if len(decoded) == 0 {
 				continue
@@ -369,11 +485,11 @@ func (c *Client) runBoundTerminalCommand(ctx context.Context, t *Task, env Progr
 		// and enough overlap for the marker/hash/exit line before parsing the
 		// bounded stream. A one-byte-at-a-time stdout must not rescan its whole
 		// history for every byte.
-		if !bytes.Contains(raw[max(0, previousLength-len(finish)-80):], []byte(finish)) {
+		if !bytes.Contains(transcript.recent(len(decoded)+len(finish)+80), []byte(finish)) {
 			continue
 		}
 		var remoteHash string
-		result.Output, result.ExitCode, remoteHash = terminalOutput(raw, start, finish)
+		result.Output, result.ExitCode, remoteHash = terminalOutput(transcript.bytes(), start, finish)
 		if result.ExitCode != nil {
 			if remoteHash != result.ScriptHash {
 				result.ExitCode = nil
@@ -391,21 +507,74 @@ func (c *Client) runBoundTerminalCommand(ctx context.Context, t *Task, env Progr
 	}
 }
 
-// StartHadoop implements the bootstrap observed in the user's Hadoop HAR.
-// Mixed editor tasks retain their editor contract; only this fixed preparation
-// script runs in the attached terminal. Its receipt is not submission evidence.
-func (c *Client) StartHadoop(ctx context.Context, t *Task) error {
-	terminal, err := hadoopWorkspaceEnvironment(t)
+// RuntimeService names a service that a level's statement asks the learner to
+// start in the attached command line before the evaluation can run.
+type RuntimeService string
+
+const (
+	RuntimeHadoop RuntimeService = "Hadoop"
+	RuntimeHBase  RuntimeService = "HBase"
+)
+
+// runtimeStarts are fixed preparation scripts. Each one starts its service
+// only when it is not already up and exits 0 only after its own read-only
+// readiness check passed. No model output or statement text runs here.
+var runtimeStarts = map[RuntimeService]struct {
+	script  string
+	timeout time.Duration
+}{
+	// The bootstrap observed in the user's Hadoop HAR.
+	RuntimeHadoop: {"set -eu\ncommand -v start-dfs.sh >/dev/null\nif ! hdfs dfs -test -d / >/dev/null 2>&1; then\n  start-dfs.sh\nfi\nfor attempt in 1 2 3 4 5 6 7 8 9 10; do\n  if hdfs dfs -test -d / >/dev/null 2>&1; then exit 0; fi\n  sleep 1\ndone\nexit 1\n", 90 * time.Second},
+	// The steps the HBase Java statements give (2026-11-27): start HDFS with
+	// start-dfs.sh and HBase with start-hbase.sh, then wait about 20 seconds
+	// for HBase to initialize. HDFS is best effort, since a standalone HBase
+	// does not need it; HBase is ready once its shell can list tables, which a
+	// master that is still initializing refuses.
+	RuntimeHBase: {`set -u
+command -v start-hbase.sh >/dev/null 2>&1 || exit 1
+if command -v start-dfs.sh >/dev/null 2>&1 && ! hdfs dfs -test -d / >/dev/null 2>&1; then
+  start-dfs.sh
+  n=0
+  while [ "$n" -lt 20 ] && ! hdfs dfs -test -d / >/dev/null 2>&1; do n=$((n + 1)); sleep 1; done
+fi
+if ! jps 2>/dev/null | grep -q HMaster; then
+  start-hbase.sh
+fi
+wrap=""
+if command -v timeout >/dev/null 2>&1; then wrap="timeout 60"; fi
+n=0
+while [ "$n" -lt 15 ]; do
+  if printf 'list\nexit\n' | $wrap hbase shell 2>/dev/null | grep -q 'row(s)'; then exit 0; fi
+  n=$((n + 1))
+  sleep 4
+done
+exit 1
+`, 5 * time.Minute},
+}
+
+// StartRuntime runs the fixed start script for service in the command line
+// attached to the task's editor. Mixed editor tasks retain their editor
+// contract; the receipt is environment preparation, never submission evidence.
+func (c *Client) StartRuntime(ctx context.Context, t *Task, service RuntimeService) error {
+	start, ok := runtimeStarts[service]
+	if !ok {
+		return fmt.Errorf("没有 %s 的固定启动流程", service)
+	}
+	terminal, err := attachedTerminalEnvironment(t)
 	if err != nil {
 		return err
 	}
-	const script = "set -eu\ncommand -v start-dfs.sh >/dev/null\nif ! hdfs dfs -test -d / >/dev/null 2>&1; then\n  start-dfs.sh\nfi\nfor attempt in 1 2 3 4 5 6 7 8 9 10; do\n  if hdfs dfs -test -d / >/dev/null 2>&1; then exit 0; fi\n  sleep 1\ndone\nexit 1\n"
-	result, err := c.runBoundTerminalCommand(ctx, t, terminal, script, TerminalOptions{Timeout: 90 * time.Second})
+	result, err := c.runBoundTerminalCommand(ctx, t, terminal, start.script, TerminalOptions{Timeout: start.timeout})
 	if err != nil {
 		return err
 	}
 	if result == nil || !result.Completed || result.ExitCode == nil || *result.ExitCode != 0 {
-		return errors.New("Hadoop 启动后未确认 HDFS 可用")
+		return fmt.Errorf("%s 启动后未确认就绪", service)
 	}
 	return nil
+}
+
+// StartHadoop prepares the recorded Hadoop workspace before its script runs.
+func (c *Client) StartHadoop(ctx context.Context, t *Task) error {
+	return c.StartRuntime(ctx, t, RuntimeHadoop)
 }

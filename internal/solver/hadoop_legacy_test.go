@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"educoder-cli/internal/answer"
+	"educoder-cli/internal/educoder"
 	"educoder-cli/internal/problem"
 	"educoder-cli/internal/questionbank"
 )
@@ -15,6 +16,7 @@ type hadoopLegacyAdapter struct {
 	marker     bool
 	startErr   error
 	startCalls int
+	started    []educoder.RuntimeService
 	selfTests  int
 }
 
@@ -28,8 +30,9 @@ func (a *hadoopLegacyAdapter) SelfTest(ctx context.Context, target Target, file 
 	return a.fakeAdapter.SelfTest(ctx, target, file, input, expected)
 }
 
-func (a *hadoopLegacyAdapter) StartHadoop(context.Context, Target) error {
+func (a *hadoopLegacyAdapter) StartRuntime(_ context.Context, _ Target, service educoder.RuntimeService) error {
 	a.startCalls++
+	a.started = append(a.started, service)
 	return a.startErr
 }
 

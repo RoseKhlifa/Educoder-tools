@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"educoder-cli/internal/answer"
+	"educoder-cli/internal/educoder"
 	"educoder-cli/internal/problem"
 )
 
@@ -15,6 +16,7 @@ type hadoopStartTestAdapter struct {
 	first         SelfTest
 	startErr      error
 	startCalls    int
+	started       []educoder.RuntimeService
 	selfTestCalls int
 }
 
@@ -26,8 +28,9 @@ func (a *hadoopStartTestAdapter) SelfTest(ctx context.Context, target Target, fi
 	return a.fakeAdapter.SelfTest(ctx, target, file, input, expected)
 }
 
-func (a *hadoopStartTestAdapter) StartHadoop(context.Context, Target) error {
+func (a *hadoopStartTestAdapter) StartRuntime(_ context.Context, _ Target, service educoder.RuntimeService) error {
 	a.startCalls++
+	a.started = append(a.started, service)
 	return a.startErr
 }
 

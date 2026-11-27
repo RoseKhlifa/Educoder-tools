@@ -380,6 +380,17 @@ func terminalSocketFixture(t *testing.T, options terminalFixtureOptions) (*Clien
 				write(websocket.MessageText, strings.Repeat("x", 8192))
 				return
 			}
+			if options.mode == "long-output" {
+				// A verbose extraction far longer than the transcript limit.
+				body := "\r\n" + start + "\r\n" + strings.Repeat("hbase-2.1.1/图书.txt\r\n", 600) + "done\r\n\r\n" + finish + ":" + scriptHash + ":0\r\n$ "
+				for i := 0; i < len(body); i += 61 {
+					if !write(websocket.MessageBinary, body[i:min(i+61, len(body))]) {
+						return
+					}
+				}
+				_, _, _ = conn.Read(ctx)
+				return
+			}
 			if options.mode == "wrong-hash" {
 				scriptHash = strings.Repeat("0", 64)
 			}
@@ -441,6 +452,17 @@ func TestTerminalCommandCompletionAndPrivateReceipt(t *testing.T) {
 				t.Fatalf("execution replay starts=%d commands=%d", starts.Load(), commands.Load())
 			}
 		})
+	}
+}
+
+func TestTerminalCommandCompletesAnOutputLongerThanItsLimit(t *testing.T) {
+	client, starts, commands := terminalSocketFixture(t, terminalFixtureOptions{mode: "long-output"})
+	result, err := client.RunTerminalCommand(context.Background(), terminalTaskFixture(), "tar -zxvf hbase-2.1.1-bin.tar.gz -C /app", TerminalOptions{Timeout: time.Second, MaxOutputBytes: 4096})
+	if err != nil || result == nil || !result.Completed || result.ExitCode == nil || *result.ExitCode != 0 || starts.Load() != 1 || commands.Load() != 1 {
+		t.Fatalf("long output was not completed: result=%+v err=%v", result, err)
+	}
+	if !strings.HasPrefix(result.Output, "hbase-2.1.1/图书.txt\n") || !strings.HasSuffix(result.Output, "图书.txt\ndone\n") || !strings.Contains(result.Output, "已省略中间") || len(result.Output) > 4096 {
+		t.Fatalf("long output lost its head, tail or bound: %d bytes", len(result.Output))
 	}
 }
 

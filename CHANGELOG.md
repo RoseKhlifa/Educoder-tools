@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.173 - 2026-11-27
+
+- Start HBase, after HDFS, in the command line beside an editor when a self-test or evaluation prints its start prompt, re-test answers that failed only on that prompt, finish terminal scripts whose output runs past the limit by keeping its start and end, and reopen homework paused on those prompts
+
 ## 0.1.172 - 2026-11-27
 
 - Let an untried classmate answer reopen a paused homework once, restore the best objective score before a run stops, read ranked answers given as one list per question, and keep a malformed reply from pinning the rest of the run to answers-only

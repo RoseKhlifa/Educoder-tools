@@ -19,7 +19,9 @@ const noProgressFuseTTL = 24 * time.Hour
 
 // noProgressPolicyVersion changes only when fuse semantics change. Ordinary
 // patch releases must not silently erase a valid no-progress cooldown.
-const noProgressPolicyVersion = "scheduler-policy-2"
+// policy-3 (2026-11-27): an HBase start prompt used to count as failed code,
+// so fuses set from it were not evidence that a retry cannot progress.
+const noProgressPolicyVersion = "scheduler-policy-3"
 
 type homeworkBlock struct {
 	Kind         string    `json:"kind"`

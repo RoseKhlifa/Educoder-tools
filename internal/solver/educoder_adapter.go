@@ -269,12 +269,12 @@ func (a *EducoderAdapter) task(ctx context.Context, target Target) (*educoder.Ta
 	return a.Client.LoadTask(ctx, target.Course, target.HomeworkID, target.Game)
 }
 
-func (a *EducoderAdapter) StartHadoop(ctx context.Context, target Target) error {
+func (a *EducoderAdapter) StartRuntime(ctx context.Context, target Target, service educoder.RuntimeService) error {
 	task, err := a.task(ctx, target)
 	if err != nil {
 		return err
 	}
-	return a.Client.StartHadoop(ctx, task)
+	return a.Client.StartRuntime(ctx, task, service)
 }
 
 func (a *EducoderAdapter) SelfTest(ctx context.Context, target Target, file problem.SolutionFile, input, expected string) (SelfTest, error) {
