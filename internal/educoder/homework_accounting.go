@@ -22,7 +22,7 @@ func RequiredHomeworkCounts(hw Homework, progress *HomeworkProgress) (required, 
 		ids[level.ChallengeID], names[name] = true, true
 		if !level.IsOptional() {
 			required++
-			if level.HasFullScore() {
+			if level.Settled(hw) {
 				completed++
 			}
 		}

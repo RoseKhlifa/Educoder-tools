@@ -217,3 +217,16 @@ func TestHomeworkCompleteRequiresExactEntireUnambiguousScores(t *testing.T) {
 		})
 	}
 }
+
+// A course run skips a homework finished late at zero instead of redoing it.
+func TestHomeworkFinishedLateAtZeroIsExactlyComplete(t *testing.T) {
+	hw := educoder.Homework{ID: 9, ChallengeCount: 1, EndTime: "2026-11-01 23:59:00", StudentPassedTime: "2026-11-27 21:42:00"}
+	progress := &educoder.HomeworkProgress{Challenges: []educoder.ChallengeProgress{{ChallengeID: 1, Name: "a", PassedStatus: 1, GameScore: "0.00", ChallengeScore: "25"}}}
+	if !homeworkExactlyComplete(hw, progress) {
+		t.Fatal("late zero homework was not complete")
+	}
+	hw.StudentPassedTime = nil
+	if homeworkExactlyComplete(hw, progress) {
+		t.Fatal("zero homework without a late finish was complete")
+	}
+}

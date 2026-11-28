@@ -40,3 +40,17 @@ func TestOrdinaryAndExpiredAssignmentsAreNotLate(t *testing.T) {
 		t.Fatalf("an assignment before its ordinary deadline is not late: %+v", dto)
 	}
 }
+
+// The page counts a homework finished late at zero as done and names it.
+func TestLateUnscoredHomeworkIsCompleteAndFlagged(t *testing.T) {
+	hw := educoder.Homework{ID: 4000337, Name: "软件工程", Kind: "shixun", ChallengeCount: 2, EndTime: "2026-11-01 23:59:00", StudentPassedTime: "2026-11-27 21:42:00"}
+	progress := &educoder.HomeworkProgress{Challenges: []educoder.ChallengeProgress{
+		{ChallengeID: 1, Name: "a", PassedStatus: 1, GameScore: "0.00", ChallengeScore: "25"},
+		{ChallengeID: 2, Name: "b", PassedStatus: 1, GameScore: "0.00", ChallengeScore: "25"},
+	}}
+	dto := toHomeworkDTO(hw)
+	applyRequiredProgress(&dto, hw, progress)
+	if !dto.RequiredKnown || *dto.RequiredCount != 2 || *dto.FinishedRequired != 2 || !dto.LateUnscored {
+		t.Fatalf("late-unscored homework: %+v", dto)
+	}
+}

@@ -95,6 +95,8 @@ export interface Homework {
   deadline?: string;
   /** Past its ordinary deadline but reopened for late submission (补交中). */
   lateSubmission?: boolean;
+  /** Finished after its deadline; Educoder scored the passed levels zero. */
+  lateUnscored?: boolean;
   canEnter?: boolean;
 }
 

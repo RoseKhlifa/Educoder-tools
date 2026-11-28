@@ -519,7 +519,7 @@ func homeworkExactlyComplete(hw educoder.Homework, progress *educoder.HomeworkPr
 		return false
 	}
 	for _, p := range progress.Challenges {
-		if !p.IsOptional() && !p.HasFullScore() {
+		if !p.IsOptional() && !p.Settled(hw) {
 			return false
 		}
 	}

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.185 - 2026-11-28
+
+- Treat a level Educoder accepted after the homework deadline but scored zero, which it stamps 截止后通关, as done: course runs skip it instead of redoing it, the page counts it complete and shows 截止后通关, and partial late scores are still retried
+
 ## 0.1.184 - 2026-11-28
 
 - Save a graphic answer over a workspace file that is a link or larger than the read limit by hashing that entry in place and replacing only the entry itself, never writing through the link; a directory at the path is still refused with that reason

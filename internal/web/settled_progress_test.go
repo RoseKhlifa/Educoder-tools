@@ -128,17 +128,17 @@ func TestCourseListReusesOnlySettledAssignmentProgress(t *testing.T) {
 func TestSettledProgressCacheStoresOnlySettledStates(t *testing.T) {
 	cache := newSettledProgressCache()
 	key := settledProgressKey{owner: "o", course: "C", homework: 1, challenges: 3}
-	cache.remember(key, 3, 2)
-	if _, ok := cache.lookup(key); ok {
+	cache.remember(key, 3, 2, false)
+	if _, _, ok := cache.lookup(key); ok {
 		t.Fatal("an assignment with open required levels was cached")
 	}
-	cache.remember(key, 3, 3)
-	if required, ok := cache.lookup(key); !ok || required != 3 {
+	cache.remember(key, 3, 3, true)
+	if required, late, ok := cache.lookup(key); !ok || required != 3 || !late {
 		t.Fatalf("finished assignment not cached: %d %v", required, ok)
 	}
 	var none *settledProgressCache
-	none.remember(key, 1, 1)
-	if _, ok := none.lookup(key); ok {
+	none.remember(key, 1, 1, false)
+	if _, _, ok := none.lookup(key); ok {
 		t.Fatal("nil cache returned an entry")
 	}
 }

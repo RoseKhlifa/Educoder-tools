@@ -233,7 +233,7 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 	}
 	full := map[int64]educoder.ChallengeProgress{}
 	for _, p := range progress.Challenges {
-		if p.HasFullScore() {
+		if p.Settled(*hw) {
 			full[p.ChallengeID] = p
 		}
 	}
@@ -294,7 +294,7 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 			omitBatchLevel(out, i)
 			continue
 		}
-		if p, ok := findFull(progress, l.ChallengeID); ok {
+		if p, ok := findSettled(*hw, progress, l.ChallengeID); ok {
 			out.Levels[i].Status = "skipped"
 			out.Levels[i].Kind = "verified"
 			out.Levels[i].Score = p.GameScore
@@ -469,7 +469,7 @@ func (s *Service) RunHomework(ctx context.Context, client *educoder.Client, req 
 			finalLevels = append(finalLevels, entry)
 			continue
 		}
-		if p, full := findFull(finalProgress, l.ChallengeID); full {
+		if p, full := findSettled(*hw, finalProgress, l.ChallengeID); full {
 			entry.Score, entry.MaxScore = p.GameScore, p.ChallengeScore
 			if entry.Status != "skipped" {
 				entry.Status, entry.ReasonCode = "passed", ""
@@ -599,6 +599,16 @@ schedule:
 		}
 	}
 	return out
+}
+
+// findSettled is findFull that also accepts a level passed late at zero.
+func findSettled(hw educoder.Homework, p *educoder.HomeworkProgress, id int64) (educoder.ChallengeProgress, bool) {
+	for _, x := range p.Challenges {
+		if x.ChallengeID == id && x.Settled(hw) {
+			return x, true
+		}
+	}
+	return educoder.ChallengeProgress{}, false
 }
 
 func findFull(p *educoder.HomeworkProgress, id int64) (educoder.ChallengeProgress, bool) {

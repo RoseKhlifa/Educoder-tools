@@ -99,6 +99,9 @@ type homeworkDTO struct {
 	// for late submission (LateSubmission) it is the late deadline.
 	Deadline       string `json:"deadline,omitempty"`
 	LateSubmission bool   `json:"lateSubmission,omitempty"`
+	// LateUnscored marks a homework finished after its deadline whose
+	// passed levels Educoder scored zero (shown as 截止后通关).
+	LateUnscored bool `json:"lateUnscored,omitempty"`
 }
 
 func toHomeworkDTO(homework educoder.Homework) homeworkDTO {

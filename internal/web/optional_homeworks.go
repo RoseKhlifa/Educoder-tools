@@ -40,8 +40,9 @@ func serviceHomeworksSettled(ctx context.Context, client EducoderClient, course 
 		if !result[i].AutomaticSupported {
 			continue
 		}
-		if required, ok := settled.lookup(settledKey(owner, course, homeworks[i])); ok {
+		if required, lateUnscored, ok := settled.lookup(settledKey(owner, course, homeworks[i])); ok {
 			applyRequiredCounts(&result[i], required, required)
+			result[i].LateUnscored = lateUnscored
 			continue
 		}
 		candidates = append(candidates, i)
@@ -67,7 +68,7 @@ func serviceHomeworksSettled(ctx context.Context, client EducoderClient, course 
 				// metadata can omit objective levels and cannot shrink its scope.
 				applyRequiredProgress(&result[index], homeworks[index], progress)
 				if dto := result[index]; dto.RequiredKnown && dto.RequiredCount != nil && dto.FinishedRequired != nil {
-					settled.remember(settledKey(owner, course, homeworks[index]), *dto.RequiredCount, *dto.FinishedRequired)
+					settled.remember(settledKey(owner, course, homeworks[index]), *dto.RequiredCount, *dto.FinishedRequired, dto.LateUnscored)
 				}
 			}
 		}()
@@ -101,6 +102,11 @@ func applyRequiredProgress(dto *homeworkDTO, homework educoder.Homework, progres
 		return
 	}
 	applyRequiredCounts(dto, required, completed)
+	for _, level := range progress.Challenges {
+		if !level.IsOptional() && level.LateUnscored(homework) {
+			dto.LateUnscored = true
+		}
+	}
 }
 
 func applyRequiredCounts(dto *homeworkDTO, required, completed int) {

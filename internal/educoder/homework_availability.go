@@ -57,6 +57,17 @@ func (h Homework) LateSubmissionOpen(now time.Time) bool {
 	return ok && !now.Before(ordinary)
 }
 
+// FinishedAfterDeadline reports a homework the student finished after its
+// ordinary deadline, which Educoder stamps 截止后通关.
+func (h Homework) FinishedAfterDeadline() bool {
+	passed, ok := firstHomeworkTime(h.StudentPassedTime)
+	if !ok {
+		return false
+	}
+	ordinary, ok := firstHomeworkTime(h.Deadline, h.EndTime, h.EndDate)
+	return ok && passed.After(ordinary)
+}
+
 // LateDeadline is the late-submission deadline when Educoder supplies one.
 func (h Homework) LateDeadline() (time.Time, bool) {
 	return firstHomeworkTime(h.LateEndTime, h.LateTime)

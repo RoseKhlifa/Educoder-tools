@@ -1287,6 +1287,16 @@ await test('consumer course service and administrator boundary',async t=>{
     page.get('[data-detail-tab="common"]').dispatch('click'); await settle();
     assert.match(page.html(),/补交中 · 12月6日 23:59 补交截止/);
   });
+  await t.test('a homework finished after its deadline that Educoder scored zero reads 截止后通关 and counts as done', async () => {
+    const page=await app({'/api/courses/COURSE_A/homeworks':()=>ok([
+      {id:31,name:'软件工程',homeworkKind:'shixun',automaticSupported:true,requiredProgressKnown:true,requiredChallengeCount:4,finishedRequiredChallengeCount:4,lateUnscored:true,status:['补交中']},
+    ]),'/api/courses/COURSE_B/homeworks':()=>ok([])});
+    const card=page.html().match(/data-course-row="COURSE_A"[\s\S]*?<\/article>/)?.[0]||'';
+    assert.match(card,/全部完成 · 1 份/);
+    page.get('[data-course-detail="COURSE_A"]').dispatch('click'); await settle();
+    assert.match(page.html(),/截止后通关/);
+    assert.equal(page.document.querySelectorAll('[data-homework-submit]').length,0);
+  });
   await t.test('active course or exact homework tasks prevent duplicate single homework dispatch', async () => {
     for (const request of [{scope:'course',course:'COURSE_A',mode:'submit'},{scope:'all',mode:'submit'},{scope:'homework',course:'COURSE_A',homework_id:1,mode:'submit'}]) {
       const page=await app({'/api/jobs':()=>ok({jobs:[job({status:'running',request})]})});

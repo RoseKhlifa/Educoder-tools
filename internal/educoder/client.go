@@ -171,10 +171,13 @@ type Homework struct {
 	// ordinary deadline. LateTime/LateEndTime are the upstream extension
 	// deadline when that policy is configured. Keep these as raw values because
 	// Educoder has returned both date strings and Unix timestamps.
-	AllowLate   bool              `json:"allow_late"`
-	LateTime    any               `json:"late_time"`
-	LateEndTime any               `json:"late_end_time"`
-	Operation   []json.RawMessage `json:"task_operation,omitempty"`
+	AllowLate   bool `json:"allow_late"`
+	LateTime    any  `json:"late_time"`
+	LateEndTime any  `json:"late_end_time"`
+	// StudentPassedTime is when the student finished every level; after the
+	// ordinary deadline Educoder stamps the homework 截止后通关.
+	StudentPassedTime any               `json:"student_passed_time"`
+	Operation         []json.RawMessage `json:"task_operation,omitempty"`
 	// This identifies the student's existing runtime, never a game. Collection
 	// resolves it through the observed read-only myshixun challenges endpoint.
 	MyShixunIdentifier string `json:"myshixun_identifier,omitempty"`

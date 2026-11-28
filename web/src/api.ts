@@ -281,6 +281,7 @@ function normalizeHomework(value: unknown): Homework {
     requiredProgressKnown,
     deadline: text(item.deadline || item.end_time) || undefined,
     lateSubmission: item.lateSubmission === true || (/补交/.test(status) && !/已截止|已结束/.test(status)) || undefined,
+    lateUnscored: item.lateUnscored === true || undefined,
     canEnter: item.canEnter === undefined && item.is_enter_shixun === undefined
       ? undefined
       : Boolean(item.canEnter ?? item.is_enter_shixun),

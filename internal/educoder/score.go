@@ -71,6 +71,25 @@ func scoreComparison(earned, maximum string) (known, full bool) {
 	return true, a.Cmp(b) == 0
 }
 
+// LateUnscored reports a level Educoder accepted as passed in a homework
+// finished after its deadline (截止后通关) but scored zero. On 2026-11-27 four
+// objective levels showed 已提交 and 0/25 each, also after the same correct
+// answers were submitted by hand: no resubmission can score them, so the level
+// is settled, not failed. A partial late score is not settled and is retried.
+func (p ChallengeProgress) LateUnscored(h Homework) bool {
+	if p.PassedStatus <= 0 || p.HasFullScore() || !h.FinishedAfterDeadline() {
+		return false
+	}
+	score, ok := new(big.Rat).SetString(strings.TrimSpace(p.GameScore))
+	return ok && score.Sign() == 0
+}
+
+// Settled reports a level with nothing left to do: full score, or passed late
+// and scored zero (LateUnscored).
+func (p ChallengeProgress) Settled(h Homework) bool {
+	return p.HasFullScore() || p.LateUnscored(h)
+}
+
 // HasFullScore is independent of submitted/passed labels, which do not prove
 // that every objective question earned its available points.
 func (p ChallengeProgress) HasFullScore() bool {

@@ -35,34 +35,35 @@ type settledProgressKey struct {
 }
 
 type settledProgress struct {
-	required int
-	at       time.Time
+	required     int
+	lateUnscored bool
+	at           time.Time
 }
 
 func newSettledProgressCache() *settledProgressCache {
 	return &settledProgressCache{now: time.Now, ttl: settledProgressTTL, entries: map[settledProgressKey]settledProgress{}}
 }
 
-func (c *settledProgressCache) lookup(key settledProgressKey) (int, bool) {
+func (c *settledProgressCache) lookup(key settledProgressKey) (int, bool, bool) {
 	if c == nil || key.owner == "" {
-		return 0, false
+		return 0, false, false
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.entries[key]
 	if !ok {
-		return 0, false
+		return 0, false, false
 	}
 	if c.now().Sub(entry.at) >= c.ttl {
 		delete(c.entries, key)
-		return 0, false
+		return 0, false, false
 	}
-	return entry.required, true
+	return entry.required, entry.lateUnscored, true
 }
 
 // remember stores only settled states: all required levels full-scored, or no
 // required level at all. Anything still to do is always read again.
-func (c *settledProgressCache) remember(key settledProgressKey, required, completed int) {
+func (c *settledProgressCache) remember(key settledProgressKey, required, completed int, lateUnscored bool) {
 	if c == nil || key.owner == "" || required < 0 || completed != required {
 		return
 	}
@@ -79,7 +80,7 @@ func (c *settledProgressCache) remember(key settledProgressKey, required, comple
 			c.entries = map[settledProgressKey]settledProgress{}
 		}
 	}
-	c.entries[key] = settledProgress{required: required, at: now}
+	c.entries[key] = settledProgress{required: required, lateUnscored: lateUnscored, at: now}
 }
 
 func settledKey(owner, course string, homework educoder.Homework) settledProgressKey {
