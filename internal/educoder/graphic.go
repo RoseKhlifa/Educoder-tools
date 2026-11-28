@@ -254,6 +254,17 @@ type GraphicConnection struct {
 type GraphicTransport interface {
 	Open(context.Context, GraphicConnection) (GraphicSession, error)
 }
+
+var (
+	errGraphicIrregular          = errors.New("图形文件必须是大小受限的普通文件")
+	errGraphicUnsupportedContent = errors.New("图形文件不是支持范围内的 UTF-8 内容")
+)
+
+// graphicFileStater hashes a workspace entry in place (sshGraphicSession).
+type graphicFileStater interface {
+	FileState(context.Context, string) (hash string, exists bool, err error)
+}
+
 type GraphicSession interface {
 	ReadFile(context.Context, string) (content []byte, exists bool, err error)
 	SaveAndCommit(ctx context.Context, relativePath, expectedHash string, expectedExists bool, content []byte) (commitID string, err error)
@@ -465,7 +476,7 @@ func readGraphicDocument(ctx context.Context, session GraphicSession, t *Task, f
 		return nil, fmt.Errorf("图形文件读取失败: %w", err)
 	}
 	if len(content) > MaxGraphicBytes || !utf8.Valid(content) {
-		return nil, errors.New("图形文件不是支持范围内的 UTF-8 内容")
+		return nil, errGraphicUnsupportedContent
 	}
 	return &GraphicDocument{Path: file, Content: string(content), Hash: graphicHash(content), Exists: exists, game: t.Game.Identifier, myshixunID: t.MyShixun.ID, userID: t.User.UserID}, nil
 }
@@ -527,7 +538,18 @@ func (p *GraphicProtocol) Submit(ctx context.Context, t *Task, document *Graphic
 	// after a release/restart gap.
 	currentDocument, readErr := readGraphicDocument(ctx, session, current, file)
 	if readErr != nil {
-		return result, readErr
+		// The student's file is a link, larger than the read limit or not
+		// UTF-8. It only guards the replacement, so hash it in place; the save
+		// replaces that entry itself and never writes through a link.
+		stater, ok := session.(graphicFileStater)
+		if !ok || !errors.Is(readErr, errGraphicIrregular) && !errors.Is(readErr, errGraphicUnsupportedContent) {
+			return result, readErr
+		}
+		hash, exists, stateErr := stater.FileState(ctx, file)
+		if stateErr != nil {
+			return result, stateErr
+		}
+		currentDocument = &GraphicDocument{Path: file, Hash: hash, Exists: exists, game: current.Game.Identifier, myshixunID: current.MyShixun.ID, userID: current.User.UserID}
 	}
 	if !document.deferredRead && (currentDocument.Hash != document.Hash || currentDocument.Exists != document.Exists) {
 		return result, ErrGraphicChanged

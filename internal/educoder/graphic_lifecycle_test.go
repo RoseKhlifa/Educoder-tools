@@ -18,6 +18,13 @@ type lifecycleGraphicSession struct {
 	reads, closes             int
 	readFailure               int
 	saveFailure, closeFailure bool
+	// irregularBaseline makes the first read refuse the file the way a link
+	// or an oversized step file is refused; FileState still hashes it.
+	irregularBaseline bool
+}
+
+func (s *lifecycleGraphicSession) FileState(context.Context, string) (string, bool, error) {
+	return graphicHash(s.content), s.exists, nil
 }
 
 func TestGraphicQuotaDataListRequiresNonEmptyArray(t *testing.T) {
@@ -35,6 +42,9 @@ func TestGraphicQuotaDataListRequiresNonEmptyArray(t *testing.T) {
 
 func (s *lifecycleGraphicSession) ReadFile(ctx context.Context, p string) ([]byte, bool, error) {
 	s.reads++
+	if s.reads == 1 && s.irregularBaseline {
+		return nil, false, errGraphicIrregular
+	}
 	if s.reads == s.readFailure {
 		return nil, false, errors.New("private SSH error")
 	}
@@ -69,7 +79,7 @@ func (f *lifecycleGraphicTransport) Open(context.Context, GraphicConnection) (Gr
 }
 
 func TestGraphicSingleLeaseCleansEveryAcquiredMutationBoundary(t *testing.T) {
-	for _, phase := range []string{"pass", "read failure", "save failure", "prepare failure", "build unknown", "failed verdict", "postpass read failure", "close failure", "release failure", "preexisting", "ownership unknown"} {
+	for _, phase := range []string{"pass", "read failure", "save failure", "prepare failure", "build unknown", "failed verdict", "postpass read failure", "close failure", "release failure", "preexisting", "ownership unknown", "irregular baseline"} {
 		t.Run(phase, func(t *testing.T) {
 			task := graphicTaskFixture(t)
 			if phase == "preexisting" {
@@ -91,6 +101,9 @@ func TestGraphicSingleLeaseCleansEveryAcquiredMutationBoundary(t *testing.T) {
 			}
 			if phase == "close failure" {
 				session.closeFailure = true
+			}
+			if phase == "irregular baseline" {
+				session.irregularBaseline = true
 			}
 			starts, releases, builds, prepares := 0, 0, 0, 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

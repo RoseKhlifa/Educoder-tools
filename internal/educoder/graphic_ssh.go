@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"io"
@@ -179,6 +180,67 @@ func (s *sshGraphicSession) walk(relative string, create bool) error {
 	}
 	return nil
 }
+
+// graphicBaselineMaxBytes bounds a workspace file that is only hashed to
+// guard its replacement; it is never loaded into memory or uploaded.
+const graphicBaselineMaxBytes = 64 << 20
+
+// FileState identifies the entry at relative without following a link or
+// loading the file: the hash of a regular file's bytes (streamed), or of a
+// link's own target text. A missing file has the hash of empty content, as
+// ReadFile reports it. A guarded save can then replace a file too large to
+// read, or a link, by writing only that entry (2026-11-28: a student's
+// step5.mdj that ReadFile refused stopped a level on every retry). A
+// directory or special file is still refused.
+func (s *sshGraphicSession) FileState(ctx context.Context, relative string) (string, bool, error) {
+	stop := context.AfterFunc(ctx, func() { _ = s.client.Close() })
+	defer stop()
+	if err := ctx.Err(); err != nil {
+		return "", false, err
+	}
+	if err := s.walk(relative, false); err != nil {
+		if os.IsNotExist(err) {
+			return graphicHash(nil), false, nil
+		}
+		return "", false, err
+	}
+	target := path.Join(GraphicWorkspace, relative)
+	info, err := s.files.Lstat(target)
+	if os.IsNotExist(err) {
+		return graphicHash(nil), false, nil
+	}
+	if err != nil {
+		return "", false, errors.New("图形文件元信息读取失败")
+	}
+	switch {
+	case info.Mode()&os.ModeSymlink != 0:
+		link, err := s.files.ReadLink(target)
+		if err != nil {
+			return "", false, errors.New("图形文件链接读取失败")
+		}
+		return graphicHash([]byte("symlink\x00" + link)), true, nil
+	case info.Mode().IsRegular():
+		if info.Size() > graphicBaselineMaxBytes {
+			return "", false, errors.New("图形文件超过 64 MB，无法安全核对")
+		}
+		f, err := s.files.Open(target)
+		if err != nil {
+			return "", false, errors.New("图形文件打开失败")
+		}
+		defer f.Close()
+		sum := sha256.New()
+		n, err := io.Copy(sum, io.LimitReader(f, graphicBaselineMaxBytes+1))
+		if err != nil || n > graphicBaselineMaxBytes {
+			return "", false, errors.New("图形文件读取失败或超过大小上限")
+		}
+		if err := ctx.Err(); err != nil {
+			return "", false, err
+		}
+		return hex.EncodeToString(sum.Sum(nil)), true, nil
+	}
+	return "", false, errors.New("图形文件位置是目录或特殊文件，无法安全替换")
+}
+
 func (s *sshGraphicSession) ReadFile(ctx context.Context, relative string) ([]byte, bool, error) {
 	stop := context.AfterFunc(ctx, func() { _ = s.client.Close() })
 	defer stop()
@@ -200,7 +262,7 @@ func (s *sshGraphicSession) ReadFile(ctx context.Context, relative string) ([]by
 		return nil, false, errors.New("图形文件元信息读取失败")
 	}
 	if !info.Mode().IsRegular() || info.Size() > MaxGraphicBytes {
-		return nil, false, errors.New("图形文件必须是大小受限的普通文件")
+		return nil, false, errGraphicIrregular
 	}
 	f, err := s.files.Open(target)
 	if err != nil {
@@ -284,11 +346,11 @@ func (s *sshGraphicSession) SaveAndCommit(ctx context.Context, relative, expecte
 		_, _ = s.command(cleanup, "cd "+graphicQuote(GraphicWorkspace)+" && rmdir -- "+graphicQuote(lock))
 	}()
 	check := func() error {
-		old, exists, err := s.ReadFile(ctx, relative)
+		hash, exists, err := s.FileState(ctx, relative)
 		if err != nil {
 			return err
 		}
-		if exists != expectedExists || graphicHash(old) != expectedHash {
+		if exists != expectedExists || hash != expectedHash {
 			return ErrGraphicChanged
 		}
 		return nil

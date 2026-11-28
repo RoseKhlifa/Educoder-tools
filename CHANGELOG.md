@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.184 - 2026-11-28
+
+- Save a graphic answer over a workspace file that is a link or larger than the read limit by hashing that entry in place and replacing only the entry itself, never writing through the link; a directory at the path is still refused with that reason
+
 ## 0.1.183 - 2026-11-28
 
 - Keep the specific reason when reading a graphic workspace file fails, such as a linked directory, an oversized or irregular file, or a permission error, so the named pre-write step is the precise one
